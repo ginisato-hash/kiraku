@@ -47,3 +47,5 @@ dist/
 
 # macOS
 .DS_Store
+cloudflare/bi-web/public/data/*.json
+cloudflare/bi-web/public/data/*.csv
