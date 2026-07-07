@@ -1,0 +1,14 @@
+name = "kiraku-bi"
+main = "src/worker.js"
+compatibility_date = "2026-07-08"
+
+# HTML/JS/CSS は Static Assets から配信（BIデータは同梱しない）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# BIデータ（JSON/CSV）は R2 から読む。binding名・bucket名は固定。
+[[r2_buckets]]
+binding = "BI_DATA"
+bucket_name = "kiraku-bi-data"

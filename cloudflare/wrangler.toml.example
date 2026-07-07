@@ -1,0 +1,13 @@
+# Cloudflare Pages 用 設定サンプル（コピーして wrangler.toml にする）
+# 静的公開のみ。Workers/R2 は後から追加でよい。
+name = "kiraku-bi-web"
+compatibility_date = "2026-01-01"
+
+# Cloudflare Pages（静的アセット）
+pages_build_output_dir = "bi-web"
+
+# 注意:
+# - Pages の「ビルド出力ディレクトリ」は cloudflare/bi-web を指定する。
+#   （index.html が bi-web 直下、データは bi-web/public/data/ に配置されるため）
+# - ビルドコマンドは不要（静的サイト）。
+# - 将来 Workers/R2 を使う場合はここに [[r2_buckets]] 等を追記する。

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  喜らく Beds24速報BI 15分おき巡回 (launchd)
+
+  導入手順:
+    1) このテンプレを ~/Library/LaunchAgents/ にコピー（.template を外す）:
+       cp launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template \
+          ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
+    2) 必要ならパスを実環境に合わせて編集。
+    3) 読み込み:
+       launchctl load  ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
+       launchctl start com.yuge.kiraku.beds24-bi-refresh
+    4) 解除:
+       launchctl unload ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
+
+  二重起動防止は CLI 側 FileLock (logs/beds24_bi_refresh.lock, stale 60分) が担う。
+  APIエラー時は既存BIを壊さず非ゼロ終了する。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.yuge.kiraku.beds24-bi-refresh</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ginisato/YugeFinance/kiraku-finance-automation/.venv/bin/yuge-finance</string>
+    <string>refresh-beds24-bi</string>
+    <string>--month</string>
+    <string>current</string>
+    <string>--months</string>
+    <string>2</string>
+    <string>--publish</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/ginisato/YugeFinance/kiraku-finance-automation</string>
+
+  <!-- 15分おき -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <!-- 起動直後にも1回走らせたい場合は true -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/ginisato/YugeFinance/kiraku-finance-automation/logs/beds24_bi_refresh.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ginisato/YugeFinance/kiraku-finance-automation/logs/beds24_bi_refresh.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LANG</key>
+    <string>ja_JP.UTF-8</string>
+  </dict>
+</dict>
+</plist>

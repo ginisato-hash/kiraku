@@ -1,0 +1,115 @@
+# Excel 書き込みマップ（テンプレ kiraku_integrated_3statement_actual_model_日本語版_v1）
+# 出力は data/output/YYYY-MM/updated_workbook.xlsx。テンプレ本体は絶対に上書きしない。
+
+# 書き込み可能シート（これ以外には書かない）
+writable_sheets:
+  - 01_入力ページ
+  - 02_銀行API取込
+  - 03_OTA取込
+  - 04_仕訳帳
+  - 05_試算表
+  - 09_借入返済
+  - 13_チェック
+
+# 数式セルを値で潰してはいけない保護シート（読み取りのみ）
+protected_sheets:
+  - 06_PL
+  - 07_BS
+  - 08_CF
+  - 10_KPI
+  - 11_モデル連携
+
+sheets:
+  # --- 銀行明細 ---
+  銀行:
+    sheet: 02_銀行API取込
+    start_row: 7
+    columns:   # CSV列 -> Excel列
+      transaction_date: A
+      bank_name: B
+      account_name: C
+      description: D
+      deposit_amount: E
+      withdrawal_amount: F
+      balance: G
+      classification_status: H   # 分類状況
+      suggested_account: I       # 推奨勘定科目
+      counterparty: J
+      raw_memo: K
+
+  # --- Beds24予約（OTA取込シートへ）---
+  beds24:
+    sheet: 03_OTA取込
+    start_row: 7
+    columns:
+      stay_month: A      # 宿泊月
+      booking_id: B
+      channel: C
+      checkin_date: D
+      stay_nights: E
+      rooms: F
+      guests: G
+      gross_revenue: H
+      ota_commission: I
+      net_revenue: J     # 入金額相当
+      status: K
+      memo: L
+
+  # --- 仕訳帳（最終会計ソース）---
+  # A列(仕訳ID)・C列(月)はテンプレの数式を踏襲して各行に再設定する。
+  仕訳帳:
+    sheet: 04_仕訳帳
+    start_row: 7
+    formula_columns:
+      A: '=IF(B{row}="","",ROW()-6)'
+      C: '=IF(B{row}="","",TEXT(B{row},"yyyy/mm"))'
+    columns:
+      journal_date: B
+      description: D
+      debit_account: E
+      debit_subaccount: F
+      debit_amount: G
+      credit_account: H
+      credit_subaccount: I
+      credit_amount: J
+      tax_category: K
+      counterparty: L
+      source: M
+      memo: N
+
+  # --- 試算表 対象月セット（集計のトリガ）---
+  試算表:
+    sheet: 05_試算表
+    cells:
+      target_month: B3   # "yyyy/mm"
+
+# --- 借入返済 実績ブロック ---
+# テンプレ既存の数式行(6-13)は触らず、空き行に実績サマリを追記する。
+loan_block:
+  sheet: 09_借入返済
+  start_row: 20
+  header: ["実績(自動追記)", "期首残高", "新規借入", "元本返済", "支払利息", "期末残高"]
+
+# --- チェック 実績ブロック ---
+# テンプレ既存の数式行(4-9)は触らず、空き行から検証結果を追記する。
+check_block:
+  sheet: 13_チェック
+  start_row: 12
+  header: ["自動検証項目", "値", "許容", "判定"]
+
+# --- 売上サマリ ブロック（A.宿泊月速報Beds24 / B.入金月実績 / C.精算ラグ注記）---
+# 同月のA・Bは差分比較しない（OTA精算ラグ）。
+revenue_recon_block:
+  sheet: 13_チェック
+  start_row: 35
+  title: 売上サマリ（A.宿泊月速報Beds24 / B.入金月実績 / C.精算ラグ注記｜同月比較対象外）
+  header: ["区分", "項目", "値"]
+
+# --- 01_入力ページ への実績KPI書込み ---
+# フォーキャスト前提セルを保護するため既定では無効。
+# 有効化する場合は enabled: true とし、month_header_row と rows を設定する。
+input_page:
+  sheet: 01_入力ページ
+  enabled: false
+  month_header_row: 5     # C5以降に "yyyy/mm" 月見出し
+  rows: {}                # 例: 稼働率: 9  (有効化時のみ)

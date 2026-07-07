@@ -1,0 +1,120 @@
+# 固定費・変動費モデル v2（喜らく単体・現体制運営前提）
+# 旧経営体制（食事提供・売店・旧人件費・旧派遣料・旧役員報酬）の固定費構造は使わない。
+# 三浦屋モデル(20260619_株式会社Yuge_財務分析_v1.xlsx)の変動費比率を参照し、
+# 素泊まり・MC運営の現体制に合わせて再設計。
+
+model_version: "kiraku_current_operation_v2"
+
+source:
+  accountant_ytd_period: "2025-10-01_to_2026-05-31"
+  miuraya_reference_model: "20260619_株式会社Yuge_財務分析_v1.xlsx"
+  note: "旧経営体制の食事・売店・旧人件費を除外し、素泊まり現体制に再設計"
+
+# --- 固定費（人件費はlabor_model.ymlの出力を別枠加算するため、ここには含めない）---
+fixed_cost_items:
+  maintenance_contract:
+    label: "保守料"
+    monthly_amount: 65250
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  lease:
+    label: "リース料"
+    monthly_amount: 7574
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  communication:
+    label: "通信費"
+    monthly_amount: 49796
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  taxes_and_dues:
+    label: "租税公課"
+    monthly_amount: 126500
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  insurance:
+    label: "保険料"
+    monthly_amount: 192181
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  vehicle:
+    label: "車両費"
+    monthly_amount: 48546
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  membership_dues:
+    label: "諸会費"
+    monthly_amount: 83815
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  misc_minimum:
+    label: "雑費 最小限"
+    monthly_amount: 30000          # 旧実績月平均156,329円は使わない。最小限で置く。
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+  depreciation:
+    label: "減価償却費"
+    monthly_amount: 494000
+    include_in_cash_bep: false      # キャッシュBEPからは除外
+    include_in_accounting_bep: true # 会計BEPには含める
+
+  mc_fixed_fee:
+    label: "MC固定費"
+    monthly_amount: 150000
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
+# --- 変動費（三浦屋モデル参照。売上比例 or 客室泊数(RN)比例）---
+# 商品仕入高・売店仕入・接待交際費・営業外収益は削除（食事・売店廃止のため対象外）。
+variable_cost_items:
+  ota_fee:
+    label: "OTA/決済支払手数料"
+    driver: revenue
+    rate_to_revenue: 0.11875        # OTA手数料12.5% × OTA利用率95%
+
+  utilities:
+    label: "水道光熱費"
+    driver: revenue
+    rate_to_revenue: 0.10
+    fixed_monthly: 0                # 将来、固定分を追加できる2層構造
+
+  maintenance_variable:
+    label: "修繕費"
+    driver: revenue
+    rate_to_revenue: 0.005
+    fixed_monthly_buffer: 0         # 保守BEP用の月額固定バッファ（将来追加可）
+
+  linen:
+    label: "リネン費"
+    driver: occupied_room_nights    # RN比例（Option B）。ADR取得不可時のみ売上比例(Option A)へフォールバック
+    reference_rate_to_revenue: 0.025
+
+  supplies:
+    label: "備品・消耗品費"
+    driver: occupied_room_nights
+    reference_rate_to_revenue: 0.02
+
+# --- MC費用（固定費＋GOPプラス時のみの成功報酬）---
+management_contract:
+  fixed_fee_monthly: 150000
+  success_fee_rate: 0.15
+  success_fee_base: "positive_gop_before_success_fee"
+
+# --- 財務費用の扱い ---
+finance_cost:
+  include_interest_in_operating_bep: false   # 支払利息は営業BEPに入れない
+  include_interest_in_finance_bep: true      # 返済込みBEPには含める
+  include_principal_in_finance_bep: true     # 元本返済はPL費用ではないがキャッシュ必要売上には含める
+
+outputs:
+  primary_bep: "cash_operating_breakeven_revenue"
+  secondary_bep: "accounting_operating_breakeven_revenue"
+  finance_bep: "finance_breakeven_revenue"

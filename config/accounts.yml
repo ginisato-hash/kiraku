@@ -1,0 +1,86 @@
+# 勘定科目マスタ（テンプレ 12_勘定科目マスタ / 05_試算表 と完全一致させること）
+# 仕訳の借方科目・貸方科目は必ず下記 name のいずれかを使う。
+# 詳細区分（フロント人件費・通信費など）は仕訳の補助科目(subaccount)で表現する。
+
+accounts:
+  - {code: "1000", name: 現預金,            type: BS資産,  statement: 現預金}
+  - {code: "1100", name: 売掛金,            type: BS資産,  statement: 売掛金}
+  - {code: "1200", name: その他流動資産,    type: BS資産,  statement: その他流動資産}
+  - {code: "1500", name: 有形固定資産,      type: BS資産,  statement: 固定資産}
+  - {code: "2000", name: 買掛金・未払金,    type: BS負債,  statement: 未払金}
+  - {code: "2200", name: 借入金,            type: BS負債,  statement: 借入}
+  - {code: "2500", name: その他負債,        type: BS負債,  statement: その他負債}
+  - {code: "3000", name: 資本金・資本剰余金, type: 純資産, statement: 純資産}
+  - {code: "3100", name: 利益剰余金,        type: 純資産, statement: 純資産}
+  - {code: "4000", name: 宿泊売上,          type: 売上,    statement: 売上高}
+  - {code: "4100", name: その他売上,        type: 売上,    statement: 売上高}
+  - {code: "5100", name: OTA手数料,         type: 費用,    statement: 変動費}
+  - {code: "5200", name: リネン費,          type: 費用,    statement: 変動費}
+  - {code: "5300", name: 水道光熱費,        type: 費用,    statement: 変動費}
+  - {code: "5400", name: 消耗品費,          type: 費用,    statement: 変動費}
+  - {code: "5500", name: 修繕費,            type: 費用,    statement: 変動費}
+  - {code: "5600", name: 人件費,            type: 費用,    statement: 人件費}
+  - {code: "5700", name: 固定費,            type: 費用,    statement: 固定費}
+  - {code: "5800", name: MCコスト,          type: 費用,    statement: MC}
+  - {code: "5900", name: 減価償却費,        type: 費用,    statement: "D&A"}
+  - {code: "6100", name: 支払利息,          type: 営業外,  statement: 営業外費用}
+  - {code: "7000", name: 法人税等,          type: 税金,    statement: 税金}
+
+# 仮勘定（貸借が確定しない取引の受け皿。例外レポート対象）
+suspense_account: その他流動資産
+suspense_subaccount: 仮勘定_未分類
+
+# 論理カテゴリ → テンプレ勘定科目 へのマッピング。
+# journal_rules / cash_rules / receipt_categories はこの logical 名で分類してよい。
+# (account = 試算表に集計される科目, subaccount = 補助表示)
+category_map:
+  宿泊売上:     {account: 宿泊売上,       subaccount: 宿泊売上}
+  その他売上:   {account: その他売上,     subaccount: その他売上}
+  OTA手数料:    {account: OTA手数料,      subaccount: OTA手数料}
+  リネン費:     {account: リネン費,       subaccount: リネン費}
+  水道光熱費:   {account: 水道光熱費,     subaccount: 水道光熱費}
+  消耗品費:     {account: 消耗品費,       subaccount: 消耗品費}
+  修繕費:       {account: 修繕費,         subaccount: 修繕費}
+  フロント人件費: {account: 人件費,        subaccount: フロント人件費}
+  清掃人件費:   {account: 人件費,         subaccount: 清掃人件費}
+  人件費:       {account: 人件費,         subaccount: 人件費}
+  MCコスト:     {account: MCコスト,       subaccount: MCコスト}
+  減価償却費:   {account: 減価償却費,     subaccount: 減価償却費}
+  支払利息:     {account: 支払利息,       subaccount: 支払利息}
+  借入金:       {account: 借入金,         subaccount: 借入金}
+  # --- 月次債務返済管理(Phase B) liability_account 許可値 → TB科目 ---
+  短期借入金:   {account: 借入金,         subaccount: 短期借入金}
+  長期借入金:   {account: 借入金,         subaccount: 長期借入金}
+  関係会社借入金: {account: 借入金,        subaccount: 関係会社借入金}
+  役員借入金:   {account: 借入金,         subaccount: 役員借入金}
+  長期未払金:   {account: その他負債,     subaccount: 長期未払金}
+  # 以下はテンプレに独立科目が無いため最寄り科目+補助に寄せる
+  広告宣伝費:   {account: 固定費,         subaccount: 広告宣伝費}
+  通信費:       {account: 固定費,         subaccount: 通信費}
+  保険料:       {account: 固定費,         subaccount: 保険料}
+  家賃:         {account: 固定費,         subaccount: 家賃}
+  租税公課:     {account: 固定費,         subaccount: 租税公課}
+  法定福利費:   {account: 固定費,         subaccount: 法定福利費}   # 社会保険料・労働保険
+  清掃外注費:   {account: リネン費,       subaccount: 清掃外注費}   # 外注清掃(変動費。専用科目が無いためリネン費に集約)
+  # --- きらやか銀行 総合振込先 用 追加カテゴリ（すべて既存22科目へ補助科目で集約）---
+  # テンプレに食材費/仕入高科目が無いため、食材・飲料・売店仕入は消耗品費(変動費)に集約。
+  食材仕入:     {account: 消耗品費,       subaccount: 食材仕入}
+  飲料仕入:     {account: 消耗品費,       subaccount: 飲料仕入}
+  売店商品仕入: {account: 消耗品費,       subaccount: 売店商品仕入}
+  アメニティ費: {account: 消耗品費,       subaccount: アメニティ}
+  備品費:       {account: 消耗品費,       subaccount: 備品}        # 10万以上は固定資産判定で要確認
+  外注費:       {account: 固定費,         subaccount: 外注費}
+  人材派遣費:   {account: 固定費,         subaccount: 人材派遣}
+  支払手数料:   {account: 固定費,         subaccount: 支払手数料}  # OTA等への出金手数料
+  印刷費:       {account: 広告宣伝費,     subaccount: 印刷}
+  事務機器費:   {account: 固定費,         subaccount: 複合機・事務機器}
+  ITシステム費: {account: 固定費,         subaccount: IT保守・システム}
+  税理士報酬:   {account: 固定費,         subaccount: 税理士報酬}
+  振込手数料:   {account: 固定費,         subaccount: 振込手数料}
+  固定費:       {account: 固定費,         subaccount: 固定費}
+  売掛金:       {account: 売掛金,         subaccount: 売掛金}
+  未払金:       {account: 買掛金・未払金, subaccount: 未払金}
+  現金:         {account: 現預金,         subaccount: 現金}
+  普通預金:     {account: 現預金,         subaccount: 普通預金}
+  仮受金:       {account: その他負債,     subaccount: 仮受金}
+  立替金:       {account: その他流動資産, subaccount: 立替金}

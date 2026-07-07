@@ -1,0 +1,49 @@
+# Python / local
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets
+.env
+.env.*
+.env*
+*.pem
+*.key
+*.secret
+
+# Local databases / generated outputs
+data/ledger.sqlite
+data/raw/
+data/staging/
+data/processed/
+data/output/
+logs/
+*.log
+*.lock
+
+# Sensitive imports（会計士確定値・銀行明細・現金レシート・給与関連の実データ）
+imports/bank/
+imports/cash_receipts/images/
+imports/cash_receipts/csv/
+imports/cash_receipts/reviewed/
+imports/manual_adjustments/
+imports/opening_balance/
+imports/loan_repayment_schedule/*.csv
+
+# Accountant / payroll / personal files（会計士資料・銀行CSV・給与Excel・Beds24実データ等）
+*.pdf
+*.xls
+*.xlsx
+!templates/*.xlsx
+
+# Node / Cloudflare
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+
+# macOS
+.DS_Store

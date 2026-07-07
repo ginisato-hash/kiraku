@@ -1,0 +1,33 @@
+# 現金取引 自動仕訳ルール（喜らく単体）
+# transaction_type ごとの仕訳テンプレート。
+# review_status が approved の取引のみ自動確定。needs_review / reviewed は例外レポートへ。
+
+# 現金支払 : 借方 費用科目(category) / 貸方 現金
+# 現金入金 : 借方 現金 / 貸方 売上 or 仮受金(category)
+# 現金移動 : 銀行入金=借方 普通預金 / 貸方 現金
+# 立替精算 : 借方 立替金 / 貸方 現金（または逆）
+
+types:
+  現金支払:
+    debit: category        # CashTransaction.category を category_map で解決
+    credit: 現金
+    default_category: 消耗品費
+    confidence: high
+  現金入金:
+    debit: 現金
+    credit: category
+    default_category: 宿泊売上
+    confidence: high
+  現金移動:
+    debit: 普通預金        # 現金を銀行へ入金
+    credit: 現金
+    default_category: 普通預金
+    confidence: high
+  立替精算:
+    debit: 立替金
+    credit: 現金
+    default_category: 立替金
+    confidence: medium
+
+# approved 以外は確定しない
+require_approved: true

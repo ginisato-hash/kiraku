@@ -1,0 +1,254 @@
+# 銀行明細 自動仕訳ルール（喜らく単体）
+# 上から順に評価し、最初にマッチしたルールを採用する。
+# match:
+#   description_contains: 摘要にいずれかの文字列を含む
+#   counterparty_contains: 取引先にいずれかを含む
+#   direction: deposit(入金) / withdrawal(出金) / any
+#   amount_min / amount_max: 絶対値範囲(円)
+# action:
+#   category: accounts.yml の category_map のキー（相手科目）
+#   confidence: high / medium / low
+# 入出金の相手は常に現預金。
+#   入金(deposit): 借方 現預金 / 貸方 category
+#   出金(withdrawal): 借方 category / 貸方 現預金
+
+rules:
+  # --- 借入・利息 ---
+  - id: bank_loan_interest
+    match: {description_contains: [利息, 金利], direction: withdrawal}
+    action: {category: 支払利息, confidence: high}
+  - id: bank_loan_principal
+    match: {description_contains: [借入返済, 約定返済, 元金, 元本], direction: withdrawal}
+    action: {category: 借入金, confidence: medium}   # 元本返済はBSのみ。要確認で例外へ寄せる
+  - id: bank_loan_drawdown
+    match: {description_contains: [借入, 融資実行], direction: deposit}
+    action: {category: 借入金, confidence: medium}
+
+  # --- 売上入金（OTA/カード入金 = 確定売上の認識。入金ベース）---
+  # Beds24は確定仕訳を作らないため、OTA入金そのものを宿泊売上として認識する。
+  # 将来OTA精算CSV/マネーフォワードで gross/手数料 を分解する場合はここを差し替え。
+  # OTA入金は決済代行(SBPS=ｿﾌﾄﾊﾞﾝｸﾍﾟｲﾒﾝﾄ)経由で着金し、摘要に「じゃらん」が出ない。
+  # 実着金の代行業者名(SBPS/ﾘｸﾙ-ﾄ/楽天ｸﾞﾙ-ﾌﾟ)も認識キーワードに含める。
+  - id: bank_ota_settlement
+    match: {description_contains: [楽天, ﾗｸﾃﾝ, 楽天グループ, ﾗｸﾃﾝｸﾞﾙ, BOOKING, Booking, じゃらん, ｼﾞｬﾗﾝ,
+            Beds24, AGODA, EXPEDIA, ｱｺﾞﾀﾞ, ｴｸｽﾍﾟﾃﾞｨｱ, SBPS, ﾘｸﾙ-ﾄ, ﾘｸﾙ, リクルート, ﾎﾟｲﾝﾄﾌﾟﾛｸﾞﾗﾑ], direction: deposit}
+    action: {category: 宿泊売上, confidence: high}   # 入金=確定宿泊売上（貸方 宿泊売上）
+
+  # --- 固定費・経費（出金）---
+  - id: bank_utilities
+    match: {description_contains: [電気, 東北電力, ガス, 水道, 光熱,
+            ﾃﾞﾝｷ, ｶﾞｽ, ｽｲﾄﾞｳ, ｹﾞｽｲﾄﾞｳ, ｺｳﾈﾂ], direction: withdrawal}
+    action: {category: 水道光熱費, confidence: high}
+  - id: bank_linen
+    match: {description_contains: [リネン, クリーニング, 洗濯], direction: withdrawal}
+    action: {category: リネン費, confidence: high}
+  - id: bank_supplies
+    match: {description_contains: [消耗品, アメニティ, コメリ, カインズ, ニトリ], direction: withdrawal}
+    action: {category: 消耗品費, confidence: high}
+  - id: bank_repair
+    match: {description_contains: [修理, 修繕, メンテナンス], direction: withdrawal}
+    action: {category: 修繕費, confidence: medium}
+  - id: bank_ad
+    match: {description_contains: [広告, ﾌﾟﾛﾓｰｼｮﾝ, Google, Meta, リスティング], direction: withdrawal}
+    action: {category: 広告宣伝費, confidence: medium}
+  - id: bank_comm
+    match: {description_contains: [通信, NTT, ドコモ, au, ソフトバンク, インターネット,
+            Wi-Fi, Wifi, 電話料, 電話, ﾃﾞﾝﾜ], direction: withdrawal}
+    action: {category: 通信費, confidence: high}
+  # 法定福利費（社会保険料・労働保険）。摘要はカタカナで着金する。
+  - id: bank_social_insurance
+    match: {description_contains: [社会保険, ｼﾔｶｲﾎｹﾝ, 労働保険, ﾛｳﾄﾞｳﾎｹﾝ, ﾛｳﾄﾞｳ], direction: withdrawal}
+    action: {category: 法定福利費, confidence: high}
+  # 税理士報酬
+  - id: bank_tax_accountant
+    match: {description_contains: [税理士, ｾﾞｲﾘｼ], direction: withdrawal}
+    action: {category: 税理士報酬, confidence: high}
+  - id: bank_insurance
+    match: {description_contains: [保険], direction: withdrawal}
+    action: {category: 保険料, confidence: high}
+  - id: bank_tax
+    match: {description_contains: [税, 法人税, 消費税, 都道府県, 市町村], direction: withdrawal}
+    action: {category: 租税公課, confidence: medium}
+  - id: bank_transfer_fee
+    match: {description_contains: [手数料, 振込手数料, ﾃｽｳﾘｮｳ, ﾃｽｳﾘﾖｳ, FBIB], direction: withdrawal, amount_max: 5000}
+    action: {category: 振込手数料, confidence: high}
+  - id: bank_rent
+    match: {description_contains: [家賃, 賃料, 地代], direction: withdrawal}
+    action: {category: 家賃, confidence: high}
+
+  # --- 取引先別ルール（定例取引先。摘要に社名を含む場合のみ高信頼）---
+  - id: bank_vendor_suzuki_abura
+    match: {description_contains: [ｽｽﾞｷｱﾌﾞﾗ, 鈴木油店], direction: withdrawal}
+    action: {category: 水道光熱費, confidence: high}     # 燃料(灯油等)
+  - id: bank_vendor_saisan
+    match: {description_contains: [ｻｲｻﾝ, サイサン], direction: withdrawal}
+    action: {category: 水道光熱費, confidence: high}     # ガス
+  - id: bank_vendor_otis
+    match: {description_contains: [ｵ-ﾁｽ, ﾆﾂﾎﾟﾝｵ-ﾁｽ, オーチス, 日本オーチス], direction: withdrawal, amount_max: 100000}
+    action: {category: 修繕費, confidence: high}         # 昇降機保守。10万以上は資本的支出判定で要確認(exception)
+  - id: bank_vendor_yamashin
+    match: {description_contains: [ﾔﾏｼﾝﾊﾝﾊﾞｲ, 山新販売], direction: withdrawal}
+    action: {category: 消耗品費, confidence: high}
+  - id: bank_vendor_benibana_cleaning
+    match: {description_contains: [ﾍﾞﾆﾊﾞﾅ, 紅花清掃], direction: withdrawal}
+    action: {category: 清掃外注費, confidence: high}
+
+  # ============================================================
+  # きらやか銀行 総合振込先 取引先別ルール（半角/全角カナ・漢字対応）
+  # high=自動確定 / medium=例外に科目提案のみ（自動確定しない）
+  # ============================================================
+  # --- 食材・飲料仕入（high）---
+  - id: bank_vendor_nihonshokken
+    match: {description_contains: [ﾆﾎﾝｼﾖﾂｹﾝ, 日本食研], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_tanaka_seika
+    match: {description_contains: [ﾀﾅｶｾｲｶ, 田中青果], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_maruju_oya
+    match: {description_contains: [ﾏﾙｼﾞﾕｳｵｵﾔ, 丸十大屋], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_hanamura
+    match: {description_contains: [ﾊﾅﾑﾗ, 花邑], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_hattori_coffee
+    match: {description_contains: [ﾊﾂﾄﾘｺ-ﾋ-, 服部コーヒー, 服部ｺｰﾋｰ], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_hori_chikusan
+    match: {description_contains: [ﾎﾘﾁｸｻﾝ, 堀畜産], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_takahashi_chikusan
+    match: {description_contains: [ﾀｶﾊｼﾁｸｻﾝ, 高橋畜産], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_tohoku_bankoku
+    match: {description_contains: [ﾄｳﾎｸﾊﾞﾝｺｸ, 東北萬国社, 東北万国社], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_yamagata_fish
+    match: {description_contains: [ﾔﾏｶﾞﾀﾌｲﾂｼﾕ, 山形フィッシュ, 山形ﾌｨｯｼｭ], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+  - id: bank_vendor_tohoku_ebisho
+    match: {description_contains: [ﾄｳﾎｸｴﾋﾞｼﾖｳ, 東北海老正], direction: withdrawal}
+    action: {category: 食材仕入, confidence: high}
+
+  # --- アメニティ・客室備品（high）---
+  - id: bank_vendor_azuma_shoji
+    match: {description_contains: [ｱｽﾞﾏｼﾖｳｼﾞ, アズマ商事], direction: withdrawal}
+    action: {category: アメニティ費, confidence: high}
+  - id: bank_vendor_kinki_tourist_shoji
+    match: {description_contains: [ｷﾝｷﾆﾎﾝﾂ-ﾘｽﾄ, 近畿日本ツーリスト商事, 近畿日本ﾂｰﾘｽﾄ], direction: withdrawal}
+    action: {category: アメニティ費, confidence: high}
+
+  # --- リネン・クリーニング（high）---
+  - id: bank_vendor_zao_surprise
+    match: {description_contains: [ｻﾞｵｳｻﾌﾟﾗｲｽﾞ, 蔵王サプライズ, 蔵王ｻﾌﾟﾗｲｽﾞ], direction: withdrawal}
+    action: {category: リネン費, confidence: high}
+  - id: bank_vendor_aida_cleaning
+    match: {description_contains: [ｱｲﾀﾞｸﾘ-ﾆﾝｸﾞ, 会田クリーニング, 会田ｸﾘｰﾆﾝｸﾞ], direction: withdrawal}
+    action: {category: リネン費, confidence: high}
+
+  # --- 設備保守（high。厨房機器は10万以上要確認）---
+  - id: bank_vendor_hoshizaki
+    match: {description_contains: [ﾎｼｻﾞｷ, ホシザキ], direction: withdrawal, amount_max: 100000}
+    action: {category: 修繕費, confidence: high}        # 厨房機器保守。10万以上は資本的支出判定で要確認
+  - id: bank_vendor_yamagata_nittan
+    match: {description_contains: [ﾔﾏｶﾞﾀﾆﾂﾀﾝ, 山形ニッタン, 山形ﾆｯﾀﾝ], direction: withdrawal}
+    action: {category: 修繕費, confidence: high}        # 消防設備点検
+  - id: bank_vendor_arai_denki
+    match: {description_contains: [ｱﾗｲﾃﾞﾝｷｶﾝﾘ, 荒井電気管理], direction: withdrawal}
+    action: {category: 修繕費, confidence: high}        # 電気保安管理
+
+  # --- IT・通信・事務機器（high）---
+  - id: bank_vendor_fujifilm_bi
+    match: {description_contains: [ﾌｼﾞﾌｲﾙﾑ, 富士フイルム, 山形ゼロックス, ｾﾞﾛﾂｸｽ, ゼロックス], direction: withdrawal}
+    action: {category: 事務機器費, confidence: high}    # 複合機・保守
+  - id: bank_vendor_hitech_system
+    match: {description_contains: [ﾊｲﾃﾂｸｼｽﾃﾑ, ハイテックシステム], direction: withdrawal}
+    action: {category: ITシステム費, confidence: high}
+
+  # --- 印刷（high）---
+  - id: bank_vendor_oba_insatsu
+    match: {description_contains: [ｵｵﾊﾞｹﾞﾝﾀﾛｳ, 大場源太郎], direction: withdrawal}
+    action: {category: 印刷費, confidence: high}
+
+  # --- OTA等への出金手数料（high。入金はbank_ota_settlementで別処理）---
+  - id: bank_ota_fee_out
+    match: {description_contains: [楽天, ﾗｸﾃﾝ, リクルート, ﾘｸﾙ-ﾄ], direction: withdrawal}
+    action: {category: 支払手数料, confidence: high}
+
+  # --- 人材派遣（high。給与とは別。派遣会社請求のみ）---
+  - id: bank_vendor_humanic
+    match: {description_contains: [ﾋﾕ-ﾏﾆﾂｸ, ヒューマニック], direction: withdrawal}
+    action: {category: 人材派遣費, confidence: high}
+
+  # --- 以下 medium：例外に科目提案のみ（自動確定しない）---
+  - id: bank_vendor_tamaya
+    match: {description_contains: [ﾀﾏﾔｿｳﾎﾝﾃﾝ, 玉屋総本店], direction: withdrawal}
+    action: {category: 食材仕入, confidence: medium}
+  - id: bank_vendor_kato_bussan
+    match: {description_contains: [ｶﾄｳﾌﾞﾂｻﾝ, 加藤物産], direction: withdrawal}
+    action: {category: 食材仕入, confidence: medium}
+  - id: bank_vendor_endo_bussan
+    match: {description_contains: [ｴﾝﾄﾞｳﾌﾞﾂｻﾝ, 遠藤物産], direction: withdrawal}
+    action: {category: 売店商品仕入, confidence: medium}
+  - id: bank_vendor_sanrina
+    match: {description_contains: [ｻﾝﾘﾅ, 山里菜], direction: withdrawal}
+    action: {category: 食材仕入, confidence: medium}
+  - id: bank_vendor_maruken
+    match: {description_contains: [ﾏﾙｹﾝ, 丸健], direction: withdrawal}
+    action: {category: 食材仕入, confidence: medium}
+  - id: bank_vendor_ito_yosaburo
+    match: {description_contains: [ｲﾄｳﾖｻﾌﾞﾛｳ, 伊東与三郎], direction: withdrawal}
+    action: {category: 売店商品仕入, confidence: medium}
+  - id: bank_vendor_salon_royal
+    match: {description_contains: [ｻﾛﾝﾄﾞﾛﾜｲﾔﾙ, サロンドロワイヤル], direction: withdrawal}
+    action: {category: 売店商品仕入, confidence: medium}
+  - id: bank_vendor_yamako_shoji
+    match: {description_contains: [ﾔﾏｺ-ｼﾖｳｼﾞ, ヤマコー商事], direction: withdrawal}
+    action: {category: 売店商品仕入, confidence: medium}
+  - id: bank_vendor_jtb_shoji
+    match: {description_contains: [JTBｼﾖｳｼﾞ, JTB商事], direction: withdrawal}
+    action: {category: アメニティ費, confidence: medium}
+  - id: bank_vendor_saito_ceramics
+    match: {description_contains: [彩陶], direction: withdrawal}
+    action: {category: 備品費, confidence: medium}      # ｻｲﾄｳ(佐藤/斉藤)と誤爆するため漢字のみ
+  - id: bank_vendor_gishodo
+    match: {description_contains: [ｷﾞｼﾖｳﾄﾞｳ, 宜祥堂], direction: withdrawal}
+    action: {category: 備品費, confidence: medium}
+  - id: bank_vendor_takeharaya
+    match: {description_contains: [ﾀｹﾊﾗﾔ, 竹原屋], direction: withdrawal}
+    action: {category: 備品費, confidence: medium}
+  - id: bank_vendor_shokodo
+    match: {description_contains: [ｼﾖｳｺﾄﾞｳ, 尚古堂], direction: withdrawal}
+    action: {category: 消耗品費, confidence: medium}
+  - id: bank_vendor_ichimura
+    match: {description_contains: [ｲﾁﾑﾗｺｳﾑﾃﾝ, 市村工務店], direction: withdrawal}
+    action: {category: 修繕費, confidence: medium}      # 工事は資本的支出の可能性→要確認
+  - id: bank_vendor_koei_setsubi
+    match: {description_contains: [ｺ-ｴｲ, 弘栄設備], direction: withdrawal}
+    action: {category: 修繕費, confidence: medium}
+  - id: bank_vendor_tohoku_denka
+    match: {description_contains: [ﾄｳﾎｸﾃﾞﾝｶ, 東北電化], direction: withdrawal}
+    action: {category: 修繕費, confidence: medium}
+  - id: bank_vendor_terasaki_zoen
+    match: {description_contains: [ﾃﾗｻｷｿﾞｳｴﾝ, 寺崎造園], direction: withdrawal}
+    action: {category: 修繕費, confidence: medium}
+  - id: bank_vendor_dive
+    match: {description_contains: [ﾀﾞｲﾌﾞ, ダイブ], direction: withdrawal}
+    action: {category: 人材派遣費, confidence: medium}
+  - id: bank_vendor_goodman
+    match: {description_contains: [ｸﾞﾂﾄﾞﾏﾝ, グッドマン], direction: withdrawal}
+    action: {category: 人材派遣費, confidence: medium}
+  - id: bank_vendor_begood
+    match: {description_contains: [ﾋﾞ-ｸﾞﾂﾄﾞ, ビーグッド], direction: withdrawal}
+    action: {category: 人材派遣費, confidence: medium}
+  - id: bank_vendor_kawai_sports
+    match: {description_contains: [ｶﾜｲｽﾎﾟ-ﾂ, 川井スポーツ, 川井ｽﾎﾟｰﾂ], direction: withdrawal, amount_max: 100000}
+    action: {category: 備品費, confidence: medium}      # 10万以上は用途要確認(仮勘定のまま)
+
+  # --- 人件費（出金）---
+  - id: bank_payroll
+    match: {description_contains: [給与, 給料, 賃金, アルバイト, バイト], direction: withdrawal}
+    action: {category: フロント人件費, confidence: medium}
+
+# どのルールにもマッチしない明細は仮勘定(suspense)に置き、confidence=low で例外レポートへ。
+default:
+  confidence: low

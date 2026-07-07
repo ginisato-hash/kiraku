@@ -1,0 +1,6 @@
+# サンプル（ダミー金額）。実データは imports/loan_repayment_schedule/loan_repayment_schedule.csv に置く（git管理対象外）。
+# liability_account は以下のみ許可: 短期借入金 / 長期借入金 / 関係会社借入金 / 役員借入金 / 長期未払金
+# principal_payment + interest_payment は total_payment と一致させること。
+# 返済予定表が未確定の債務者（政策金融公庫等）は行を追加せず「予定表未投入」のまま残すこと。
+loan_id,lender,liability_account,payment_date,total_payment,principal_payment,interest_payment,ending_balance,bank_description_match,memo
+LOAN-SAMPLE-001,サンプル銀行,長期借入金,2026-06-25,150000,140000,10000,9860000,長期借入金返済,サンプル

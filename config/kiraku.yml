@@ -1,0 +1,118 @@
+# 喜らく単体 グローバル設定
+# 対象は「喜らく」単体のみ。他物件（Yuge全社/三浦屋/ナリサワ/ZMI）は対象外。
+
+property:
+  name: 喜らく            # 全仕訳の property 値に必ず入る
+  rooms: 19              # 客室数（テンプレ 01_入力ページ と一致）
+
+# --- 売上の役割分担（重要）---
+# Beds24 = 速報・管理会計（KPI/ADR/RevPAR/稼働率/予約済売上/損益分岐速報/BI先行指標）。
+# 確定PL/BS/CFの売上 = 銀行入金/OTA精算/会計士データ（入金・売掛消込ベース）を正とする。
+# Beds24と銀行入金の差は reconciliation 項目（エラーではない）。
+revenue:
+  source: beds24                 # 速報・管理会計データソース
+  # 確定PL売上の認識ソース: deposit=銀行/OTA入金ベース（正）。
+  recognition_source: deposit
+  # Beds24から確定PL仕訳を作らない（速報KPI専用）。
+  beds24_creates_journal: false
+  # checkin_month: チェックイン月に集計（速報KPI/予約済売上の基準）
+  recognition_basis: checkin_month
+  exclude_statuses:              # 速報の「認識売上」から除くステータス（分析用には保存）
+    - cancelled
+    - canceled
+    - black
+  # Beds24速報売上 と 会計確定売上(入金) の差の許容（これ以内は会計確定扱い）
+  reconciliation_tolerance: 1000
+
+# --- 開始残高ロック値（会計士確定BS 2026-05-31）---
+# ingest-opening は必ずこの数値と一致することをcritical検証する。
+# 数値を変える場合は会計士確定書類の再確認が必要（システムでは断定しない）。
+opening_balance_lock:
+  date: 2026-05-31
+  asset_total: 77335346
+  liability_total: 131088630
+  equity_total: -53753284
+  # 参考: 有利子負債(借入金TB科目合計) 短期13,800,000+役員3,350,637+長期41,920,000+関係会社59,058,000
+  interest_bearing_debt_total: 118128637
+
+# --- 会計期間・ロールフォワード ---
+period:
+  opening_date: 2026-05-31     # 会計士確定の開始基準日（5月末）
+  rollforward_start: 2026-06   # この月以降を自動ロールフォワード対象とする
+
+# --- 損益分岐（break-even）---
+breakeven:
+  # 固定費扱いの科目（人件費はワンオペ前提で固定的）
+  fixed_accounts: [人件費, 固定費, 減価償却費, 支払利息]
+  # 変動費扱いの科目
+  variable_accounts: [OTA手数料, リネン費, 水道光熱費, 消耗品費, 修繕費]
+  mc_fixed_subaccount: MC固定     # MCコストのうち固定扱い
+  mc_variable_subaccount: MC変動  # MCコストのうち変動扱い
+  default_adr: 15000             # Beds24実績が無い場合のADRフォールバック(円)
+
+# --- 消費税 ---
+tax:
+  default_rate: 0.10
+  rounding: round   # round / floor / ceil
+
+# --- 人件費（喜らく固有前提）---
+payroll:
+  # 実際の給与は銀行/現金から計上されるため、見積発生計上は既定で無効。
+  # true にすると下記レートから月次人件費を概算発生計上(借方人件費/貸方未払金)する。
+  accrual_enabled: false
+  front:
+    account: 人件費
+    subaccount: フロント人件費
+    hourly_wage: 1500
+    hours_per_day: 12
+    operation: ワンオペ
+    staff_count: 3
+  cleaning:
+    account: 人件費
+    subaccount: 清掃人件費
+    hourly_wage: 1200
+    hours_per_day: 6
+    operation: 2-3人オペ
+    headcount: 2.5
+
+# --- MCコスト（俺の人件費）---
+mc_cost:
+  enabled: true                  # 月次でMCコストを発生計上する
+  account: MCコスト
+  fixed_monthly: 150000          # 固定
+  variable_rate: 0.15            # GOP before MC × 15%
+  # 固定分と変動分は仕訳補助科目で分離して保持する
+  fixed_subaccount: MC固定
+  variable_subaccount: MC変動
+
+# --- 借入返済 ---
+loan:
+  # 元本返済はPLに入れない（BS借入残高 + CF財務CF）。支払利息のみPL。
+  principal_account: 借入金
+  interest_account: 支払利息
+  cash_account: 現預金
+
+# --- 月次債務返済管理（Phase B）---
+# 返済予定表(imports/loan_repayment_schedule/)と銀行明細が一致した場合のみ仕訳生成。
+# 予定表が無い明細（政策金融公庫等）は勝手に元本/利息を推定せずexceptionのまま残す。
+debt_management:
+  allowed_liability_accounts:
+    - 短期借入金
+    - 長期借入金
+    - 関係会社借入金
+    - 役員借入金
+    - 長期未払金
+  # 長期未払金を有利子負債合計(debt_total)に含めるか。既定=含めない(性質が異なるため)。
+  include_long_term_payable_in_debt_total: false
+  amount_tolerance: 1     # total_payment と銀行明細の一致許容(円)
+  date_tolerance_days: 3  # 支払日ずれの許容日数。超えたらwarning
+
+# --- 仕訳自動確定の信頼度しきい値 ---
+confidence:
+  auto_confirm: high             # high のみ自動確定
+  # medium / low は exception_report.csv へ
+
+# --- 通貨単位 ---
+# 仕訳帳・試算表は「円（実額）」で記帳する。
+# テンプレ 01_入力ページ等のフォーキャストモデルは「千円」で別系統。
+currency_unit: JPY

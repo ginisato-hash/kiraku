@@ -1,0 +1,19 @@
+{
+  "name": "kiraku-bi-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "喜らく単体 Beds24速報BI（Cloudflare Workers + R2 データ分離）",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "r2:create": "wrangler r2 bucket create kiraku-bi-data",
+    "r2:put:manifest": "wrangler r2 object put kiraku-bi-data/latest/manifest.json --file public/data/manifest.json",
+    "r2:put:snapshot": "wrangler r2 object put kiraku-bi-data/latest/bi_snapshot.json --file public/data/bi_snapshot.json",
+    "r2:put:all": "wrangler r2 object put kiraku-bi-data/latest/manifest.json --file public/data/manifest.json && wrangler r2 object put kiraku-bi-data/latest/bi_snapshot.json --file public/data/bi_snapshot.json && wrangler r2 object put kiraku-bi-data/latest/bi_daily_timeseries.csv --file public/data/bi_daily_timeseries.csv && wrangler r2 object put kiraku-bi-data/latest/bi_monthly_kpi.csv --file public/data/bi_monthly_kpi.csv && wrangler r2 object put kiraku-bi-data/latest/bi_validation_status.json --file public/data/bi_validation_status.json && wrangler r2 object put kiraku-bi-data/latest/bi_exception_summary.json --file public/data/bi_exception_summary.json"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

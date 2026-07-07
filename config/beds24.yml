@@ -1,0 +1,52 @@
+# Beds24 API 取得設定（喜らく単体）
+# 正式採用: Long Life Token 方式。base=https://beds24.com/api/v2、ヘッダ token:<token>。
+api:
+  base_url_env: BEDS24_API_BASE          # 既定 https://beds24.com/api/v2
+  long_life_token_env: BEDS24_LONG_LIFE_TOKEN  # 最優先
+  refresh_token_env: BEDS24_REFRESH_TOKEN      # フォールバック
+  access_token_env: BEDS24_ACCESS_TOKEN        # フォールバック
+  property_ids_env: BEDS24_PROPERTY_IDS  # 喜らく=330695。カンマ区切り。空なら全件。
+  timeout_seconds: 30
+  page_size: 100
+
+# 取得対象月の絞り込みは checkin (arrival) 日付ベースで行う
+filter:
+  date_field: arrival          # arrival = チェックイン
+  # APIは status を明示しないと cancelled を返さない。
+  # 分析・照合用に全status取得する（売上計上の除外は revenue.exclude_statuses で別途制御）。
+  fetch_statuses: [new, request, confirmed, cancelled, black]
+
+# Beds24 booking status コード → 標準 status へのマッピング
+status_map:
+  "0": cancelled    # Cancelled
+  "1": confirmed    # Confirmed / New
+  "2": request      # Request
+  "3": black        # Black booking (室閉/メンテ)
+  confirmed: confirmed
+  new: confirmed
+  cancelled: cancelled
+  request: request
+  black: black
+
+# 取得する標準フィールド（BookingRecord schema と一致）
+fields:
+  - booking_id
+  - property_id
+  - property_name
+  - room_id
+  - room_name
+  - channel
+  - guest_name
+  - booking_date
+  - checkin_date
+  - checkout_date
+  - stay_nights
+  - rooms
+  - guests
+  - gross_revenue
+  - ota_commission
+  - net_revenue
+  - tax_amount
+  - status
+  - payment_status
+  - invoice_status

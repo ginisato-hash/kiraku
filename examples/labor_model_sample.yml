@@ -1,0 +1,35 @@
+# サンプル（config/labor_model.ymlと同じ構造。実運用値は config/labor_model.yml を編集して使う）
+property:
+  room_count: 19
+
+fixed_staff:
+  matsumoto:
+    monthly_salary_gross: 334000
+    expected_workdays_min: 21
+    expected_workdays_base: 22
+    expected_workdays_max: 23
+    covers_front_days: true
+
+front:
+  extra_front_hourly_rate: 1200
+  extra_front_hours_per_day: 8
+  cost_per_uncovered_occupied_day: 9600
+
+cleaning:
+  hourly_rate: 1100
+  hours_per_staff_per_occupied_day: 5
+  base_staff_count: 1
+  high_occupancy_threshold: 0.70
+  high_occupancy_staff_count: 2
+  base_cost_per_occupied_day: 5500
+  additional_high_occupancy_cost_per_day: 5500
+
+night_security:
+  cost_per_occupied_day: 7500
+  covers_hours: "19:00-07:00"
+
+rules:
+  cost_occurs_only_if_occupied: true
+  occupied_day_threshold_room_nights: 1
+  zero_occupancy_variable_cost: 0
+  default_matsumoto_workdays: 22
