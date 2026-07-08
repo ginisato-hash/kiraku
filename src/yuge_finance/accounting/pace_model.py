@@ -90,9 +90,7 @@ def build(month: str,
     required_occ_rate = (round(required_room_nights / (rooms * days_remaining), 4)
                          if required_room_nights is not None and days_remaining > 0 else None)
 
-    status, reason = _pace_status(cash_bep, expected_bep_progress_to_date,
-                                  projected_month_end_bep_achievement_rate,
-                                  booking_pace_achievement_rate)
+    status, reason = _pace_status(cash_bep, month_elapsed_rate, booking_pace_achievement_rate)
     pace_model_status = "推計" if current_date >= month_start else "対象外"
 
     return {
@@ -123,17 +121,16 @@ def build(month: str,
     }
 
 
-def _pace_status(cash_bep, expected_bep_progress_to_date,
-                 projected_rate, pace_rate):
-    if not cash_bep or cash_bep <= 0:
-        return "unknown", "キャッシュBEPが算出できません。"
-    if not expected_bep_progress_to_date or expected_bep_progress_to_date <= 0:
-        # 月内経過率が0（対象月が未来月、または月初当日で四捨五入により0）
-        return "unknown", "対象月がまだ開始していないため、予約ペースを判定できません。"
-    if projected_rate is not None and projected_rate >= 1.0:
-        return "green", "現時点の予約済み売上がキャッシュBEP以上です。"
-    if projected_rate is not None and projected_rate >= 0.85 and pace_rate is not None and pace_rate >= 1.0:
-        return "yellow", "月内進捗に対しては順調ですが、月末BEPにはまだ不足しています。"
-    if pace_rate is not None and pace_rate >= 1.0:
-        return "yellow", "月内進捗比では遅れていませんが、月末BEP達成には追加予約が必要です。"
-    return "red", "月内進捗に対して予約売上が不足しています。"
+def _pace_status(cash_bep, month_elapsed_rate, pace_rate):
+    """予約ペース判定（主判定は booking_pace_achievement_rate のみを使う）。
+
+    projected_month_end_bep_achievement_rate は詳細表示専用の参考値であり、
+    この主判定には使わない。
+    """
+    if not cash_bep or cash_bep <= 0 or not month_elapsed_rate or month_elapsed_rate <= 0:
+        return "unknown", "キャッシュBEPまたは月内経過率が算出できないため、予約ペースを判定できません。"
+    if pace_rate is not None and pace_rate >= 1.15:
+        return "green", "月内経過率に対して予約売上が十分先行しています。"
+    if pace_rate is not None and pace_rate >= 0.90:
+        return "yellow", "月内経過率に対して概ね許容範囲ですが、追加予約の確認が必要です。"
+    return "red", "月内経過率に対して予約売上が不足しています。"
