@@ -199,15 +199,27 @@ rm imports/bank/*.csv imports/cash_receipts/csv/*.csv imports/manual_adjustments
 Beds24速報BIは**会計確定処理と完全に分離**しています。15分ごとの巡回では
 仕訳生成・PL/BS/CF確定・Excel更新は一切行いません（Beds24取得・BIファイル再生成のみ）。
 
-Beds24予約・キャンセル・変更は、Macのlaunchdが15分ごとに以下を実行することで、
-最大15分程度でCloudflare BIへ反映されます（`scripts/refresh_beds24_bi_and_publish_r2.sh`）。
+**本番自動更新の主経路はGitHub Actions（`.github/workflows/refresh-bi-r2.yml`）です。**
+15分ごとに以下を実行し、最大15分程度でCloudflare BIへ反映されます。
+**Macを常時起動しておく必要はありません**（Mac依存のlaunchdはfallback。12節参照）。
 
 1. `refresh-beds24-bi --auto-months-with-bookings --publish`
 2. `publish-bi-r2`
 
-WorkerはBeds24 APIを直接叩かず、R2上の`latest/*`を読むだけです。
+WorkerはBeds24 APIを直接叩かず、R2上の`latest/*`を読むだけです。Beds24 tokenも
+Cloudflare側の認証情報もGitHub Actions Secretsにのみ置き、Worker側には置きません。
 予約データ更新時に`wrangler deploy`は不要です。Worker本体を変更した場合のみ
-`wrangler deploy`します（本節末尾・12節参照）。
+`wrangler deploy`します（本節末尾・11節参照）。
+
+> **注意（銀行CSV/開始残高セクションについて）**: GitHub Actionsは毎回まっさらな
+> checkoutで動くため、`imports/bank/`・`imports/opening_balance/`配下のローカル実データ
+> （銀行CSV・会計士確定開始残高）にはアクセスできません（これらは意図的にGitに載せない
+> 機密データのため）。そのため速報BIの「銀行残高・実績CF」セクションや会計士確定開始残高
+> 由来の一部フィールド（`opening_cash_balance`等）は、GitHub Actions実行時は未取込/空状態に
+> なります。銀行CSVを反映したい場合は、引き続きMacで手動 `ingest-bank-csv --apply` →
+> `refresh-beds24-bi --publish` → `publish-bi-r2` を実行してください（ただし次回の
+> GitHub Actions実行(最大15分後)でこのセクションは再び空状態に戻ります。銀行CF表示を
+> 常時反映させたい場合は追加対応が必要です）。
 
 ```bash
 # BIデータ生成のみ（仕訳/Excelは触らない）。予約が1件でもある月を自動抽出する。
@@ -246,32 +258,74 @@ npx wrangler deploy --dry-run
 npx wrangler deploy                   # Worker本体を手動デプロイ
 ```
 
-## 12. launchd（15分巡回）
+## 12. launchd（Mac fallback。通常は停止状態）
 
-`launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template` を
-`~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist` としてコピーし、
-`launchctl load` します。plist自体はCLIフラグを持たず、
-`scripts/refresh_beds24_bi_and_publish_r2.sh` を15分ごと(`StartInterval=900`)に呼ぶだけです。
+**MacのlaunchdはBI自動更新の主経路ではありません。** 本番自動更新はGitHub Actions
+（13節）が担い、Macを常時起動しておく必要はありません。
+
+理由：MacのlaunchdはStartIntervalベースのため、Macがスリープすると15分ごとの実行が
+止まります。実際に夜間Mac sleep中に日付跨ぎ後のBI更新が止まる不具合が発生したため、
+本番経路をGitHub Actionsへ移行しました。
+
+launchdはローカル検証・緊急時の手動更新用のfallbackとして残します。通常は`unload`して
+おき、GitHub Actionsが正常に動いていれば有効化する必要はありません。
 
 ```bash
+# fallbackとして使う場合のみ
 cp launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template \
    ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
-launchctl unload ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist 2>/dev/null || true
 launchctl load  ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
 launchctl start com.yuge.kiraku.beds24-bi-refresh
+
+# 通常運用（GitHub Actionsが主経路）はunloadしておく
+launchctl unload ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist 2>/dev/null || true
 ```
 
-wrapper scriptが行うのは `refresh-beds24-bi --auto-months-with-bookings --publish` と
-`publish-bi-r2` の2つのみです。**`wrangler deploy` や `close-month` はここには含めません**
+wrapper script(`scripts/refresh_beds24_bi_and_publish_r2.sh`)が行うのは
+`refresh-beds24-bi --auto-months-with-bookings --publish` と `publish-bi-r2` の2つのみです。
+**`wrangler deploy` や月次締め処理はここには含めません**
 （Worker本体の変更をdeployする場合のみ、11節の手順で手動 `wrangler deploy` してください）。
 ログは `logs/beds24_bi_refresh.out.log` / `.err.log` に出力されます。
 二重起動防止は`refresh-beds24-bi`内のCLI側 FileLock（stale 60分）が担います。
 
-## 13. GitHub / CI
+## 13. GitHub Actions（BI自動更新の主経路 + Worker deploy）
 
-`.github/workflows/deploy-worker.yml` が `main` への push時に **Worker本体だけ** デプロイします
-（`cloudflare/bi-web/**` の変更のみトリガ）。**BIデータはGitHub Actionsではデプロイしません**
-（BIデータの配信はMac launchd → R2アップロード → Workerが都度R2から読む、という経路のみ）。
+### 13.1 速報BI自動更新（`.github/workflows/refresh-bi-r2.yml`）
+
+15分ごと（`cron: "3,18,33,48 * * * *"`、UTC基準。毎時00分の混雑を避けて3分ずらし）に
+Beds24 API取得 → 速報BI生成 → R2 `latest/*` publish を実行します。Mac sleepの影響を
+受けないため、日付跨ぎ後も確実に`generated_at_jst`/`today_jst`が更新されます。
+`workflow_dispatch`で手動実行も可能です。
+
+確認方法：
+
+```text
+GitHub > Actions > Refresh BI R2 の直近runを見る。
+```
+
+本番反映確認：
+
+```bash
+curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep generated_at_jst
+```
+
+必要なGitHub Secrets（Repository > Settings > Secrets and variables > Actions）：
+
+| Secret名 | 用途 | 備考 |
+|---|---|---|
+| `BEDS24_API_TOKEN` | Beds24 Long Life Token | workflow内で`BEDS24_LONG_LIFE_TOKEN`環境変数へマッピングして渡す |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflareアカウント | `deploy-worker.yml`と共通でよい |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare R2 read/write権限付きトークン | `kiraku-bi-data`バケットへのobject write/read権限が必要 |
+| `CLOUDFLARE_R2_BUCKET` | R2 bucket名 | `kiraku-bi-data` |
+
+このworkflowは`wrangler deploy`を一切実行しません（R2へのJSON/CSV uploadのみ）。
+仕訳生成・PL/BS/CF確定・Excel更新・月次締め処理も一切行いません。
+
+### 13.2 Worker本体デプロイ（`.github/workflows/deploy-worker.yml`）
+
+`main` への push時に **Worker本体だけ** デプロイします（`cloudflare/bi-web/**` の変更のみ
+トリガ）。**BIデータはこのworkflowではデプロイしません**（BIデータの配信は13.1のworkflow
+→ R2アップロード → Workerが都度R2から読む、という経路のみ）。
 
 必要なGitHub Secrets：`CLOUDFLARE_API_TOKEN`（Workers編集権限のみの最小権限トークン）、
 `CLOUDFLARE_ACCOUNT_ID`。

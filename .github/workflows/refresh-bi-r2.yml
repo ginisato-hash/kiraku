@@ -1,0 +1,107 @@
+name: Refresh BI R2
+
+# 喜らく速報BIの本番自動更新（主経路）。
+# Beds24 APIから最新予約データを取得し、速報BI(JSON/CSV)を生成してR2 latest/へpublishするだけ。
+# 仕訳生成・PL/BS/CF確定・Excel更新・月次締め処理は一切行わない。
+# Worker本体はここではdeployしない（cloudflare/bi-web/変更時のみ deploy-worker.yml が担当）。
+# Beds24 token・Cloudflare credentialはこのworkflowのSecretsにのみ置き、Worker側には置かない。
+
+on:
+  schedule:
+    # 毎時00分は混雑しやすいため避け、15分間隔で 3,18,33,48 分に実行する。
+    # GitHub ActionsのscheduleはUTC基準だが、15分間隔なのでJST変換は不要。
+    - cron: "3,18,33,48 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-bi-r2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-bi-r2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Set up Node (for wrangler)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Validate secrets
+        env:
+          BEDS24_API_TOKEN: ${{ secrets.BEDS24_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          test -n "$BEDS24_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_R2_BUCKET"
+
+      - name: Refresh BI from Beds24
+        env:
+          # コードが実際に読む env var 名は BEDS24_LONG_LIFE_TOKEN（Secret名は統一のためBEDS24_API_TOKENのまま）。
+          BEDS24_LONG_LIFE_TOKEN: ${{ secrets.BEDS24_API_TOKEN }}
+          # 喜らく単体のプロパティID。機密情報ではないため平文で固定（他物件を誤って取得しないため必須）。
+          BEDS24_PROPERTY_IDS: "330695"
+          TZ: Asia/Tokyo
+        run: |
+          yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
+
+      - name: Publish BI to R2
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+          TZ: Asia/Tokyo
+        run: |
+          yuge-finance publish-bi-r2 --bucket "$CLOUDFLARE_R2_BUCKET"
+
+      - name: Verify public manifest
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+
+          url = "https://kiraku-bi.s-sato-dce.workers.dev/api/manifest"
+          with urllib.request.urlopen(url, timeout=20) as r:
+              data = json.load(r)
+          print("public generated_at_jst=", data.get("generated_at_jst"))
+          print("default_month=", data.get("default_month"))
+          if not data.get("generated_at_jst"):
+              raise SystemExit("generated_at_jst missing")
+          PY
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## Refresh BI R2" >> "$GITHUB_STEP_SUMMARY"
+          echo "- finished_at_utc: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
+          echo "- public_manifest:" >> "$GITHUB_STEP_SUMMARY"
+          curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep -E "generated_at_jst|default_month" >> "$GITHUB_STEP_SUMMARY" || true
