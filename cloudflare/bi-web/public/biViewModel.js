@@ -82,6 +82,28 @@ function buildPaceComment(achievement, pace) {
   return { text: (achText + paceText).slice(0, 80), tone };
 }
 
+// "2026-07" -> "2026年7月"（内部valueは常にYYYY-MM。表示は日本語）
+function monthLabel(m) {
+  if (!m || !/^\d{4}-\d{2}$/.test(m)) return DASH;
+  const [y, mo] = m.split("-");
+  return `${y}年${Number(mo)}月`;
+}
+
+function buildMonthOptions(manifest) {
+  const months = (manifest && (manifest.months_with_any_booking || manifest.available_months)) || [];
+  return months.map((m) => ({ value: m, label: monthLabel(m) }));
+}
+
+// 選択月が実際の「今月」でない場合の小さな補足（過去月/未来月レビュー時の注意喚起）。
+function buildMonthContextNote(selectedMonth, realCurrentMonth) {
+  if (!selectedMonth || !realCurrentMonth || selectedMonth === realCurrentMonth) return null;
+  const label = monthLabel(selectedMonth);
+  if (selectedMonth < realCurrentMonth) {
+    return { text: `現在表示中：${label}。過去月の速報BIを表示しています。`, tone: "neutral" };
+  }
+  return { text: `現在表示中：${label}。未来月の予約速報を表示しています。`, tone: "neutral" };
+}
+
 function statusChip(label, value, tone) {
   return { label, value: value || DASH, tone: tone || "neutral" };
 }
@@ -368,8 +390,14 @@ function buildDetailSections(s) {
   ];
 }
 
-export function buildBiViewModel(snapshot, manifest, validation, exception) {
+function defaultCurrentMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+export function buildBiViewModel(snapshot, manifest, validation, exception, options) {
   const s = snapshot || {};
+  const opts = options || {};
   const generatedAtJst = (manifest && manifest.generated_at_jst) || s.current_date_jst || null;
 
   const achievement = achievementStatus(s.cash_operating_breakeven_achievement_rate);
@@ -381,19 +409,28 @@ export function buildBiViewModel(snapshot, manifest, validation, exception) {
     : null;
   const exceptionCount = exception ? exception.total : null;
 
+  const selectedMonth = opts.selectedMonth || s.month || s.target_month || null;
+  const realCurrentMonth = opts.currentMonth || defaultCurrentMonth();
+
+  const notes = buildNotes(s);
+  const monthNote = buildMonthContextNote(selectedMonth, realCurrentMonth);
+  if (monthNote) notes.unshift(monthNote);
+
   return {
     header: {
       title: "喜らく 速報BI",
       subtitle: "Beds24速報 / Cash BEP / 予約ペース / MC後GOP",
       generatedAtJst,
       targetMonth: s.month || s.target_month || DASH,
+      selectedMonth,
+      monthOptions: buildMonthOptions(manifest),
       statusPill: { label: s.revenue_data_status || "速報",
                    tone: s.revenue_data_status === "会計確定" ? "green" : "blue" },
     },
     primaryCards: buildPrimaryCards(s, achievement, pace),
     paceComment: buildPaceComment(achievement, pace),
     statusChips: buildStatusChips(s),
-    notes: buildNotes(s),
+    notes,
     details: buildDetailSections(s),
     validationSummary,
     exceptionCount,
@@ -402,4 +439,5 @@ export function buildBiViewModel(snapshot, manifest, validation, exception) {
 
 export const _internal = {
   DEPRECATED_FIELDS, yen, pct, ratio, num, achievementStatus, paceInfo, buildPaceComment,
+  monthLabel, buildMonthOptions, buildMonthContextNote,
 };

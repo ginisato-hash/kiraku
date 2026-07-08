@@ -2,7 +2,7 @@
 import assert from "node:assert";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
-  renderDetails, renderErrorState,
+  renderDetails, renderErrorState, renderMonthSelector, renderHeader,
 } from "../public/components.js";
 
 let passed = 0;
@@ -49,6 +49,42 @@ await check("renderErrorState does not leak internal paths or tokens", async () 
   assert.ok(!html.toLowerCase().includes("token"));
   assert.ok(!html.includes("/Users/"));
   assert.ok(html.includes("refresh-beds24-bi"));
+});
+
+await check("renderMonthSelector renders japanese labels, not raw YYYY-MM", async () => {
+  const html = renderMonthSelector({
+    monthOptions: [{ value: "2026-07", label: "2026年7月" }, { value: "2026-08", label: "2026年8月" }],
+    selectedMonth: "2026-07",
+  });
+  assert.ok(html.includes("2026年7月"));
+  assert.ok(html.includes("2026年8月"));
+  assert.ok(html.includes('value="2026-07"'));
+  assert.ok(html.includes("対象月"));
+});
+
+await check("renderMonthSelector marks the selected option", async () => {
+  const html = renderMonthSelector({
+    monthOptions: [{ value: "2026-07", label: "2026年7月" }, { value: "2026-08", label: "2026年8月" }],
+    selectedMonth: "2026-08",
+  });
+  assert.ok(html.includes('value="2026-08" selected'));
+  assert.ok(!html.includes('value="2026-07" selected'));
+});
+
+await check("renderMonthSelector returns empty string when no months available", async () => {
+  const html = renderMonthSelector({ monthOptions: [], selectedMonth: null });
+  assert.equal(html, "");
+});
+
+await check("renderHeader includes monthSelectorHtml alongside pillHtml", async () => {
+  const header = renderHeader({
+    title: "喜らく 速報BI", targetMonth: "2026-07", generatedAtJst: "x",
+    selectedMonth: "2026-07",
+    monthOptions: [{ value: "2026-07", label: "2026年7月" }],
+    statusPill: { label: "速報", tone: "blue" },
+  });
+  assert.ok(header.monthSelectorHtml.includes("2026年7月"));
+  assert.ok(header.pillHtml.includes("速報"));
 });
 
 console.log(`\n${passed} components checks passed`);

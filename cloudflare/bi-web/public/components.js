@@ -77,6 +77,18 @@ export function renderDetails(sections, validationSummary, exceptionCount) {
   }).join("");
 }
 
+export function renderMonthSelector(header) {
+  const options = header.monthOptions || [];
+  if (!options.length) return "";
+  const optHtml = options.map((o) =>
+    `<option value="${o.value}"${o.value === header.selectedMonth ? " selected" : ""}>${o.label}</option>`
+  ).join("");
+  return `<div class="month-selector">
+    <label for="month-select">対象月</label>
+    <select id="month-select" aria-label="対象月">${optHtml}</select>
+  </div>`;
+}
+
 export function renderHeader(header) {
   return {
     title: header.title,
@@ -84,6 +96,7 @@ export function renderHeader(header) {
     pillHtml: `<span class="status-pill tone-${header.statusPill.tone}">
       <span class="dot"></span>${header.statusPill.label}
     </span>`,
+    monthSelectorHtml: renderMonthSelector(header),
   };
 }
 

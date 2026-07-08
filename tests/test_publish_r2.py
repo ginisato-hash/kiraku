@@ -99,6 +99,63 @@ def test_bank_report_files_are_uploaded_when_present(tmp_path):
     assert "latest/bank_cost_model_candidates.json" not in res["would_upload_keys"]
 
 
+def _month_snapshot(month):
+    return json.dumps({
+        "target_month": month,
+        "beds24_revenue_net_for_bi": 500000,
+        "cash_operating_breakeven_revenue": 2000000,
+        "booking_pace_status": "green",
+    })
+
+
+def _seed_with_months(dir_, months=("2026-07", "2026-08")):
+    _seed(dir_)
+    manifest = json.loads((dir_ / "manifest.json").read_text(encoding="utf-8"))
+    manifest["available_months"] = list(months)
+    manifest["default_month"] = months[0]
+    (dir_ / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for m in months:
+        month_dir = dir_ / "months" / m
+        month_dir.mkdir(parents=True, exist_ok=True)
+        (month_dir / "bi_snapshot.json").write_text(_month_snapshot(m), encoding="utf-8")
+        (month_dir / "bi_daily_timeseries.csv").write_text(f"date\n{m}-01\n", encoding="utf-8")
+        (month_dir / "bi_monthly_kpi.csv").write_text(f"month\n{m}\n", encoding="utf-8")
+        (month_dir / "bi_validation_status.json").write_text('{"all_ok": true}', encoding="utf-8")
+        (month_dir / "bi_exception_summary.json").write_text('{"total": 0}', encoding="utf-8")
+
+
+def test_month_snapshots_included_in_upload_targets(tmp_path):
+    _seed_with_months(tmp_path)
+    res = publish_r2.publish(source_dir=tmp_path, dry_run=True)
+    for m in ("2026-07", "2026-08"):
+        for fn in publish_r2.MONTH_UPLOAD_FILENAMES:
+            assert f"latest/months/{m}/{fn}" in res["would_upload_keys"]
+
+
+def test_month_validation_fails_when_month_snapshot_missing(tmp_path):
+    _seed_with_months(tmp_path)
+    (tmp_path / "months" / "2026-08" / "bi_snapshot.json").unlink()
+    issues = publish_r2.validate(tmp_path)
+    assert any("2026-08" in i and "bi_snapshot.json" in i for i in issues)
+
+
+def test_month_validation_fails_when_required_field_missing(tmp_path):
+    _seed_with_months(tmp_path)
+    snap_path = tmp_path / "months" / "2026-07" / "bi_snapshot.json"
+    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    del snap["beds24_revenue_net_for_bi"]
+    snap_path.write_text(json.dumps(snap), encoding="utf-8")
+    issues = publish_r2.validate(tmp_path)
+    assert any("beds24_revenue_net_for_bi" in i for i in issues)
+
+
+def test_month_validation_skipped_when_manifest_has_no_available_months(tmp_path):
+    """本機能導入前に生成されたmanifest(available_monthsが無い)は月別検証をスキップする。"""
+    _seed(tmp_path)
+    issues = publish_r2.validate(tmp_path)
+    assert issues == []
+
+
 def test_publish_does_not_touch_local_bi_on_failure(tmp_path):
     _seed(tmp_path)
     (tmp_path / "bi_snapshot.json").write_text("{ broken", encoding="utf-8")

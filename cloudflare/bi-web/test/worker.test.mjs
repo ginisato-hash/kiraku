@@ -53,4 +53,114 @@ await check("unknown path -> ASSETS fallback", async () => {
   assert.equal(await r.text(), "ASSET");
 });
 
+// ---------------- 月別対応（/api/months, /api/snapshot?month=, /data/months/...） ----------------
+function makeMonthEnv() {
+  const manifest = {
+    default_month: "2026-07",
+    available_months: ["2026-07", "2026-08"],
+    months_with_any_booking: ["2026-07", "2026-08"],
+    months_with_active_booking: ["2026-07", "2026-08"],
+  };
+  const store = {
+    "latest/manifest.json": JSON.stringify(manifest),
+    "latest/bi_snapshot.json": JSON.stringify({ month: "2026-07", target_month: "2026-07" }),
+    "latest/months/2026-07/bi_snapshot.json": JSON.stringify({ target_month: "2026-07" }),
+    "latest/months/2026-08/bi_snapshot.json": JSON.stringify({ target_month: "2026-08" }),
+    "latest/months/2026-07/bi_daily_timeseries.csv": "date\n2026-07-01\n",
+  };
+  return {
+    ASSETS: { fetch: async () => new Response("ASSET", { status: 200 }) },
+    BI_DATA: { get: async (key) => (key in store ? { body: store[key] } : null) },
+  };
+}
+
+await check("/api/months returns month lists from manifest", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/months"), env);
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.deepEqual(j, {
+    default_month: "2026-07",
+    available_months: ["2026-07", "2026-08"],
+    months_with_any_booking: ["2026-07", "2026-08"],
+    months_with_active_booking: ["2026-07", "2026-08"],
+  });
+});
+
+await check("/api/months 404s when manifest missing", async () => {
+  const env = { ASSETS: { fetch: async () => new Response("ASSET") },
+    BI_DATA: { get: async () => null } };
+  const r = await worker.fetch(new Request("https://x/api/months"), env);
+  assert.equal(r.status, 404);
+});
+
+await check("/api/snapshot?month=2026-07 reads latest/months/2026-07/bi_snapshot.json", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2026-07"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).target_month, "2026-07");
+});
+
+await check("/api/snapshot?month=2026-08 reads the other month", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2026-08"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).target_month, "2026-08");
+});
+
+await check("/api/snapshot?month=bad-format -> 400", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2026-7"), env);
+  assert.equal(r.status, 400);
+});
+
+await check("/api/snapshot?month=2099-01 not in available_months -> 404", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2099-01"), env);
+  assert.equal(r.status, 404);
+});
+
+await check("/api/snapshot without month uses manifest.default_month", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).target_month, "2026-07");
+});
+
+await check("/api/snapshot falls back to latest/bi_snapshot.json without manifest", async () => {
+  const env = { ASSETS: { fetch: async () => new Response("ASSET") },
+    BI_DATA: { get: async (key) => key === "latest/bi_snapshot.json"
+      ? { body: '{"month":"2026-06"}' } : null } };
+  const r = await worker.fetch(new Request("https://x/api/snapshot"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).month, "2026-06");
+});
+
+await check("/data/months/2026-07/bi_snapshot.json returns month file", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/data/months/2026-07/bi_snapshot.json"), env);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /application\/json/);
+});
+
+await check("/data/months/2026-07/bi_daily_timeseries.csv returns csv content-type", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(
+    new Request("https://x/data/months/2026-07/bi_daily_timeseries.csv"), env);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /text\/csv/);
+});
+
+await check("/data/months/bad-format/bi_snapshot.json -> 400", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/data/months/2026-7/bi_snapshot.json"), env);
+  assert.equal(r.status, 400);
+});
+
+await check("/data/months/2026-09/bi_snapshot.json missing in R2 -> 404", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/data/months/2026-09/bi_snapshot.json"), env);
+  assert.equal(r.status, 404);
+});
+
 console.log(`\n${passed} worker checks passed`);

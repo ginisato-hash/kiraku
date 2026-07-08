@@ -122,6 +122,39 @@ a:hover { text-decoration: underline; }
   .header-right { align-items: flex-start; width: 100%; }
 }
 
+/* ---------- 対象月セレクタ ---------- */
+.month-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.month-selector label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.month-selector select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.82rem;
+}
+.month-selector select:disabled { opacity: 0.6; cursor: wait; }
+@media (max-width: 640px) {
+  .month-selector { flex-direction: column; align-items: flex-start; width: 100%; }
+  .month-selector select { width: 100%; }
+}
+
+/* select変更時などのロード中はダッシュボード全体を軽く不透明化して操作を止める */
+body.is-loading .dashboard {
+  opacity: 0.6;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;

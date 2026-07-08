@@ -126,6 +126,119 @@ def test_publish_copies_and_makes_manifest(tmp_path):
     assert len(man["files"]) == 5 and man["checksum"]
 
 
+# ---------------- 対象月自動抽出（月選択ドロップダウン用）----------------
+def test_booking_touched_months_single_night():
+    from yuge_finance.normalize.schema import BookingRecord
+    b = BookingRecord(booking_id="x", checkin_date="2026-07-10", checkout_date="2026-07-11").finalize()
+    assert bi_refresh._booking_touched_months(b) == {"2026-07"}
+
+
+def test_booking_touched_months_spans_two_months():
+    from yuge_finance.normalize.schema import BookingRecord
+    b = BookingRecord(booking_id="x", checkin_date="2026-07-31", checkout_date="2026-08-02").finalize()
+    assert bi_refresh._booking_touched_months(b) == {"2026-07", "2026-08"}
+
+
+def test_scan_months_from_db_any_vs_active(tmp_path):
+    from yuge_finance.normalize.schema import BookingRecord
+    conn = db.connect(tmp_path / "t.sqlite")
+    recs = [
+        BookingRecord(booking_id="A", checkin_date="2026-07-10", checkout_date="2026-07-11",
+                      status="confirmed").finalize(),
+        BookingRecord(booking_id="B", checkin_date="2026-08-05", checkout_date="2026-08-06",
+                      status="cancelled").finalize(),
+    ]
+    db.upsert(conn, "beds24_bookings", recs)
+    found = bi_refresh._scan_months_from_db(conn, ["cancelled", "canceled", "black"])
+    assert found["months_with_any_booking"] == ["2026-07", "2026-08"]
+    assert found["months_with_active_booking"] == ["2026-07"]  # キャンセルのみの8月は除外
+    conn.close()
+
+
+def test_compute_default_month_prefers_current_month():
+    assert bi_refresh.compute_default_month(["2026-06", "2026-07", "2026-08"], "2026-07") == "2026-07"
+
+
+def test_compute_default_month_nearest_when_current_absent():
+    assert bi_refresh.compute_default_month(["2026-05", "2026-09"], "2026-07") in ("2026-05", "2026-09")
+    # 同点の場合は未来優先
+    assert bi_refresh.compute_default_month(["2026-06", "2026-08"], "2026-07") == "2026-08"
+
+
+def test_compute_default_month_empty_returns_none():
+    assert bi_refresh.compute_default_month([], "2026-07") is None
+
+
+def test_refresh_builds_month_snapshots_and_manifest_fields(isolated, monkeypatch):
+    from yuge_finance.normalize.schema import BookingRecord
+
+    def fake_fetch_spanning(month, conn):
+        recs = [BookingRecord(booking_id=f"{month}-A", checkin_date=f"{month}-10",
+                              checkout_date=f"{month}-11", status="confirmed",
+                              gross_revenue=10000).finalize()]
+        db.upsert(conn, "beds24_bookings", recs)
+        return len(recs)
+
+    monkeypatch.setattr(bi_refresh, "_fetch_beds24", fake_fetch_spanning)
+    tmp, conn = isolated
+    status = bi_refresh.refresh(["2026-06", "2026-07"], conn=conn)
+
+    assert set(status["available_months"]) == {"2026-06", "2026-07"}
+    assert status["default_month"] in ("2026-06", "2026-07")
+    assert status["months_with_any_booking"] == ["2026-06", "2026-07"]
+    assert status["months_with_active_booking"] == ["2026-06", "2026-07"]
+
+    manifest_path = tmp / "data" / "output" / "latest" / "bi" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert set(manifest["available_months"]) == {"2026-06", "2026-07"}
+    assert manifest["default_month"] in ("2026-06", "2026-07")
+    assert set(manifest["month_snapshots"].keys()) == {"2026-06", "2026-07"}
+    assert manifest["month_snapshots"]["2026-06"]["snapshot"] == "latest/months/2026-06/bi_snapshot.json"
+
+    for m in ("2026-06", "2026-07"):
+        snap_path = tmp / "data" / "output" / "latest" / "bi" / "months" / m / "bi_snapshot.json"
+        assert snap_path.exists()
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+        assert snap["target_month"] == m
+
+
+def test_auto_months_with_bookings_discovers_and_builds_snapshots(isolated, monkeypatch):
+    from yuge_finance.normalize.schema import BookingRecord
+
+    calls = []
+
+    def fake_fetch_only_july(month, conn):
+        calls.append(month)
+        if month != "2026-07":
+            return 0
+        recs = [BookingRecord(booking_id="J-A", checkin_date="2026-07-31",
+                              checkout_date="2026-08-02", status="confirmed",
+                              gross_revenue=5000).finalize()]
+        db.upsert(conn, "beds24_bookings", recs)
+        return len(recs)
+
+    monkeypatch.setattr(bi_refresh, "_fetch_beds24", fake_fetch_only_july)
+    tmp, conn = isolated
+    status = bi_refresh.refresh([], conn=conn, auto_months_with_bookings=True)
+
+    # 2026-07-31〜08-02の予約は両月にまたがる
+    assert set(status["months_with_any_booking"]) >= {"2026-07", "2026-08"}
+    assert set(status["available_months"]) >= {"2026-07", "2026-08"}
+    for m in ("2026-07", "2026-08"):
+        snap_path = tmp / "data" / "output" / "latest" / "bi" / "months" / m / "bi_snapshot.json"
+        assert snap_path.exists(), m
+
+
+def test_legacy_refresh_still_works_without_auto_flag(isolated):
+    """既存の refresh-beds24-bi --month current --months 2 相当は従来通り動く。"""
+    tmp, conn = isolated
+    status = bi_refresh.refresh(["2026-06", "2026-07"], conn=conn)
+    assert status["ok"] is True
+    snap = tmp / "data" / "output" / "latest" / "bi" / "bi_snapshot.json"
+    assert snap.exists()
+    assert db.fetch(conn, "journal_entries") == []
+
+
 # ---------------- 銀行口座実績レイヤー（BI専用。15分速報更新では取込を行わない）----------------
 def test_bi_refresh_source_does_not_ingest_bank_csv():
     """15分速報更新(bi_refresh.py)は銀行CSV取込(ingest-bank-csv/bank_actuals.run)を呼ばない。"""

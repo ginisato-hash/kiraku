@@ -260,4 +260,82 @@ await check("bank sections do not increase primary card count (still 7)", async 
   assert.equal(vm.primaryCards.length, 7);
 });
 
+// ---------------- 月選択ドロップダウン ----------------
+const manifestWithMonths = {
+  generated_at_jst: "2026-07-08T00:00:00+09:00",
+  default_month: "2026-07",
+  available_months: ["2026-07", "2026-08"],
+  months_with_any_booking: ["2026-07", "2026-08"],
+  months_with_active_booking: ["2026-07"],
+};
+
+await check("monthOptions are built from manifest.months_with_any_booking", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths);
+  assert.deepEqual(vm.header.monthOptions, [
+    { value: "2026-07", label: "2026年7月" },
+    { value: "2026-08", label: "2026年8月" },
+  ]);
+});
+
+await check("selectedMonth defaults to snapshot.month when no options given", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths);
+  assert.equal(vm.header.selectedMonth, "2026-07");
+});
+
+await check("selectedMonth uses options.selectedMonth when provided", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, month: "2026-08" }, manifestWithMonths,
+    null, null, { selectedMonth: "2026-08" });
+  assert.equal(vm.header.selectedMonth, "2026-08");
+});
+
+await check("no month context note when selected month is the real current month", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths, null, null,
+    { selectedMonth: "2026-07", currentMonth: "2026-07" });
+  assert.ok(!vm.notes.some((n) => n.text.includes("現在表示中")));
+});
+
+await check("past month note appears when selected month is before current month", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, month: "2026-06" }, manifestWithMonths, null, null,
+    { selectedMonth: "2026-06", currentMonth: "2026-07" });
+  const note = vm.notes.find((n) => n.text.includes("現在表示中"));
+  assert.ok(note, "past month note must appear");
+  assert.ok(note.text.includes("2026年6月"));
+  assert.ok(note.text.includes("過去月の速報BIを表示しています"));
+});
+
+await check("future month note appears when selected month is after current month", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, month: "2026-08" }, manifestWithMonths, null, null,
+    { selectedMonth: "2026-08", currentMonth: "2026-07" });
+  const note = vm.notes.find((n) => n.text.includes("現在表示中"));
+  assert.ok(note, "future month note must appear");
+  assert.ok(note.text.includes("2026年8月"));
+  assert.ok(note.text.includes("未来月の予約速報を表示しています"));
+});
+
+await check("monthOptions is empty array when manifest has no month fields", async () => {
+  const vm = buildBiViewModel(baseSnapshot, { generated_at_jst: "x" });
+  assert.deepEqual(vm.header.monthOptions, []);
+});
+
+await check("_internal.monthLabel formats YYYY-MM as Japanese year/month", async () => {
+  assert.equal(_internal.monthLabel("2026-07"), "2026年7月");
+  assert.equal(_internal.monthLabel("2026-12"), "2026年12月");
+  assert.equal(_internal.monthLabel(null), "—");
+});
+
+await check("month selector additions do not change top card count (still 7)", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vm.primaryCards.length, 7);
+});
+
+await check("existing pace/finance/bank sections remain intact with month options present", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
+  const paceCard = vm.primaryCards.find((c) => c.id === "booking-pace");
+  assert.equal(paceCard.value, "グリーン");
+  const financeSection = vm.details.find((d) => d.id === "finance");
+  assert.ok(JSON.stringify(financeSection.rows).includes("¥400,000"));
+  const bankSection = vm.details.find((d) => d.id === "bank-actuals");
+  assert.ok(JSON.stringify(bankSection.rows).includes("¥3,052,421"));
+});
+
 console.log(`\n${passed} biViewModel checks passed`);

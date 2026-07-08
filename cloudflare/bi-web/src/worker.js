@@ -4,6 +4,7 @@
 // - Beds24 API は呼ばない。token/.env は参照しない。
 
 const R2_PREFIX = "latest/";
+const MONTH_RE = /^\d{4}-\d{2}$/;
 
 // path -> { key: R2 object key (R2_PREFIX付与前), type: Content-Type }
 const DATA_ROUTES = {
@@ -17,11 +18,96 @@ const DATA_ROUTES = {
   "/data/bi_exception_summary.json": { key: "bi_exception_summary.json", type: "application/json; charset=utf-8" },
 };
 
+// 月別 /data/months/{YYYY-MM}/{filename} のfilename -> Content-Type
+const MONTH_FILE_TYPES = {
+  "bi_snapshot.json": "application/json; charset=utf-8",
+  "bi_daily_timeseries.csv": "text/csv; charset=utf-8",
+  "bi_monthly_kpi.csv": "text/csv; charset=utf-8",
+  "bi_validation_status.json": "application/json; charset=utf-8",
+  "bi_exception_summary.json": "application/json; charset=utf-8",
+};
+
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
+}
+
+// R2オブジェクトをJSONとして読む。実R2Object(.text())とテスト用の簡易mock({body: "..."})の両方に対応する。
+async function getR2Json(env, key) {
+  const obj = await env.BI_DATA.get(R2_PREFIX + key);
+  if (!obj) return null;
+  try {
+    const text = typeof obj.text === "function" ? await obj.text() : obj.body;
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function r2ObjectResponse(env, key, type) {
+  const obj = await env.BI_DATA.get(R2_PREFIX + key);
+  if (!obj) {
+    return jsonResponse({ ok: false, error: "not found", key: R2_PREFIX + key }, 404);
+  }
+  return new Response(obj.body, {
+    status: 200,
+    headers: { "content-type": type, "cache-control": "no-store" },
+  });
+}
+
+async function handleApiMonths(env) {
+  const manifest = await getR2Json(env, "manifest.json");
+  if (!manifest) {
+    return jsonResponse({ ok: false, error: "manifest not found" }, 404);
+  }
+  return jsonResponse({
+    default_month: manifest.default_month ?? null,
+    available_months: manifest.available_months || [],
+    months_with_any_booking: manifest.months_with_any_booking || [],
+    months_with_active_booking: manifest.months_with_active_booking || [],
+  });
+}
+
+async function handleApiSnapshot(env, url) {
+  const monthParam = url.searchParams.get("month");
+  if (!monthParam) {
+    // month指定なし: manifest.default_month があればそのmonth別snapshot、無ければ従来のlatest/bi_snapshot.json
+    const manifest = await getR2Json(env, "manifest.json");
+    if (manifest && manifest.default_month) {
+      const key = `months/${manifest.default_month}/bi_snapshot.json`;
+      const obj = await env.BI_DATA.get(R2_PREFIX + key);
+      if (obj) {
+        return new Response(obj.body, {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+    }
+    return r2ObjectResponse(env, "bi_snapshot.json", "application/json; charset=utf-8");
+  }
+
+  if (!MONTH_RE.test(monthParam)) {
+    return jsonResponse({ ok: false, error: "invalid month format (expected YYYY-MM)" }, 400);
+  }
+  const manifest = await getR2Json(env, "manifest.json");
+  const available = (manifest && manifest.available_months) || [];
+  if (!available.includes(monthParam)) {
+    return jsonResponse({ ok: false, error: "month not available", month: monthParam }, 404);
+  }
+  return r2ObjectResponse(env, `months/${monthParam}/bi_snapshot.json`, "application/json; charset=utf-8");
+}
+
+async function handleMonthDataFile(env, month, filename) {
+  const type = MONTH_FILE_TYPES[filename];
+  if (!type) {
+    return jsonResponse({ ok: false, error: "not found" }, 404);
+  }
+  if (!MONTH_RE.test(month)) {
+    return jsonResponse({ ok: false, error: "invalid month format (expected YYYY-MM)" }, 400);
+  }
+  return r2ObjectResponse(env, `months/${month}/${filename}`, type);
 }
 
 export default {
@@ -37,6 +123,20 @@ export default {
         data_source: "r2",
         r2_binding: "BI_DATA",
       });
+    }
+
+    if (path === "/api/months") {
+      return handleApiMonths(env);
+    }
+
+    if (path === "/api/snapshot") {
+      return handleApiSnapshot(env, url);
+    }
+
+    const monthFileMatch = path.match(/^\/data\/months\/([^/]+)\/([^/]+)$/);
+    if (monthFileMatch) {
+      const [, month, filename] = monthFileMatch;
+      return handleMonthDataFile(env, decodeURIComponent(month), filename);
     }
 
     // BIデータ系ルート : R2(BI_DATA)から返す

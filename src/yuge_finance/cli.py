@@ -395,6 +395,7 @@ def cmd_refresh_beds24_bi(args) -> int:
     months = bi_refresh.month_list(start, args.months)
     do_publish = bool(args.publish) and not bool(args.no_publish)
     do_publish_r2 = bool(args.publish_r2) and not bool(args.no_publish_r2)
+    auto_months = bool(getattr(args, "auto_months_with_bookings", False))
 
     lock = locks.FileLock(config.LOG_DIR / "beds24_bi_refresh.lock", stale_seconds=3600)
     try:
@@ -403,10 +404,16 @@ def cmd_refresh_beds24_bi(args) -> int:
         _print(f"[refresh-beds24-bi] スキップ（多重起動防止）: {e}")
         return 0
     try:
-        _print(f"=== refresh-beds24-bi 対象={months} dry_run={bool(args.dry_run)} ===")
-        status = bi_refresh.refresh(months, dry_run=bool(args.dry_run))
+        label = "自動抽出（予約が1件でもある月）" if auto_months else months
+        _print(f"=== refresh-beds24-bi 対象={label} dry_run={bool(args.dry_run)} ===")
+        status = bi_refresh.refresh(months, dry_run=bool(args.dry_run),
+                                    auto_months_with_bookings=auto_months)
         _print(f"[refresh-beds24-bi] 成功月={status['success_months']} エラー={len(status['errors'])} "
                f"revenue_data_status={status.get('revenue_data_status')}")
+        _print(f"[refresh-beds24-bi] default_month={status.get('default_month')} "
+               f"available_months={status.get('available_months')} "
+               f"months_with_any_booking={status.get('months_with_any_booking')} "
+               f"months_with_active_booking={status.get('months_with_active_booking')}")
         for e in status["errors"]:
             _print(f"  ERROR {e['month']}/{e['stage']}: {e['error']}")
         if status["errors"]:
@@ -597,6 +604,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Beds24速報BIの巡回更新（仕訳/Excelは触らない）")
     rb.add_argument("--month", default="current", help="current または YYYY-MM")
     rb.add_argument("--months", type=int, default=2, help="対象月数（当月から）")
+    rb.add_argument("--auto-months-with-bookings", action="store_true",
+                    help="Beds24予約が1件でもある月（宿泊日ベース、キャンセル含む）を自動抽出して対象にする"
+                         "（指定時は--month/--monthsより優先）")
     rb.add_argument("--publish", action="store_true", help="生成後にCloudflare公開ディレクトリへ反映")
     rb.add_argument("--no-publish", action="store_true", help="公開しない（--publishを上書き）")
     rb.add_argument("--publish-r2", action="store_true",

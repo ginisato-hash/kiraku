@@ -27,12 +27,24 @@ OPTIONAL_UPLOAD_FILES = [
     "fixed_variable_model_update_candidates.json",
 ]
 
+# 月別ディレクトリ(months/{YYYY-MM}/)配下のアップロード対象ファイル名。
+MONTH_UPLOAD_FILENAMES = [
+    "bi_snapshot.json", "bi_daily_timeseries.csv", "bi_monthly_kpi.csv",
+    "bi_validation_status.json", "bi_exception_summary.json",
+]
+
 REQUIRED_SNAPSHOT_FIELDS = [
     "cash_operating_breakeven_revenue",
     "cash_operating_breakeven_achievement_rate",
     "booking_pace_status",
     "month_elapsed_rate",
     "projected_month_end_bep_achievement_rate",
+]
+
+# 月別snapshot(months/{YYYY-MM}/bi_snapshot.json)に必須のフィールド。
+REQUIRED_MONTH_SNAPSHOT_FIELDS = [
+    "target_month", "beds24_revenue_net_for_bi",
+    "cash_operating_breakeven_revenue", "booking_pace_status",
 ]
 
 DEFAULT_BUCKET = "kiraku-bi-data"
@@ -91,15 +103,60 @@ def validate(source_dir: Path) -> List[str]:
         if field not in snapshot:
             issues.append(f"bi_snapshot.json に必須フィールドがありません: {field}")
 
+    issues.extend(_validate_month_snapshots(source_dir, manifest_path))
     return issues
+
+
+def _validate_month_snapshots(source_dir: Path, manifest_path: Path) -> List[str]:
+    """月別ディレクトリ(months/{YYYY-MM}/)の検証。manifestにavailable_monthsが無ければ検証をスキップする
+    （本機能導入前に生成されたBI出力との後方互換のため）。
+    """
+    issues: List[str] = []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return [f"manifest.json のJSON解析に失敗: {e}"]
+
+    if "available_months" not in manifest:
+        return issues  # 月別対応前のBI出力。従来通りlatest/*のみを対象とする。
+    available_months = manifest.get("available_months") or []
+    if not isinstance(available_months, list):
+        return ["manifest.json の available_months はlistである必要があります"]
+
+    for month in available_months:
+        month_dir = source_dir / "months" / month
+        snap_path = month_dir / "bi_snapshot.json"
+        if not snap_path.exists():
+            issues.append(f"months/{month}/bi_snapshot.json が存在しません: {snap_path}")
+            continue
+        try:
+            month_snap = json.loads(snap_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            issues.append(f"months/{month}/bi_snapshot.json のJSON解析に失敗: {e}")
+            continue
+        for field in REQUIRED_MONTH_SNAPSHOT_FIELDS:
+            if field not in month_snap:
+                issues.append(f"months/{month}/bi_snapshot.json に必須フィールドがありません: {field}")
+    return issues
+
+
+def _month_upload_targets(source_dir: Path, manifest: Dict) -> List[str]:
+    """アップロード対象の月別ファイルの相対key一覧(例: months/2026-07/bi_snapshot.json)を返す。"""
+    targets: List[str] = []
+    for month in manifest.get("available_months") or []:
+        month_dir = source_dir / "months" / month
+        for fn in MONTH_UPLOAD_FILENAMES:
+            if (month_dir / fn).exists():
+                targets.append(f"months/{month}/{fn}")
+    return targets
 
 
 def _wrangler_available() -> bool:
     return shutil.which("npx") is not None or shutil.which("wrangler") is not None
 
 
-def _put(bucket: str, prefix: str, filename: str, file_path: Path, cwd: Path) -> Dict:
-    key = f"{prefix}/{filename}"
+def _put(bucket: str, prefix: str, relative_key: str, file_path: Path, cwd: Path) -> Dict:
+    key = f"{prefix}/{relative_key}"
     cmd = ["npx", "wrangler", "r2", "object", "put", f"{bucket}/{key}",
            "--file", str(file_path), "--remote"]
     try:
@@ -123,8 +180,11 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
 
     snapshot = json.loads((source_dir / "bi_snapshot.json").read_text(encoding="utf-8"))
     generated_at = snapshot.get("generated_at_jst") or snapshot.get("current_date_jst")
+    manifest = json.loads((source_dir / "manifest.json").read_text(encoding="utf-8"))
 
-    target_files = UPLOAD_FILES + [fn for fn in OPTIONAL_UPLOAD_FILES if (source_dir / fn).exists()]
+    target_files = (UPLOAD_FILES
+                   + [fn for fn in OPTIONAL_UPLOAD_FILES if (source_dir / fn).exists()]
+                   + _month_upload_targets(source_dir, manifest))
 
     if dry_run:
         return {
