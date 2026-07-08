@@ -83,6 +83,22 @@ def test_missing_manifest_fails_validation(tmp_path):
     assert any("manifest.json" in i for i in issues)
 
 
+def test_bank_report_files_are_optional_when_absent(tmp_path):
+    """本機能導入前に生成されたBI出力(銀行レポート無し)でもpublish-bi-r2は失敗しない。"""
+    _seed(tmp_path)
+    res = publish_r2.publish(source_dir=tmp_path, dry_run=True)
+    for fn in publish_r2.OPTIONAL_UPLOAD_FILES:
+        assert f"latest/{fn}" not in res["would_upload_keys"]
+
+
+def test_bank_report_files_are_uploaded_when_present(tmp_path):
+    _seed(tmp_path)
+    (tmp_path / "bank_cashflow_summary.json").write_text('{"month": "2026-07"}', encoding="utf-8")
+    res = publish_r2.publish(source_dir=tmp_path, dry_run=True)
+    assert "latest/bank_cashflow_summary.json" in res["would_upload_keys"]
+    assert "latest/bank_cost_model_candidates.json" not in res["would_upload_keys"]
+
+
 def test_publish_does_not_touch_local_bi_on_failure(tmp_path):
     _seed(tmp_path)
     (tmp_path / "bi_snapshot.json").write_text("{ broken", encoding="utf-8")

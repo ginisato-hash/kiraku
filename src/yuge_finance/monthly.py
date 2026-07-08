@@ -20,6 +20,7 @@ from .accounting import (breakeven_model, debt_journal, journal_engine, kpi,
 from .ingest import opening_balance
 from .normalize import validators
 from .normalize.schema import JournalEntry
+from .reports import bank_cashflow_report
 
 
 def _prior_period_entries(conn, month: str) -> List[JournalEntry]:
@@ -117,6 +118,9 @@ def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
 
     ok_j, jd, jc = validators.journal_balanced(confirmed)
 
+    # --- 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）---
+    bank_actual_bi = bank_cashflow_report.compute_bi_fields(conn)
+
     return {
         "month": month,
         "bookings": bookings, "bank_txns": bank, "cash_txns": cash, "manual": manual,
@@ -146,4 +150,5 @@ def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
         "debt_detail": debt,
         "debit_total": jd, "credit_total": jc,
         "image_issues": 0, "workbook_path": workbook_path,
+        "bank_actual_bi": bank_actual_bi,
     }

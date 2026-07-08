@@ -53,6 +53,26 @@ const baseSnapshot = {
   // deprecated（primary表示には使わない。JSONには残る）
   breakeven_revenue_current_structure: 999999,
   revenue_reconciliation_difference: 123456,
+  // --- 銀行口座実績レイヤー（BI/分析専用）---
+  bank_actual_latest_balance: 3052421,
+  bank_actual_latest_balance_date: "2026-07-07",
+  bank_source_period_start: "2026-05-01",
+  bank_source_period_end: "2026-07-07",
+  bank_total_deposits: 36144028,
+  bank_total_withdrawals: 44075154,
+  bank_net_cashflow: -7931126,
+  bank_month_end_balance_observed: 3522735,
+  bank_month_end_balance_date: "2026-06-30",
+  bank_opening_balance_before_first_transaction: 10983547,
+  bank_balance_reconciliation_status: "日付相違のため要確認（自動エラーではない）",
+  accountant_bs_cash_balance: 7950646,
+  bank_vs_accountant_difference: -201428,
+  bank_csv_import_status: "imported",
+  bank_csv_imported_rows: 89,
+  bank_classification_review_required_count: 31,
+  bank_fixed_cost_candidate_total: 7082555,
+  bank_variable_cost_candidate_total: 724231,
+  bank_debt_service_candidate_total: 269994,
 };
 
 await check("buildBiViewModel returns primaryCards", async () => {
@@ -109,7 +129,7 @@ await check("details is a structured array with id/title/summary/rows", async ()
   }
   const ids = vm.details.map((d) => d.id);
   assert.deepEqual(ids, ["revenue-logic", "breakeven", "pace", "labor", "variable-cost",
-    "mc-gop", "finance", "validation"]);
+    "mc-gop", "finance", "validation", "bank-actuals", "bank-cost-candidates"]);
 });
 
 await check("debt_service_status 返済仮置き produces a note", async () => {
@@ -212,6 +232,32 @@ await check("_internal helpers format yen/pct/ratio correctly", async () => {
   assert.equal(_internal.yen(null), "—");
   assert.equal(_internal.pct(0.5), "50.0%");
   assert.equal(_internal.ratio(0.25), "0.25倍");
+});
+
+await check("bank-actuals detail section renders with latest balance and import status", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "bank-actuals");
+  assert.ok(section, "bank-actuals section must exist");
+  const rowText = JSON.stringify(section.rows);
+  assert.ok(rowText.includes("¥3,052,421"), "latest bank balance must be shown");
+  assert.ok(rowText.includes("2026-07-07"));
+  assert.ok(rowText.includes("imported"), "import status must be shown");
+  assert.ok(section.summary.includes("¥3,052,421"));
+});
+
+await check("bank-cost-candidates detail section shows fixed/variable candidate summary", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "bank-cost-candidates");
+  assert.ok(section, "bank-cost-candidates section must exist");
+  const rowText = JSON.stringify(section.rows);
+  assert.ok(rowText.includes("¥7,082,555"), "fixed cost candidate total must be shown");
+  assert.ok(rowText.includes("¥724,231"), "variable cost candidate total must be shown");
+  assert.ok(section.summary.includes("固定費候補"));
+});
+
+await check("bank sections do not increase primary card count (still 7)", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  assert.equal(vm.primaryCards.length, 7);
 });
 
 console.log(`\n${passed} biViewModel checks passed`);

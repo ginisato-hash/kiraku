@@ -21,6 +21,12 @@ UPLOAD_FILES = [
     "bi_monthly_kpi.csv", "bi_validation_status.json", "bi_exception_summary.json",
 ]
 
+# 銀行口座実績レイヤー由来（本機能導入前に生成されたBI出力には無い場合があるため任意扱い）。
+OPTIONAL_UPLOAD_FILES = [
+    "bank_cashflow_summary.json", "bank_cost_model_candidates.json",
+    "fixed_variable_model_update_candidates.json",
+]
+
 REQUIRED_SNAPSHOT_FIELDS = [
     "cash_operating_breakeven_revenue",
     "cash_operating_breakeven_achievement_rate",
@@ -60,6 +66,14 @@ def validate(source_dir: Path) -> List[str]:
             issues.append(f"{fn} が存在しません: {p}")
             continue
         if fn.endswith(".json"):
+            try:
+                json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                issues.append(f"{fn} のJSON解析に失敗: {e}")
+
+    for fn in OPTIONAL_UPLOAD_FILES:
+        p = source_dir / fn
+        if p.exists():
             try:
                 json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
@@ -110,11 +124,13 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
     snapshot = json.loads((source_dir / "bi_snapshot.json").read_text(encoding="utf-8"))
     generated_at = snapshot.get("generated_at_jst") or snapshot.get("current_date_jst")
 
+    target_files = UPLOAD_FILES + [fn for fn in OPTIONAL_UPLOAD_FILES if (source_dir / fn).exists()]
+
     if dry_run:
         return {
             "dry_run": True, "bucket": bucket, "prefix": prefix,
             "uploaded_count": 0,
-            "would_upload_keys": [f"{prefix}/{fn}" for fn in UPLOAD_FILES],
+            "would_upload_keys": [f"{prefix}/{fn}" for fn in target_files],
             "generated_at_jst": generated_at,
         }
 
@@ -123,7 +139,7 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
             "wrangler(npx)が見つかりません。cloudflare/bi-web で `npm install` を実行してください。")
 
     results = []
-    for fn in UPLOAD_FILES:
+    for fn in target_files:
         res = _put(bucket, prefix, fn, source_dir / fn, worker_dir)
         results.append(res)
         if not res["ok"]:

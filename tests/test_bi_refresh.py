@@ -126,6 +126,39 @@ def test_publish_copies_and_makes_manifest(tmp_path):
     assert len(man["files"]) == 5 and man["checksum"]
 
 
+# ---------------- 銀行口座実績レイヤー（BI専用。15分速報更新では取込を行わない）----------------
+def test_bi_refresh_source_does_not_ingest_bank_csv():
+    """15分速報更新(bi_refresh.py)は銀行CSV取込(ingest-bank-csv/bank_actuals.run)を呼ばない。"""
+    src = (config.ROOT / "src" / "yuge_finance" / "bi_refresh.py").read_text(encoding="utf-8")
+    assert "bank_actuals" not in src
+    assert "ingest-bank-csv" not in src
+
+
+def test_refresh_reflects_already_ingested_bank_actuals_without_touching_journal(isolated):
+    from yuge_finance.normalize.schema import BankActualTransaction
+    tmp, conn = isolated
+    txn = BankActualTransaction(
+        bank_account_key="X", transaction_date="2026-06-01", row_number=1,
+        counterparty_raw="ZHｾﾞｲﾘｼﾎｳｼﾕｳ", memo_raw="ZHｾﾞｲﾘｼﾎｳｼﾕｳ",
+        withdrawal_amount=39600, balance_after=1000000,
+    ).finalize()
+    db.upsert(conn, "bank_actual_transactions", [txn])
+
+    bi_refresh.refresh(["2026-06"], conn=conn)
+
+    snap = json.loads(
+        (tmp / "data" / "output" / "latest" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap["bank_actual_latest_balance"] == 1000000.0
+    assert snap["bank_csv_import_status"] == "imported"
+    # 15分更新は仕訳・銀行実績データ両方とも書き換えない（読み取り専用）
+    assert db.fetch(conn, "journal_entries") == []
+    assert len(db.fetch(conn, "bank_actual_transactions")) == 1
+
+    bank_bi = tmp / "data" / "output" / "latest" / "bi"
+    assert (bank_bi / "bank_cashflow_summary.json").exists()
+    assert (bank_bi / "fixed_variable_model_update_candidates.json").exists()
+
+
 def test_publish_aborts_on_broken_json(tmp_path):
     latest = tmp_path / "latest"; dst = tmp_path / "web"
     _seed_latest(latest)

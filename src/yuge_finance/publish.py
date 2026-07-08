@@ -17,6 +17,8 @@ from .bi_refresh import jst_str
 PUBLISH_FILES = [
     "bi_snapshot.json", "bi_daily_timeseries.csv", "bi_monthly_kpi.csv",
     "bi_validation_status.json", "bi_exception_summary.json",
+    "bank_cashflow_summary.json", "bank_cost_model_candidates.json",
+    "fixed_variable_model_update_candidates.json",
 ]
 
 

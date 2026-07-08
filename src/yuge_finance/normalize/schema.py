@@ -63,6 +63,46 @@ class BankTransaction:
 
 
 @dataclass
+class BankActualTransaction:
+    """銀行口座実績レイヤー（会計確定パイプラインとは独立。BI/分析専用）。
+
+    会計上の仕訳生成には使わない。口座残高の実績再現・費目候補分類・
+    固定費/変動費更新候補のためのデータソース。
+    """
+    bank_account_key: str = ""
+    source_file_name: str = ""
+    source_file_hash: str = ""
+    row_number: int = 0
+    bank_branch: str = ""
+    account_type: str = ""
+    account_number_masked: str = ""
+    transaction_date: str = ""
+    value_date: str = ""
+    withdrawal_amount: float = 0.0
+    deposit_amount: float = 0.0
+    signed_amount: float = 0.0
+    balance_after: float = 0.0
+    transaction_type: str = ""
+    detail_type: str = ""
+    counterparty_raw: str = ""
+    counterparty_normalized: str = ""
+    memo_raw: str = ""
+    dedupe_key: str = ""
+    created_at_jst: str = ""
+
+    def finalize(self) -> "BankActualTransaction":
+        self.withdrawal_amount = _num(self.withdrawal_amount)
+        self.deposit_amount = _num(self.deposit_amount)
+        self.balance_after = _num(self.balance_after)
+        self.signed_amount = self.deposit_amount - self.withdrawal_amount
+        self.dedupe_key = make_hash(
+            self.bank_account_key, self.transaction_date, self.row_number,
+            self.signed_amount, self.balance_after, self.counterparty_raw,
+        )
+        return self
+
+
+@dataclass
 class CashTransaction:
     cash_transaction_id: str = ""
     source_file: str = ""

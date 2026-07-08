@@ -16,6 +16,7 @@ from .normalize import schema
 # テーブル名 -> (dataclass, ユニークキー列, 上書き更新するか)
 TABLES = {
     "bank_transactions": (schema.BankTransaction, "import_hash", False),
+    "bank_actual_transactions": (schema.BankActualTransaction, "dedupe_key", False),
     "cash_transactions": (schema.CashTransaction, "import_hash", False),
     "beds24_bookings": (schema.BookingRecord, "booking_id", True),
     "manual_adjustments": (schema.ManualAdjustment, "import_hash", False),

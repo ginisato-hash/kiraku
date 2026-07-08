@@ -13,8 +13,8 @@ from typing import Dict, List
 
 from . import bi_refresh, config, csvio, db, locks, monthly, publish, publish_r2
 from .accounting import breakeven_model, labor_model, reconciliation
-from .ingest import (bank_csv, cash_receipt_csv, loan_schedule, manual_adjustments,
-                     opening_balance)
+from .ingest import (bank_actuals, bank_csv, cash_receipt_csv, loan_schedule,
+                     manual_adjustments, opening_balance)
 from .normalize.schema import (BankTransaction, BookingRecord, CashTransaction,
                                JournalEntry, ManualAdjustment)
 from .reports import (bi_export, breakeven_report, exception_report, labor_report,
@@ -178,6 +178,39 @@ def cmd_ingest_bank(args, conn=None) -> Dict:
     month = _validate_month(args.month)
     res = bank_csv.run(month, conn)
     _print(f"[ingest-bank] {month}: {res}")
+    return res
+
+
+# ---------------------------------------------------------------- ingest-bank-csv
+def cmd_ingest_bank_csv(args, conn=None) -> Dict:
+    """銀行口座実績CSV取込（BI/分析専用。会計仕訳・PL/BS/CF・Excelは一切触らない）。
+
+    --dry-run: 解析・残高検証・会計士BSとの照合のみ行い、DBには保存しない。
+    --apply  : 上記に加えて bank_actual_transactions テーブルへ保存する。
+    """
+    own = conn is None
+    conn = conn or db.connect()
+    file_path = Path(args.file)
+    if not file_path.exists():
+        raise SystemExit(f"ERROR: ファイルが見つかりません: {file_path}")
+    apply_ = bool(args.apply) and not bool(args.dry_run)
+    res = bank_actuals.run(file_path, args.account, encoding=args.encoding,
+                           month=args.month, apply=apply_, conn=conn)
+    if own:
+        conn.close()
+    chain = res["balance_chain"]
+    recon = res["reconciliation"]
+    _print(f"=== ingest-bank-csv（{'apply' if apply_ else 'dry-run'}）===")
+    _print(f"ファイル: {res['file']}")
+    _print(f"行数: {res['rows_parsed']} / 新規保存: {res.get('inserted', 0)} / 重複スキップ: {res.get('skipped', 0)}")
+    chain_status = "OK" if chain["balanced"] else f"NG({len(chain['mismatches'])}件)"
+    _print(f"残高チェーン整合: {chain_status}")
+    _print(f"取引前推定残高(先頭行より逆算): {chain['opening_balance_before_first_transaction']}")
+    _print(f"会計士確定BSとの照合: {recon['bank_balance_reconciliation_status']} "
+           f"(銀行実績={recon['bank_csv_observed_balance']}/{recon['bank_csv_observed_date']} "
+           f"会計士確定={recon['accountant_bs_cash_balance']} 差異={recon['bank_vs_accountant_difference']})")
+    if not apply_:
+        _print("（dry-runのためDBへは保存していません。--apply で確定保存してください）")
     return res
 
 
@@ -534,7 +567,7 @@ def _write_all_outputs(month: str, conn, log: List[Dict]) -> Dict:
     monthly_close_report.write(month, summary, out_dir / "monthly_close_report.md")
 
     # BI出力
-    bi_export.write_all(month, ctx, checks, wb_checks, sev, out_dir)
+    bi_export.write_all(month, ctx, checks, wb_checks, sev, out_dir, conn=conn)
     return {"all_ok": summary["all_ok"], "critical": len(sev["critical"]),
             "warnings": len(sev["warnings"])}
 
@@ -582,6 +615,14 @@ def build_parser() -> argparse.ArgumentParser:
     ib = sub.add_parser("inspect-beds24-fields", help="Beds24 raw payloadの実field調査（Phase 0）")
     ib.add_argument("--month", default="current", help="対象月 YYYY-MM。省略/currentで全月")
     add_month("ingest-bank", "銀行CSV取込")
+    ibc = sub.add_parser("ingest-bank-csv",
+                         help="銀行口座実績CSV取込（BI/分析専用。手動実行。15分速報更新では実行しない）")
+    ibc.add_argument("--file", required=True, help="取込む銀行CSVのパス")
+    ibc.add_argument("--account", required=True, help="口座キー（例: 蔵王支店_0036041）")
+    ibc.add_argument("--encoding", default="auto", help="文字コード（既定: auto=cp932/utf-8自動判別）")
+    ibc.add_argument("--dry-run", action="store_true", help="DBへ保存せず解析・検証結果のみ表示")
+    ibc.add_argument("--apply", action="store_true", help="解析結果をDBへ保存する")
+    ibc.add_argument("--month", default=None, help="レポートで先頭表示する対象月 YYYY-MM（任意）")
     add_month("ingest-cash", "現金レシートCSV取込")
     add_month("ingest-adjustments", "手動補正CSV取込")
     add_month("ingest-loan-schedule", "月次債務返済予定表取込")
@@ -614,6 +655,7 @@ def main(argv=None) -> int:
         "inspect-beds24-fields": lambda: cmd_inspect_beds24_fields(args),
         "fetch-beds24": lambda: (cmd_fetch_beds24(args), 0)[1],
         "ingest-bank": lambda: (cmd_ingest_bank(args), 0)[1],
+        "ingest-bank-csv": lambda: (cmd_ingest_bank_csv(args), 0)[1],
         "ingest-cash": lambda: (cmd_ingest_cash(args), 0)[1],
         "ingest-adjustments": lambda: (cmd_ingest_adjustments(args), 0)[1],
         "ingest-loan-schedule": lambda: (cmd_ingest_loan_schedule(args), 0)[1],

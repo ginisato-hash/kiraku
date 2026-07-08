@@ -1,0 +1,317 @@
+# 銀行口座実績レイヤー 費目候補分類ルール（喜らく単体・BI/固定費変動費モデル更新候補専用）。
+#
+# 重要: これは会計仕訳を作る journal_rules.yml とは別物。
+#   - ここでの分類結果は「候補(candidate)」であり、確定仕訳にも config/fixed_variable_model.yml にも
+#     自動反映されない。人間の確認を経てから反映する。
+#   - 個人名らしき摘要は confidence を上げず、必ず requires_review: true にする。
+#   - webで根拠を確認できたものは evidence_source_url / evidence_summary / researched_at_jst を残す。
+#
+# 上から順に評価し、最初にマッチしたルールを採用する。
+# match:
+#   counterparty_contains: 摘要(正規化前の生文字列)にいずれかを含む
+#   direction: deposit(入金) / withdrawal(出金) / any
+#   amount_min / amount_max: 絶対値範囲(円)
+# action:
+#   cost_model_category / fixed_or_variable / cashflow_category / business_area /
+#   confidence(high/medium/low) / reason / requires_review(true/false) /
+#   auto_reflectable(true = Phase4の高信頼config反映候補リストに乗せてよい)
+
+rules:
+  # --- 銀行手数料（high・auto_reflectable）---
+  - id: bank_actual_furikomi_fee
+    match: {counterparty_contains: [ﾌﾘｺﾐﾃｽｳﾘﾖｳ, 振込手数料], direction: withdrawal}
+    action: {cost_model_category: bank_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: bank_fee,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「振込手数料」と明確一致。銀行手数料として自動確定可能。"}
+  - id: bank_actual_fbib_fee
+    match: {counterparty_contains: [FBIBﾃｽｳﾘﾖｳ, FBIB手数料], direction: withdrawal}
+    action: {cost_model_category: bank_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: bank_fee,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "FBIB(ファームバンキング/インターネットバンキング)手数料。"}
+  - id: bank_actual_kawase_fee
+    match: {counterparty_contains: [ｶﾜｾﾃｽｳﾘﾖｳ, 為替手数料], direction: withdrawal}
+    action: {cost_model_category: bank_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: bank_fee,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「為替手数料」と明確一致。"}
+
+  # --- 債務返済（high・auto_reflectable）---
+  - id: bank_actual_policy_finance_corp
+    match: {counterparty_contains: [ｾｲｻｸｺｳｺ, 政策公庫], direction: withdrawal}
+    action: {cost_model_category: debt_service_bank, fixed_or_variable: debt_service,
+             cashflow_category: financing_outflow, business_area: debt,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "「政策公庫」「国民」の表記から日本政策金融公庫(国民生活事業)への毎月の元利返済と判断。既存journal_rules.ymlでも同名で高信頼登録済み。"}
+
+  # --- 税理士報酬（high・auto_reflectable）---
+  - id: bank_actual_tax_accountant
+    match: {counterparty_contains: [ｾﾞｲﾘｼﾎｳｼﾕｳ, 税理士報酬], direction: withdrawal}
+    action: {cost_model_category: tax_accountant_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: admin,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「税理士報酬」と明確一致。"}
+
+  # --- 昇降機保守（high・auto_reflectable）---
+  - id: bank_actual_nippon_otis
+    match: {counterparty_contains: [ﾆﾂﾎﾟﾝｵ-ﾁｽ, 日本オーチス], direction: withdrawal}
+    action: {cost_model_category: elevator_maintenance, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: maintenance,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "日本オーチス・エレベータへの保守費と判断。",
+             evidence_source_url: "https://www.otis.com/ja/jp",
+             evidence_summary: "日本オーチス・エレベータはOtis Worldwide Corporationの日本法人で、エレベーター・エスカレーターの製造・販売・設置・保守を行う。",
+             researched_at_jst: "2026-07-08"}
+
+  # --- NTT・TCリース（high・auto_reflectable）---
+  - id: bank_actual_ntt_tc_lease
+    match: {counterparty_contains: ["NTT TCﾘ-ｽ", NTT・TCリース], direction: withdrawal}
+    action: {cost_model_category: lease, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: lease,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "NTT・TCリースへのリース料支払と判断。",
+             evidence_source_url: "https://www.ntt-tc-lease.com/eng/",
+             evidence_summary: "NTT・TCリースはNTT・NTTファイナンス・東京センチュリーの合弁リース会社(2020年設立)。",
+             researched_at_jst: "2026-07-08"}
+
+  # --- 社会保険料・労働保険（high・auto_reflectable）---
+  - id: bank_actual_social_insurance
+    match: {counterparty_contains: [ｼﾔｶｲﾎｹﾝﾘﾖｳ, 社会保険料], direction: withdrawal}
+    action: {cost_model_category: social_insurance, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: payroll_related,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「社会保険料」と明確一致。"}
+  - id: bank_actual_labor_insurance
+    match: {counterparty_contains: [ﾛｳﾄﾞｳ ﾎｹﾝ, 労働保険], direction: withdrawal}
+    action: {cost_model_category: labor_insurance, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: payroll_related,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「労働保険」と明確一致。"}
+
+  # --- 電話料（high・auto_reflectable）---
+  - id: bank_actual_telephone
+    match: {counterparty_contains: [電話料], direction: withdrawal}
+    action: {cost_model_category: telephone, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: utilities,
+             confidence: high, requires_review: false, auto_reflectable: true,
+             reason: "摘要が「電話料」と明確一致。"}
+
+  # --- 燃料・ガス・電気・水道（high。稼働連動の変動費として扱う）---
+  - id: bank_actual_suzuki_abura
+    match: {counterparty_contains: [ｽｽﾞｷｱﾌﾞﾗ, 鈴木油店], direction: withdrawal}
+    action: {cost_model_category: fuel, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: utilities,
+             confidence: high, requires_review: false,
+             reason: "鈴木油店（燃料/灯油卸）。既存journal_rules.ymlでも高信頼登録済み。"}
+  - id: bank_actual_saisan
+    match: {counterparty_contains: [ｻｲｻﾝ, サイサン], direction: withdrawal}
+    action: {cost_model_category: gas, fixed_or_variable: variable_occupied_day,
+             cashflow_category: operating_outflow, business_area: utilities,
+             confidence: high, requires_review: false,
+             reason: "サイサン(Gas One)のLPガス料金。稼働(浴室利用等)に連動する変動費として扱う。",
+             evidence_source_url: "https://www.saisan.net/business/lpgas.html",
+             evidence_summary: "サイサンはさいたま市大宮区のLPガス販売会社(Gas Oneブランド)。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_denki
+    match: {counterparty_contains: [ﾃﾞﾝｷ, 電気]}
+    action: {cost_model_category: utilities, fixed_or_variable: variable_occupied_day,
+             cashflow_category: operating_outflow, business_area: utilities,
+             confidence: high, requires_review: false,
+             reason: "「デンキ○月分」は電気料金。稼働に連動する変動費として扱う。"}
+  - id: bank_actual_suido
+    match: {counterparty_contains: [ｽｲﾄﾞｳ, 水道]}
+    action: {cost_model_category: water, fixed_or_variable: variable_occupied_day,
+             cashflow_category: operating_outflow, business_area: utilities,
+             confidence: high, requires_review: false,
+             reason: "水道(下水道含む)料金。稼働に連動する変動費として扱う。"}
+
+  # --- 清掃・観光協会（high）---
+  - id: bank_actual_benibana
+    match: {counterparty_contains: [ﾍﾞﾆﾊﾞﾅｾｲｿｳｼﾔ, 紅花清掃, べにばな清掃]}
+    action: {cost_model_category: cleaning, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: cleaning,
+             confidence: high, requires_review: false,
+             reason: "有限会社べにばな清掃社（山形市）への清掃外注費。既存journal_rules.ymlでも高信頼登録済み。",
+             evidence_source_url: "https://www.benibana-seisou.co.jp/",
+             evidence_summary: "有限会社べにばな清掃社は山形市の廃棄物収集・清掃・片付け業者。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_kankou_kyoukai
+    match: {counterparty_contains: [ｶﾝｺｳｷﾖｳｶｲﾋ, 観光協会費]}
+    action: {cost_model_category: tourism_association_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: association_fee,
+             confidence: high, requires_review: false,
+             reason: "摘要が「観光協会費」と明確一致。"}
+  - id: bank_actual_yamashin
+    match: {counterparty_contains: [ﾔﾏｼﾝﾊﾝﾊﾞｲ, 山新販売], direction: withdrawal}
+    action: {cost_model_category: supplies, fixed_or_variable: variable_room_night,
+             cashflow_category: operating_outflow, business_area: supplies,
+             confidence: high, requires_review: false,
+             reason: "既存journal_rules.ymlでも山新販売=消耗品費として高信頼登録済み。"}
+
+  # --- OTA/クーポン精算入金（high。Beds24宿泊月売上とは同月比較しない）---
+  - id: bank_actual_jtb_coupon
+    match: {counterparty_contains: ["JTBｸ-ﾎﾟﾝｾｲｻﾝｾﾝﾀ-", JTBクーポン精算センター], direction: deposit}
+    action: {cost_model_category: coupon_point_receivable_collection,
+             fixed_or_variable: variable_revenue_linked,
+             cashflow_category: operating_inflow, business_area: revenue,
+             confidence: high, requires_review: false,
+             reason: "JTBクーポン精算センターからの精算入金。OTA/クーポン精算金として扱い、精算ラグがあるためBeds24宿泊月売上とは同月比較しない。"}
+  - id: bank_actual_recruit_point
+    match: {counterparty_contains: [ﾘｸﾙ-ﾄﾎﾟｲﾝﾄﾌﾟﾛｸﾞﾗﾑ, リクルートポイントプログラム], direction: deposit}
+    action: {cost_model_category: coupon_point_receivable_collection,
+             fixed_or_variable: variable_revenue_linked,
+             cashflow_category: operating_inflow, business_area: revenue,
+             confidence: high, requires_review: false,
+             reason: "じゃらん等リクルート系ポイントプログラムの精算入金。同月比較はしない。",
+             evidence_source_url: "https://point.recruit.co.jp/doc/terms/pointlist1.html",
+             evidence_summary: "リクルートポイントプログラムはじゃらん等リクルート系サービス共通のポイント制度。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_sbps_recruit
+    match: {counterparty_contains: ["ﾌﾘｺﾐﾀﾞｲｺｳSBPS", "SBPS", リクルート], direction: deposit}
+    action: {cost_model_category: ota_receivable_collection,
+             fixed_or_variable: variable_revenue_linked,
+             cashflow_category: operating_inflow, business_area: revenue,
+             confidence: high, requires_review: false,
+             reason: "SBペイメントサービス(SBPS)経由のリクルート(じゃらん)OTA精算入金。決済代行会社名で着金するため摘要に「じゃらん」は出ない。同月比較はしない。",
+             evidence_source_url: "https://www.sbpayment.jp/en/service/asp/recruit_kantan/",
+             evidence_summary: "SBPSはリクルートの決済代行(サブコントラクター)として加盟店への入金処理を行う。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_rakuten_group
+    match: {counterparty_contains: [ﾗｸﾃﾝｸﾞﾙ-ﾌﾟ, 楽天グループ], direction: deposit}
+    action: {cost_model_category: ota_receivable_collection,
+             fixed_or_variable: variable_revenue_linked,
+             cashflow_category: operating_inflow, business_area: revenue,
+             confidence: high, requires_review: false,
+             reason: "楽天グループ(楽天トラベル)からのOTA精算入金と判断。同月比較はしない。",
+             evidence_source_url: "https://travel.rakuten.co.jp/",
+             evidence_summary: "楽天グループは楽天トラベル等の宿泊予約OTAを運営する。",
+             researched_at_jst: "2026-07-08"}
+
+  # --- 高見屋・借入・資金移動（売上ではない。要確認）---
+  - id: bank_actual_takamiya
+    match: {counterparty_contains: [ﾀｶﾐﾔﾘﾖｶﾝ, 高見屋旅館, 高見屋]}
+    action: {cost_model_category: owner_related_cash_in, fixed_or_variable: owner_financing,
+             cashflow_category: financing_inflow, business_area: related_party,
+             confidence: high, requires_review: true,
+             reason: "高見屋本体との資金移動。既存方針により売上には含めない。多額のため実体(貸付/出資/立替精算等)は要確認。"}
+  - id: bank_actual_shinyo_hosho_kyokai
+    match: {counterparty_contains: [ｹﾝｼﾝﾖｳﾎｼﾖｳｷﾖｳｶｲ, 信用保証協会], direction: deposit}
+    action: {cost_model_category: loan_or_capital_cash_in, fixed_or_variable: owner_financing,
+             cashflow_category: financing_inflow, business_area: debt,
+             confidence: medium, requires_review: true,
+             reason: "信用保証協会からの入金は保証付き融資実行金の可能性が高いが、融資契約書等の確認が必要なため要確認。売上ではない。"}
+
+  # --- 車両ローン/リース（related trio。要確認）---
+  - id: bank_actual_jaccs
+    match: {counterparty_contains: [ｼﾞﾔﾂｸｽ, ジャックス], direction: withdrawal}
+    action: {cost_model_category: vehicle, fixed_or_variable: debt_service,
+             cashflow_category: financing_outflow, business_area: vehicle,
+             confidence: medium, requires_review: true,
+             reason: "ジャックス(JACCS)は個品割賦・リース会社。毎月同額の引落しで車両関連ローン/リースの一部と推測されるが、対象物件は明細のみで特定できないため要確認。",
+             evidence_source_url: "https://www.jaccs.co.jp/corporate/about/group/list/",
+             evidence_summary: "ジャックス(JACCS)は個品割賦・クレジット・リース等の金融サービス会社。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_vw_finance
+    match: {counterparty_contains: ["JC VWﾌｱｲﾅﾝｽ", VWファイナンス], direction: withdrawal}
+    action: {cost_model_category: vehicle, fixed_or_variable: debt_service,
+             cashflow_category: financing_outflow, business_area: vehicle,
+             confidence: high, requires_review: true,
+             reason: "フォルクスワーゲン(VW)ファイナンスへの車両ローン/リース返済と判断。ジャックス・オリコと同時期・関連の車両ローン群の一部。config反映前に契約内容の確認が必要。",
+             evidence_source_url: "https://corp.vfj.co.jp/vwf/",
+             evidence_summary: "VWファイナンスはフォルクスワーゲングループジャパンの自動車ローン/リース金融会社。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_orico
+    match: {counterparty_contains: ["ｵﾘｺ.ｼ-ﾅﾂﾂ", オリコ], direction: withdrawal}
+    action: {cost_model_category: vehicle, fixed_or_variable: debt_service,
+             cashflow_category: financing_outflow, business_area: vehicle,
+             confidence: medium, requires_review: true,
+             reason: "オリコ(提携ローン会社)からの引落しだが「シーナッツ」はweb検索で特定できず。ジャックス・VWファイナンスと同時期・類似の毎月引落しのため車両関連ローンの一部と推測(要確認)。",
+             evidence_source_url: "https://www.orico.co.jp/loan/teikei/",
+             evidence_summary: "オリコ(オリエントコーポレーション)は提携ローン・分割払いの金融会社。「シーナッツ」の具体的情報はweb検索で見つからなかった。",
+             researched_at_jst: "2026-07-08"}
+
+  # --- 川井スポーツ（medium。10万円超は要確認）---
+  - id: bank_actual_kawai_sports
+    match: {counterparty_contains: [ｶﾜｲｽﾎﾟ-ﾂ, 川井スポーツ], direction: withdrawal}
+    action: {cost_model_category: supplies, fixed_or_variable: variable_room_night,
+             cashflow_category: operating_outflow, business_area: supplies,
+             confidence: medium, requires_review: true,
+             reason: "川井スポーツ(山形市・スポーツ用品店)。既存journal_rules.ymlでも10万円超は要確認の扱い。",
+             evidence_source_url: "http://www.kawai-sports.com/",
+             evidence_summary: "株式会社川井スポーツは山形市のスポーツ用品全般・体育遊器具設置等を行う老舗店。",
+             researched_at_jst: "2026-07-08"}
+
+  # --- 新聞・システム利用料等（medium/low。正式名称不確実）---
+  - id: bank_actual_df_shinbun
+    match: {counterparty_contains: ["DF.ｼﾝﾌﾞﾝﾎｶ"], direction: withdrawal}
+    action: {cost_model_category: supplies, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: supplies,
+             confidence: medium, requires_review: true,
+             reason: "「新聞ほか」の購読料等と推測されるが、「DF」の正式契約先名称を確証できないため要確認。"}
+  - id: bank_actual_smt_pana
+    match: {counterparty_contains: ["SMTﾊﾟﾅ"], direction: withdrawal}
+    action: {cost_model_category: lease, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: lease,
+             confidence: low, requires_review: true,
+             reason: "「SMT」「パナ」の組合せから設備リース会社(SMBCファイナンスサービス・旧パナソニックファイナンス等)の可能性があるが、web検索で確証を得られず正式名称を断定しない。毎月同額(47,300円)の引落しのためfixed_or_variableはfixedと判断。"}
+  - id: bank_actual_smbc_afp
+    match: {counterparty_contains: ["SMBC(AFPｼｽﾃﾑﾘﾖ"], direction: withdrawal}
+    action: {cost_model_category: software_system_fee, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: software,
+             confidence: medium, requires_review: true,
+             reason: "「AFPシステム利用料」の可能性があるが契約内容を確証できないため要確認。"}
+  - id: bank_actual_esthits
+    match: {counterparty_contains: ["ｴｽﾃｲﾋﾂﾂ"], direction: withdrawal}
+    action: {cost_model_category: supplies, fixed_or_variable: unknown,
+             cashflow_category: operating_outflow, business_area: supplies,
+             confidence: low, requires_review: true,
+             reason: "web検索では化粧品・健康機器の「エスティヒッツ」がヒットしたが、当社との取引実態(客室アメニティ等か)を確証できないため断定しない。",
+             evidence_source_url: "https://sthits.co.jp/",
+             evidence_summary: "検索でヒットした「健康美クラブ エスティヒッツ」は化粧品・健康機器の通販事業者。同一法人かは未確証。",
+             researched_at_jst: "2026-07-08"}
+  - id: bank_actual_michinoku_kai
+    match: {counterparty_contains: ["ｻﾝｱﾝﾄﾞｻﾝﾐﾁﾉｸｶｲ"], direction: withdrawal}
+    action: {cost_model_category: membership_dues, fixed_or_variable: unknown,
+             cashflow_category: operating_outflow, business_area: association_fee,
+             confidence: low, requires_review: true,
+             reason: "団体名(みちのく会)と個人名(事務局長)が混在する摘要のため、会費か個人への支払かを断定しない。"}
+
+  # --- 資金移動系（給振資金/総振資金。個人名ではないが内訳不確実）---
+  - id: bank_actual_kyu_furi_shikin
+    match: {counterparty_contains: [ｷﾕｳﾌﾘｼｷﾝ], direction: withdrawal}
+    action: {cost_model_category: payroll_or_staff_payment, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: payroll_related,
+             confidence: medium, requires_review: true,
+             reason: "「給振資金」(給与振込資金)の可能性が高い月初の定期的な出金だが、明細のみでは断定できないため要確認。"}
+  - id: bank_actual_sou_furi_shikin
+    match: {counterparty_contains: [ｿｳﾌﾘｼｷﾝ], direction: withdrawal}
+    action: {cost_model_category: payroll_or_staff_payment, fixed_or_variable: fixed,
+             cashflow_category: operating_outflow, business_area: payroll_related,
+             confidence: low, requires_review: true,
+             reason: "「総振資金」(総合振込資金)の可能性がある月末の大口出金だが、給与か複数仕入先向けかを特定できないため断定しない。"}
+
+  # --- 高見屋関連の大口資金移動（個人名だが金額異常。要確認）---
+  - id: bank_actual_okazaki_large
+    match: {counterparty_contains: [ｵｶｻﾞｷ ｼﾕｳｺ], amount_min: 10000000, direction: withdrawal}
+    action: {cost_model_category: unknown, fixed_or_variable: non_operating_cashflow,
+             cashflow_category: financing_outflow, business_area: personal_or_review,
+             confidence: low, requires_review: true,
+             reason: "個人名の摘要だが、同時期の高見屋旅館からの34,000,000円入金とほぼ同額(34,202,422円)であり、資金の通過・付替えの可能性がある。個人名から給与・外注と断定しない。金額の性質は要確認。"}
+  - id: bank_actual_okazaki_recurring
+    match: {counterparty_contains: [ｵｶｻﾞｷ ｼﾕｳｺ], direction: withdrawal}
+    action: {cost_model_category: unknown, fixed_or_variable: unknown,
+             cashflow_category: operating_outflow, business_area: personal_or_review,
+             confidence: low, requires_review: true,
+             reason: "個人名と見られる摘要のため、給与・外注・地代等の性質を断定しない。毎月ほぼ同額(月10万円台)の定期的な出金である点のみ記録する。"}
+
+# どのルールにもマッチしない明細（個人名・摘要空欄等を含む）はunknownとし、
+# confidence=low, requires_review=trueで候補レポートに残す。自動確定しない。
+default:
+  cost_model_category: unknown
+  fixed_or_variable: unknown
+  cashflow_category: unknown
+  business_area: personal_or_review
+  confidence: low
+  requires_review: true
+  reason: "既知の取引先ルールに一致しないため、個人名・不明先を含め断定せず要確認とする。"

@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from .. import config, csvio
 from ..ingest import opening_balance as opening_balance_mod
+from . import bank_cashflow_report
 
 DAILY_COLS = ["date", "宿泊売上", "現金入金", "現金支払", "銀行入金", "銀行出金",
               "予約件数", "仕訳件数"]
@@ -109,7 +110,7 @@ def write_monthly_kpi(month_ctxs: List[Dict], path: Path) -> Path:
 
 
 def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
-              severity: Dict, out_dir: Path) -> Dict:
+              severity: Dict, out_dir: Path, conn=None) -> Dict:
     bi_dir = out_dir / "bi"
     bi_dir.mkdir(parents=True, exist_ok=True)
 
@@ -318,6 +319,8 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         },
         "validation_ok": severity.get("all_ok", False) and not any(
             c["status"] == "critical" for c in ctx.get("opening_critical", [])),
+        # === 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）===
+        **ctx.get("bank_actual_bi", {}),
     }
     (bi_dir / "bi_snapshot.json").write_text(
         json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -361,6 +364,10 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
     }
     (bi_dir / "bi_exception_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+    # 5. 銀行口座実績 月次CF/費目候補（config/fixed_variable_model.yml は直接更新しない）
+    if conn is not None:
+        bank_cashflow_report.write_all(conn, bi_dir, month)
 
     return {"bi_dir": str(bi_dir), "daily_rows": len(daily),
             "exceptions": len(exc)}

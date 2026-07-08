@@ -332,6 +332,39 @@ function buildDetailSections(s) {
         ["同月比較", s.revenue_comparison_status || "同月比較対象外"],
       ],
     },
+    {
+      id: "bank-actuals",
+      title: "銀行残高・実績CF",
+      summary: `最新残高 ${yen(s.bank_actual_latest_balance)}`,
+      rows: [
+        ["最新銀行残高", yen(s.bank_actual_latest_balance)],
+        ["最新銀行残高日", s.bank_actual_latest_balance_date || DASH],
+        ["対象期間", (s.bank_source_period_start || DASH) + " 〜 " + (s.bank_source_period_end || DASH)],
+        ["総入金", yen(s.bank_total_deposits)],
+        ["総出金", yen(s.bank_total_withdrawals)],
+        ["純キャッシュフロー", yen(s.bank_net_cashflow)],
+        ["月末観測残高", yen(s.bank_month_end_balance_observed)],
+        ["月末観測残高日", s.bank_month_end_balance_date || DASH],
+        ["会計士確定BS現預金(普通預金)", yen(s.accountant_bs_cash_balance)],
+        ["会計BSとの差異", yen(s.bank_vs_accountant_difference)],
+        ["残高照合ステータス", s.bank_balance_reconciliation_status || DASH],
+        ["銀行CSV取込状態", s.bank_csv_import_status || "未取込"],
+        ["銀行CSV取込件数", num(s.bank_csv_imported_rows)],
+        ["分類レビュー必要件数", num(s.bank_classification_review_required_count)],
+      ],
+    },
+    {
+      id: "bank-cost-candidates",
+      title: "固定費・変動費更新候補",
+      summary: `固定費候補 ${yen(s.bank_fixed_cost_candidate_total)} / 変動費候補 ${yen(s.bank_variable_cost_candidate_total)}`,
+      rows: [
+        ["固定費候補合計(当月実績)", yen(s.bank_fixed_cost_candidate_total)],
+        ["変動費候補合計(当月実績)", yen(s.bank_variable_cost_candidate_total)],
+        ["債務返済候補合計(当月実績)", yen(s.bank_debt_service_candidate_total)],
+        ["レビュー必要件数", num(s.bank_classification_review_required_count)],
+        ["注記", "候補のみ。固定費・変動費モデル(config)は自動更新しません。"],
+      ],
+    },
   ];
 }
 

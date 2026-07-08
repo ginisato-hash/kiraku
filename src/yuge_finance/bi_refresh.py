@@ -19,7 +19,9 @@ from .reports import bi_export, breakeven_report, labor_report
 
 JST = timezone(timedelta(hours=9))
 BI_FILES = ["bi_snapshot.json", "bi_daily_timeseries.csv",
-            "bi_validation_status.json", "bi_exception_summary.json"]
+            "bi_validation_status.json", "bi_exception_summary.json",
+            "bank_cashflow_summary.json", "bank_cost_model_candidates.json",
+            "fixed_variable_model_update_candidates.json"]
 
 
 def jst_now() -> datetime:
@@ -106,7 +108,7 @@ def refresh(months: List[str], dry_run: bool = False, conn=None) -> Dict:
         sev = reconciliation.severity(checks)
         if not dry_run:
             out_dir = config.DATA_DIR / "output" / m
-            bi_export.write_all(m, ctx, checks, [], sev, out_dir)
+            bi_export.write_all(m, ctx, checks, [], sev, out_dir, conn=conn)
             # build-labor-forecast / build-breakeven 相当（速報。仕訳/Excelは書かない）
             labor_report.write(m, ctx["labor_forecast"], out_dir)
             exclude = config.kiraku().get("revenue", {}).get(
