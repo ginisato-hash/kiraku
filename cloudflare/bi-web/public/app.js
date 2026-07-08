@@ -1,7 +1,11 @@
 // 喜らく 速報BI - 画面描画（薄いレンダラ）。
-// 生のbi_snapshotフィールドは直接参照せず、biViewModel.js の buildBiViewModel() を介して描画する。
-// BIデータは Worker のルート /data/*（R2 bucket kiraku-bi-data の latest/）から取得する。
+// 責務: fetch / buildBiViewModel呼び出し / render / accordion open-close / error state のみ。
+// DOM生成は components.js の関数に委譲する。生のbi_snapshotフィールドは直接参照しない。
 import { buildBiViewModel } from "./biViewModel.js";
+import {
+  renderCommandCenter, renderInsightBanner, renderStatusChips, renderNotes,
+  renderDetails, renderHeader, renderErrorState, renderSkeleton,
+} from "./components.js";
 
 const DATA = "/data/";
 
@@ -10,64 +14,48 @@ async function getJSON(name) {
     const r = await fetch(DATA + name + "?t=" + Date.now());
     if (!r.ok) return null;
     return await r.json();
-  } catch (e) { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
-function cardHtml(c) {
-  const badge = c.badge ? `<div class="badge ${c.badgeTone || "neutral"}">${c.badge}</div>` : "";
-  return `<div class="card"><div class="label">${c.label}</div>
-          <div class="value ${c.tone || ""}">${c.value}</div>${badge}</div>`;
+function showSkeleton() {
+  const s = renderSkeleton();
+  document.getElementById("header-meta").innerHTML = s.header;
+  document.getElementById("command-center").innerHTML = s.cards;
+  document.getElementById("details-grid").innerHTML = s.details;
 }
 
-function chipHtml(c) {
-  return `<span class="chip ${c.tone}"><span class="chip-label">${c.label}</span>${c.value}</span>`;
-}
-
-function detailRowsHtml(rows) {
-  return `<table class="detail-table">${rows.map(([k, v]) =>
-    `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("")}</table>`;
-}
-
-function accordionHtml(title, rowsHtml) {
-  return `<details class="accordion"><summary>${title}</summary><div class="accordion-body">${rowsHtml}</div></details>`;
+function showError() {
+  document.getElementById("command-center").innerHTML = renderErrorState();
+  document.getElementById("pace-summary").innerHTML = "";
+  document.getElementById("status-row").innerHTML = "";
+  document.getElementById("notes-section").innerHTML = "";
+  document.getElementById("details-grid").innerHTML = "";
+  document.getElementById("header-meta").textContent = "データ未取得";
 }
 
 function render(vm) {
-  document.getElementById("updated").textContent =
-    `最終更新: ${vm.header.generatedAtJst || "—"} ｜ 対象月: ${vm.header.targetMonth}`;
+  const header = renderHeader(vm.header);
+  document.getElementById("header-meta").textContent = header.metaLine;
+  document.getElementById("header-right").innerHTML = header.pillHtml;
 
-  const commentEl = document.getElementById("pace-comment");
-  commentEl.textContent = vm.paceComment.text;
-  commentEl.className = "pace-comment " + vm.paceComment.severity;
-
-  document.getElementById("cards").innerHTML = vm.primaryCards.map(cardHtml).join("");
-  document.getElementById("chips").innerHTML = vm.statusChips.map(chipHtml).join("");
-  document.getElementById("notes").innerHTML = vm.notes.map(
-    (n) => `<div class="note ${n.severity}">${n.text}</div>`).join("");
-
-  const d = vm.details;
-  document.getElementById("accordions").innerHTML = [
-    accordionHtml("損益分岐の詳細", detailRowsHtml(d.breakeven)),
-    accordionHtml("予約ペースの詳細", detailRowsHtml(d.pace)),
-    accordionHtml("人件費の詳細", detailRowsHtml(d.labor)),
-    accordionHtml("変動費率の詳細", detailRowsHtml(d.variableCost)),
-    accordionHtml("MC/GOPの詳細", detailRowsHtml(d.mc)),
-    accordionHtml("財務状態・返済の詳細", detailRowsHtml(d.finance)),
-    accordionHtml("検証・例外", detailRowsHtml(d.validation) +
-      (vm.validationSummary
-        ? `<p class="detail-note">validation: ${vm.validationSummary.ok ? "OK" : "要確認 " + vm.validationSummary.criticalCount + "件"} / warn ${vm.validationSummary.warningCount} ｜ exception件数: ${vm.exceptionCount ?? "—"}</p>`
-        : "")),
-  ].join("");
+  document.getElementById("command-center").innerHTML = renderCommandCenter(vm.primaryCards);
+  document.getElementById("pace-summary").innerHTML = renderInsightBanner(vm.paceComment);
+  document.getElementById("status-row").innerHTML = renderStatusChips(vm.statusChips);
+  document.getElementById("notes-section").innerHTML = renderNotes(vm.notes);
+  document.getElementById("details-grid").innerHTML =
+    renderDetails(vm.details, vm.validationSummary, vm.exceptionCount);
 }
 
 async function main() {
+  showSkeleton();
   const [snapshot, manifest, validation, exception] = await Promise.all([
     getJSON("bi_snapshot.json"), getJSON("manifest.json"),
     getJSON("bi_validation_status.json"), getJSON("bi_exception_summary.json"),
   ]);
   if (!snapshot) {
-    document.getElementById("app").innerHTML =
-      `<div class="note warn">BIデータが見つかりません。R2にlatest/が投入されているか確認してください（refresh-beds24-bi → 公開）。</div>`;
+    showError();
     return;
   }
   const vm = buildBiViewModel(snapshot, manifest, validation, exception);

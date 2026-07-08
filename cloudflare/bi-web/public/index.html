@@ -4,81 +4,35 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>喜らく 速報BI（Beds24）</title>
-  <style>
-    :root { --bg:#0f172a; --card:#1e293b; --fg:#e2e8f0; --muted:#94a3b8;
-            --accent:#38bdf8; --warn:#fbbf24; --ok:#34d399; --danger:#f87171; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family: "Hiragino Sans","Hiragino Kaku Gothic ProN",
-           system-ui,sans-serif; background:var(--bg); color:var(--fg); padding:16px; }
-    h1 { font-size:1.2rem; margin:0 0 4px; }
-    .sub { color:var(--muted); font-size:.8rem; margin-bottom:4px; }
-    .subtitle { color:var(--muted); font-size:.75rem; margin-bottom:12px; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; }
-    .card { background:var(--card); border-radius:12px; padding:12px 14px; min-width:0; position:relative; }
-    .label { color:var(--muted); font-size:.72rem; }
-    .value { font-size:1.35rem; font-weight:700; margin-top:4px; overflow-wrap:anywhere; }
-    .value.accent { color:var(--accent); }
-    .badge { display:inline-block; margin-top:6px; padding:2px 8px; border-radius:999px; font-size:.7rem; }
-    .badge.ok { background:#064e3b; color:var(--ok); }
-    .badge.warn { background:#422006; color:var(--warn); }
-    .badge.danger { background:#450a0a; color:var(--danger); }
-    .badge.green { background:#064e3b; color:var(--ok); }
-    .badge.yellow { background:#422006; color:var(--warn); }
-    .badge.red { background:#450a0a; color:var(--danger); }
-    .badge.neutral { background:#334155; color:var(--muted); }
-
-    .pace-comment { margin:14px 0; padding:10px 14px; border-radius:10px; font-size:.85rem; }
-    .pace-comment.green { background:#064e3b; color:var(--ok); }
-    .pace-comment.yellow { background:#422006; color:var(--warn); }
-    .pace-comment.red { background:#450a0a; color:var(--danger); }
-    .pace-comment.neutral { background:#1e293b; color:var(--muted); }
-
-    .chips { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
-    .chip { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:999px;
-            font-size:.72rem; background:#1e293b; }
-    .chip-label { color:var(--muted); }
-    .chip.ok { border:1px solid var(--ok); }
-    .chip.warn { border:1px solid var(--warn); }
-    .chip.danger { border:1px solid var(--danger); }
-    .chip.neutral { border:1px solid #334155; }
-
-    .note { border-radius:8px; padding:8px 12px; font-size:.78rem; margin:8px 0; }
-    .note.warn { background:#422006; color:var(--warn); }
-    .note.info { background:#1e293b; color:var(--muted); }
-
-    .accordion { background:var(--card); border-radius:10px; margin:8px 0; overflow:hidden; }
-    .accordion summary { cursor:pointer; padding:10px 14px; font-size:.85rem; color:var(--fg);
-                          list-style:none; }
-    .accordion summary::-webkit-details-marker { display:none; }
-    .accordion summary::before { content:"▸ "; color:var(--muted); }
-    .accordion[open] summary::before { content:"▾ "; }
-    .accordion-body { padding:0 14px 12px; }
-    .detail-table { width:100%; border-collapse:collapse; font-size:.8rem; }
-    .detail-table td { padding:4px 0; border-bottom:1px solid #334155; }
-    .detail-table td.k { color:var(--muted); width:55%; }
-    .detail-table td.v { text-align:right; overflow-wrap:anywhere; }
-    .detail-note { color:var(--muted); font-size:.75rem; margin-top:8px; }
-
-    .section-title { margin:18px 0 6px; font-size:.8rem; color:var(--muted); font-weight:600; }
-  </style>
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <h1>喜らく 速報BI</h1>
-  <div class="sub" id="updated">読み込み中…</div>
-  <div class="subtitle">Beds24速報 / Cash BEP / 予約ペース / 人件費 / MC後GOP</div>
+  <div class="page-shell">
+    <header class="hero-header" id="hero-header">
+      <div>
+        <h1>喜らく 速報BI</h1>
+        <div class="subtitle">Beds24速報 / Cash BEP / 予約ペース / MC後GOP</div>
+        <div class="meta-line" id="header-meta">読み込み中…</div>
+      </div>
+      <div class="header-right" id="header-right"></div>
+    </header>
 
-  <div class="section-title">今日見る数字</div>
-  <div class="grid" id="cards"></div>
+    <main class="dashboard" id="dashboard">
+      <section class="command-center" id="command-center" aria-label="今日見る数字"></section>
 
-  <div id="pace-comment" class="pace-comment neutral"></div>
+      <section class="pace-summary" id="pace-summary" aria-label="ペースコメント"></section>
 
-  <div class="chips" id="chips"></div>
-  <div id="notes"></div>
+      <section class="status-row" id="status-row" aria-label="ステータス"></section>
 
-  <div class="section-title">詳細（タップで展開）</div>
-  <div id="accordions"></div>
+      <section id="notes-section" aria-label="注記"></section>
 
-  <div id="app"></div>
+      <section aria-label="詳細">
+        <div class="section-title">詳細</div>
+        <div class="details-grid" id="details-grid"></div>
+      </section>
+    </main>
+  </div>
+
   <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -1,0 +1,380 @@
+/* 喜らく 速報BI — デザインシステム。
+   Linear / Vercel / Stripe / Plaid 系の落ち着いたSaaS dashboard品質を目標にする。
+   ビルドツールなし（Vanilla CSS）。Cloudflare Workers Static Assetsでそのまま配信する。
+*/
+
+/* ---------- Design tokens ---------- */
+:root {
+  --bg: #0b0f17;
+  --surface: #111827;
+  --surface-2: #151f2e;
+  --surface-3: #1f2937;
+  --border: rgba(148, 163, 184, 0.16);
+  --border-strong: rgba(148, 163, 184, 0.28);
+
+  --text: #e5e7eb;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
+
+  --green: #34d399;
+  --green-bg: rgba(52, 211, 153, 0.12);
+  --amber: #fbbf24;
+  --amber-bg: rgba(251, 191, 36, 0.12);
+  --red: #fb7185;
+  --red-bg: rgba(251, 113, 133, 0.12);
+  --blue: #38bdf8;
+  --blue-bg: rgba(56, 189, 248, 0.10);
+  --gray: #94a3b8;
+  --gray-bg: rgba(148, 163, 184, 0.10);
+
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --shadow-soft: 0 20px 60px rgba(0, 0, 0, 0.25);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-sans: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "SF Pro Text", system-ui, sans-serif;
+
+  --page-max-width: 1200px;
+}
+
+/* ---------- Reset ---------- */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+button { font-family: inherit; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* 状態はcolorだけに依存しない：フォーカスリングを必ず出す */
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 数字は等幅数字で揺れなく読ませる */
+.metric-value, .tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Page shell ---------- */
+.page-shell {
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+@media (max-width: 640px) {
+  .page-shell { padding: var(--space-4) var(--space-4) var(--space-6); }
+}
+
+.dashboard { display: flex; flex-direction: column; gap: var(--space-5); }
+
+.section-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  margin: 0 0 var(--space-2);
+}
+
+/* ---------- Header ---------- */
+.hero-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+}
+.hero-header h1 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 0 0 2px;
+  color: var(--text);
+}
+.hero-header .subtitle {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+.hero-header .meta-line {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.header-right { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); }
+@media (max-width: 640px) {
+  .hero-header { flex-direction: column; align-items: flex-start; }
+  .header-right { align-items: flex-start; width: 100%; }
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gray); flex: none; }
+.status-pill.tone-green .dot { background: var(--green); }
+.status-pill.tone-amber .dot { background: var(--amber); }
+.status-pill.tone-red .dot { background: var(--red); }
+.status-pill.tone-blue .dot { background: var(--blue); }
+
+/* ---------- Command center (Bento grid) ---------- */
+.command-center {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+}
+@media (max-width: 959px) and (min-width: 641px) {
+  .command-center { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .command-center { grid-template-columns: 1fr; }
+}
+
+.metric-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-4);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.metric-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--gray);
+  opacity: 0.5;
+}
+.metric-card.tone-green::before { background: var(--green); opacity: 1; }
+.metric-card.tone-amber::before { background: var(--amber); opacity: 1; }
+.metric-card.tone-red::before { background: var(--red); opacity: 1; }
+.metric-card.tone-blue::before { background: var(--blue); opacity: 1; }
+
+/* サイズ差：最重要3枚(hero/large)を優先度で大きく見せる */
+.metric-card.size-hero { grid-column: span 2; background: var(--surface-2); }
+.metric-card.size-large { grid-column: span 1; }
+.metric-card.size-normal { grid-column: span 1; }
+@media (max-width: 640px) {
+  .metric-card.size-hero,
+  .metric-card.size-large,
+  .metric-card.size-normal { grid-column: span 1; }
+}
+
+.metric-card .metric-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.metric-card .metric-value {
+  font-size: clamp(1.3rem, 1.1rem + 1vw, 1.9rem);
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}
+.metric-card.size-hero .metric-value { font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.1rem); }
+.metric-card .metric-helper {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.metric-card .metric-note {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.state-badge .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.state-badge.tone-green { background: var(--green-bg); color: var(--green); }
+.state-badge.tone-green .dot { background: var(--green); }
+.state-badge.tone-amber { background: var(--amber-bg); color: var(--amber); }
+.state-badge.tone-amber .dot { background: var(--amber); }
+.state-badge.tone-red { background: var(--red-bg); color: var(--red); }
+.state-badge.tone-red .dot { background: var(--red); }
+.state-badge.tone-blue { background: var(--blue-bg); color: var(--blue); }
+.state-badge.tone-blue .dot { background: var(--blue); }
+.state-badge.tone-gray { background: var(--gray-bg); color: var(--gray); }
+.state-badge.tone-gray .dot { background: var(--gray); }
+
+/* pace card 内の小さなメタ行 (月内経過/月末着地/必要日商) */
+.metric-meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.metric-meta-list .meta-item { font-size: 0.72rem; color: var(--text-muted); }
+.metric-meta-list .meta-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---------- Insight banner (pace comment) ---------- */
+.insight-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.85rem;
+}
+.insight-banner .status-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--gray);
+}
+.insight-banner.tone-green .status-dot { background: var(--green); }
+.insight-banner.tone-amber .status-dot { background: var(--amber); }
+.insight-banner.tone-red .status-dot { background: var(--red); }
+.insight-banner .insight-text { flex: 1; min-width: 0; color: var(--text); }
+.insight-banner .insight-link { font-size: 0.78rem; white-space: nowrap; }
+
+/* ---------- Status chips ---------- */
+.status-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.chip .chip-label { color: var(--text-faint); }
+.chip .chip-value { color: var(--text); font-weight: 600; }
+.chip.tone-green { border-color: rgba(52, 211, 153, 0.35); }
+.chip.tone-green .chip-value { color: var(--green); }
+.chip.tone-amber { border-color: rgba(251, 191, 36, 0.35); }
+.chip.tone-amber .chip-value { color: var(--amber); }
+.chip.tone-red { border-color: rgba(251, 113, 133, 0.35); }
+.chip.tone-red .chip-value { color: var(--red); }
+
+/* ---------- Notes ---------- */
+.notes-stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.note-line {
+  font-size: 0.76rem;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.note-line.tone-amber { color: var(--amber); border-color: rgba(251, 191, 36, 0.3); background: var(--amber-bg); }
+
+/* ---------- Details (accordion cards) ---------- */
+.details-grid { display: flex; flex-direction: column; gap: var(--space-2); }
+.detail-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.detail-card summary {
+  cursor: pointer;
+  list-style: none;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 0.86rem;
+  color: var(--text);
+}
+.detail-card summary::-webkit-details-marker { display: none; }
+.detail-card summary:hover { background: var(--surface-2); }
+.detail-card summary:focus-visible { outline-offset: -2px; }
+.detail-card .summary-title { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.detail-card .summary-chevron {
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+  flex: none;
+}
+.detail-card[open] .summary-chevron { transform: rotate(90deg); }
+.detail-card .summary-value { color: var(--text-muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.detail-card .detail-body { padding: 0 var(--space-4) var(--space-4); }
+
+.detail-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.detail-table tr { border-bottom: 1px solid var(--border); }
+.detail-table tr:last-child { border-bottom: none; }
+.detail-table td { padding: 7px 0; }
+.detail-table td.k { color: var(--text-muted); width: 55%; }
+.detail-table td.v { text-align: right; overflow-wrap: anywhere; color: var(--text); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  /* モバイルではtableをkey/value縦積みに近づける */
+  .detail-table tr { display: flex; flex-direction: column; padding: 6px 0; gap: 2px; }
+  .detail-table td { padding: 0; }
+  .detail-table td.k { width: auto; font-size: 0.72rem; }
+  .detail-table td.v { text-align: left; font-size: 0.9rem; }
+}
+
+.detail-note { color: var(--text-faint); font-size: 0.74rem; margin-top: var(--space-2); }
+
+/* ---------- Error / empty state ---------- */
+.state-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  text-align: left;
+}
+.state-card h2 { font-size: 1rem; margin: 0 0 var(--space-2); color: var(--text); }
+.state-card p { font-size: 0.85rem; color: var(--text-muted); margin: 0 0 var(--space-3); }
+.state-card ol { margin: 0; padding-left: 1.2em; font-size: 0.82rem; color: var(--text-muted); }
+.state-card ol li { margin-bottom: 4px; }
+.state-card code {
+  background: var(--surface-3); padding: 1px 6px; border-radius: 6px; font-size: 0.82rem;
+}
+
+/* ---------- Skeleton loading ---------- */
+@keyframes skeleton-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.9; } }
+.skeleton {
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-header { height: 56px; border-radius: var(--radius-md); margin-bottom: var(--space-2); }
+.skeleton-card { height: 96px; border-radius: var(--radius-lg); }
+.skeleton-line { height: 14px; border-radius: 6px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
