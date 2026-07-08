@@ -68,6 +68,48 @@ def test_snapshot_has_new_phase_fields(tmp_path):
     conn.close()
 
 
+def test_snapshot_has_revenue_logic_and_debt_placeholder_fields(tmp_path):
+    """売上速報ロジックv2・固定費(温泉代)・返済仮置きの新fieldがbi_snapshotに出ていること。"""
+    conn = db.connect(tmp_path / "t3.sqlite")
+    opening_balance.run(conn)
+    ctx = monthly.assemble("2026-06", conn)
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-06", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+
+    revenue_logic_fields = [
+        "beds24_revenue_gross_stay", "beds24_coupon_revenue_included",
+        "beds24_cancelled_revenue_excluded", "beds24_revenue_net_for_bi",
+        "beds24_revenue_logic_version", "beds24_revenue_logic_status",
+        "beds24_revenue_logic_note", "beds24_cancelled_booking_count",
+        "beds24_coupon_booking_count",
+    ]
+    debt_placeholder_fields = [
+        "hot_spring_fee_monthly", "bank_debt_service_placeholder",
+        "takamiya_monthly_equivalent_cash_out", "standard_finance_required_cost",
+        "full_debt_reserve_required_cost", "full_debt_reserve_breakeven_revenue",
+        "full_debt_reserve_breakeven_achievement_rate",
+        "full_debt_reserve_revenue_gap_to_breakeven", "debt_service_note",
+    ]
+    for f in revenue_logic_fields + debt_placeholder_fields:
+        assert f in snap, f"missing field: {f}"
+
+    # 互換field: beds24_stay_month_revenue_excluding_cancelled == beds24_revenue_net_for_bi
+    assert snap["beds24_stay_month_revenue_excluding_cancelled"] == snap["beds24_revenue_net_for_bi"]
+
+    # 固定費・返済仮置きの期待値
+    assert snap["hot_spring_fee_monthly"] == 160000
+    assert snap["bank_debt_service_placeholder"] == 400000
+    assert snap["takamiya_monthly_equivalent_cash_out"] == 700000
+    assert snap["debt_service_status"] == "返済仮置き"
+
+    # 高見屋70万円は標準finance BEPに含まれない
+    assert snap["standard_finance_required_cost"] == snap["cash_fixed_cost_total"] + 400000
+    assert snap["full_debt_reserve_required_cost"] == snap["standard_finance_required_cost"] + 700000
+    assert snap["full_debt_reserve_breakeven_revenue"] > snap["finance_breakeven_revenue"]
+    conn.close()
+
+
 def test_same_month_diff_not_headline(tmp_path):
     # revenue_recon の headline fields に revenue_reconciliation_difference が出ないこと（legacy参考値のみ）
     conn = db.connect(tmp_path / "t2.sqlite")

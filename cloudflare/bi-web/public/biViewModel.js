@@ -105,7 +105,8 @@ function buildStatusChips(s) {
     statusChip("人件費", s.labor_model_status,
       toneForStatus(s.labor_model_status, ["実績反映済", "推計"], ["要確認"])),
     statusChip("返済", s.debt_service_status,
-      toneForStatus(s.debt_service_status, ["確定", "予定表投入済"], ["予定表未投入"])),
+      toneForStatus(s.debt_service_status, ["確定", "予定表投入済"],
+        ["予定表未投入", "返済仮置き"])),
     statusChip("期初BS", s.opening_balance_status,
       toneForStatus(s.opening_balance_status, ["会計士確定"], [])),
   ];
@@ -117,6 +118,20 @@ function buildNotes(s) {
     notes.push({
       text: "返済予定表未投入のため、返済込みBEPは未完全です。元本返済はデータ確定後に反映します。",
       tone: "amber",
+    });
+  }
+  if (s.debt_service_status === "返済仮置き") {
+    notes.push({
+      text: s.debt_service_note ||
+        "返済予定表は未投入ですが、金融機関返済40万円を仮置きでfinance BEPに反映しています。高見屋返済70万円は別シナリオで表示しています。",
+      tone: "amber",
+    });
+  }
+  if (s.takamiya_monthly_equivalent_cash_out) {
+    notes.push({
+      text: "高見屋本体返済70万円は毎月返済とは限らず、一括返済も可能なため、"
+        + "通常の月次finance BEPとは分けて表示しています。",
+      tone: "neutral",
     });
   }
   notes.push({
@@ -133,6 +148,9 @@ function buildPrimaryCards(s, achievement, pace) {
   const gapAchieved = gap != null && gap <= 0;
   const gopValue = s.gop_after_mc;
   const gopTone = isNil(gopValue) ? "gray" : Number(gopValue) >= 0 ? "green" : "red";
+  // 速報売上: 新ロジック(クーポン加算・キャンセル除外)を主参照。旧fieldはfallback。
+  const beds24Revenue = !isNil(s.beds24_revenue_net_for_bi)
+    ? s.beds24_revenue_net_for_bi : s.beds24_stay_month_revenue_excluding_cancelled;
 
   return [
     // --- 最重要（hero / large）---
@@ -151,8 +169,8 @@ function buildPrimaryCards(s, achievement, pace) {
       helper: "現在のBEPに対する到達度（予約ペースとは別指標）",
     },
     {
-      id: "beds24-revenue", label: "速報売上", value: yen(s.beds24_stay_month_revenue_excluding_cancelled),
-      tone: "blue", size: "large", helper: "Beds24 / キャンセル除外",
+      id: "beds24-revenue", label: "速報売上", value: yen(beds24Revenue),
+      tone: "blue", size: "large", helper: "Beds24 / クーポン加算 / キャンセル除外",
       note: "確定会計売上ではありません",
     },
     // --- 次点 ---
@@ -181,6 +199,21 @@ function buildPrimaryCards(s, achievement, pace) {
 function buildDetailSections(s) {
   return [
     {
+      id: "revenue-logic",
+      title: "売上速報ロジック",
+      summary: `速報売上net ${yen(s.beds24_revenue_net_for_bi)}`,
+      rows: [
+        ["Beds24速報売上 本体", yen(s.beds24_revenue_gross_stay)],
+        ["クーポン加算額", yen(s.beds24_coupon_revenue_included)],
+        ["キャンセル除外額", yen(s.beds24_cancelled_revenue_excluded)],
+        ["速報売上 net", yen(s.beds24_revenue_net_for_bi)],
+        ["キャンセル除外件数", num(s.beds24_cancelled_booking_count)],
+        ["クーポン対象件数", num(s.beds24_coupon_booking_count)],
+        ["売上ロジック状態", s.beds24_revenue_logic_status || DASH],
+        ["売上ロジック注記", s.beds24_revenue_logic_note || DASH],
+      ],
+    },
+    {
       id: "breakeven",
       title: "損益分岐",
       summary: `会計BEP ${yen(s.accounting_operating_breakeven_revenue)}`,
@@ -192,6 +225,7 @@ function buildDetailSections(s) {
         ["返済込みBEPまで残り売上", yen(s.finance_revenue_gap_to_breakeven)],
         ["貢献利益率", pct(s.contribution_margin_rate)],
         ["変動費率合計", pct(s.variable_cost_rate_total)],
+        ["温泉代", yen(s.hot_spring_fee_monthly) + " / 月"],
         ["キャッシュ固定費(人件費前)", yen(s.cash_fixed_cost_before_labor)],
         ["会計固定費(人件費前)", yen(s.accounting_fixed_cost_before_labor)],
         ["キャッシュ固定費合計", yen(s.cash_fixed_cost_total)],
@@ -272,7 +306,13 @@ function buildDetailSections(s) {
         ["期初純資産", yen(s.opening_equity_total)],
         ["月次元本返済", yen(s.monthly_debt_principal_payment)],
         ["月次支払利息", yen(s.monthly_debt_interest_payment)],
+        ["金融機関返済 仮置き", yen(s.bank_debt_service_placeholder) + " / 月"],
+        ["高見屋本体返済 月次換算", yen(s.takamiya_monthly_equivalent_cash_out) + " / 月"],
+        ["標準返済込みBEP", yen(s.finance_breakeven_revenue)],
+        ["高見屋返済込みBEP", yen(s.full_debt_reserve_breakeven_revenue)],
+        ["高見屋返済込みBEPまで残り", yen(s.full_debt_reserve_revenue_gap_to_breakeven)],
         ["返済ステータス", s.debt_service_status || DASH],
+        ["返済注記", s.debt_service_note || DASH],
       ],
     },
     {

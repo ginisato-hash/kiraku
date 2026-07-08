@@ -18,6 +18,7 @@ from typing import Dict, List
 from .. import config
 from ..normalize.schema import (BankTransaction, BookingRecord, CashTransaction,
                                 JournalEntry)
+from . import beds24_revenue_logic
 
 # revenue_data_status 許可値
 STATUS_SOKUHO = "速報"               # Beds24のみ
@@ -56,6 +57,11 @@ def compute(month: str,
     occupancy = round(room_nights / available, 4) if available else 0.0
     revpar = round(recognized / available) if available else 0
 
+    # ---- クーポン加算（Phase 0調査で実証済みのロジック。キャンセルは二重控除しない）----
+    coupon_info = beds24_revenue_logic.compute(month, bookings, exclude)
+    coupon_revenue = coupon_info["beds24_coupon_revenue_included"]
+    net_for_bi = round(recognized + coupon_revenue)
+
     # ---- B. 入金月ベース会計/資金実績（銀行/現金）----
     def _rev(src):
         return sum(e.credit_amount for e in confirmed
@@ -84,8 +90,19 @@ def compute(month: str,
         "month": month,
         # A. 宿泊月ベース速報（Beds24）
         "beds24_stay_month_gross_revenue": round(gross),
-        "beds24_stay_month_revenue_excluding_cancelled": round(recognized),
+        # 互換field: 新ロジック(クーポン加算込み)の値と同値にする。coupon=0の間は従来値と一致。
+        "beds24_stay_month_revenue_excluding_cancelled": net_for_bi,
         "beds24_stay_month_cancelled_revenue": round(cancelled),
+        # --- 売上速報ロジック v2（クーポン加算・キャンセル除外の明確化）---
+        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・クーポン加算前
+        "beds24_coupon_revenue_included": coupon_revenue,
+        "beds24_cancelled_revenue_excluded": round(cancelled),
+        "beds24_revenue_net_for_bi": net_for_bi,          # BI主指標
+        "beds24_revenue_logic_version": coupon_info["beds24_revenue_logic_version"],
+        "beds24_revenue_logic_status": coupon_info["beds24_revenue_logic_status"],
+        "beds24_revenue_logic_note": coupon_info["beds24_revenue_logic_note"],
+        "beds24_cancelled_booking_count": coupon_info["beds24_cancelled_booking_count"],
+        "beds24_coupon_booking_count": coupon_info["beds24_coupon_booking_count"],
         "adr": adr,
         "revpar": revpar,
         "occupancy": occupancy,

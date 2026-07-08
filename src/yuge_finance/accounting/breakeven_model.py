@@ -113,6 +113,22 @@ def mc_cost(cfg: Dict, revenue: float, variable_cost: float, cash_fixed_cost_tot
     }
 
 
+def debt_service_placeholders(cfg: Dict) -> Dict:
+    """返済仮置き（元本・利息内訳未確定の間の月次キャッシュアウト仮置き）。
+
+    金融機関返済40万円は標準finance BEPに含める。高見屋本体70万円は毎月返済とは
+    限らず一括返済も可能なため、標準finance BEPには混ぜず「高見屋返済込みBEP」の
+    別シナリオでのみ反映する。
+    """
+    ph = cfg.get("debt_service_placeholders", {})
+    bank = ph.get("bank_debt_service", {})
+    takamiya = ph.get("takamiya_debt_reserve", {})
+    return {
+        "bank_debt_service_placeholder": float(bank.get("monthly_cash_out", 0)),
+        "takamiya_monthly_equivalent_cash_out": float(takamiya.get("monthly_equivalent_cash_out", 0)),
+    }
+
+
 def _bep_status(rate: Optional[float]) -> str:
     if rate is None:
         return "要確認"
@@ -158,16 +174,43 @@ def build(month: str, beds24_revenue: float, adr: float, labor_total_base_case: 
     acct_rate = achievement(beds24_revenue, acct_bep)
     acct_gap = gap(beds24_revenue, acct_bep)
 
-    # 3. Finance-inclusive BEP（支払利息・元本返済を含む安全ライン）
+    # 3. Finance-inclusive BEP（支払利息・元本返済・返済仮置きを含む安全ライン）
     finance_cfg = cfg.get("finance_cost", {})
-    finance_required = fixed["cash_fixed_cost_total"]
+    placeholders = debt_service_placeholders(cfg)
+    bank_placeholder = placeholders["bank_debt_service_placeholder"]
+    takamiya_placeholder = placeholders["takamiya_monthly_equivalent_cash_out"]
+
+    # 標準finance BEP: キャッシュ固定費 + 金融機関返済仮置き + 実返済(元本/利息、現状0)。
+    # 注意: 金融機関の実返済予定表が投入された場合はconfig側でbank_debt_serviceを0にし、
+    # 二重計上を避けること（本関数は両者を単純合算する）。
+    standard_finance_required = fixed["cash_fixed_cost_total"] + bank_placeholder
     if finance_cfg.get("include_interest_in_finance_bep", True):
-        finance_required += monthly_debt_interest_payment
+        standard_finance_required += monthly_debt_interest_payment
     if finance_cfg.get("include_principal_in_finance_bep", True):
-        finance_required += monthly_debt_principal_payment
-    finance_bep = bep(finance_required)
+        standard_finance_required += monthly_debt_principal_payment
+    finance_bep = bep(standard_finance_required)
     finance_rate = achievement(beds24_revenue, finance_bep)
     finance_gap = gap(beds24_revenue, finance_bep)
+
+    # 高見屋返済込みBEP（別シナリオ。標準finance BEPには混ぜない）
+    full_debt_reserve_required = standard_finance_required + takamiya_placeholder
+    full_debt_reserve_bep = bep(full_debt_reserve_required)
+    full_debt_reserve_rate = achievement(beds24_revenue, full_debt_reserve_bep)
+    full_debt_reserve_gap = gap(beds24_revenue, full_debt_reserve_bep)
+
+    # debt_service_status: 実スケジュール(確定/予定表投入済/要確認)があればそれを優先。
+    # 未投入の間は、仮置き数値を使っていることを明示するため「返済仮置き」とする。
+    has_placeholder = bank_placeholder > 0 or takamiya_placeholder > 0
+    if debt_service_status == "予定表未投入" and has_placeholder:
+        effective_debt_status = "返済仮置き"
+        debt_note = ("返済予定表は未投入ですが、金融機関返済40万円を仮置きでfinance BEPに"
+                    "反映しています。高見屋返済70万円は別シナリオで表示しています。")
+    elif debt_service_status == "予定表未投入":
+        effective_debt_status = debt_service_status
+        debt_note = "返済予定表未投入のため、返済込みBEPは未完全（元本・利息とも0円扱い）"
+    else:
+        effective_debt_status = debt_service_status
+        debt_note = ""
 
     dim = _days_in_month(month)
     de = _days_elapsed(month, as_of)
@@ -178,9 +221,6 @@ def build(month: str, beds24_revenue: float, adr: float, labor_total_base_case: 
                             (0 if cash_gap == 0 else None))
     required_occ_rate = (round(required_room_nights / (rooms * remaining_days), 4)
                          if required_room_nights is not None and remaining_days > 0 else None)
-
-    debt_note = ("返済予定表未投入のため、返済込みBEPは未完全（元本・利息とも0円扱い）"
-                if debt_service_status == "予定表未投入" else "")
 
     return {
         "month": month,
@@ -198,14 +238,26 @@ def build(month: str, beds24_revenue: float, adr: float, labor_total_base_case: 
         "accounting_operating_breakeven_revenue": acct_bep,
         "accounting_operating_breakeven_achievement_rate": acct_rate,
         "accounting_revenue_gap_to_breakeven": acct_gap,
-        # --- Finance-inclusive BEP ---
+        # --- 固定費内訳（温泉代を明示）---
+        "hot_spring_fee_monthly": round(float(
+            cfg.get("fixed_cost_items", {}).get("hot_spring_fee", {}).get("monthly_amount", 0))),
+        # --- Finance-inclusive BEP（標準：金融機関返済40万円仮置き込み）---
         "monthly_debt_principal_payment": round(monthly_debt_principal_payment),
         "monthly_debt_interest_payment": round(monthly_debt_interest_payment),
+        "bank_debt_service_placeholder": round(bank_placeholder),
+        "standard_finance_required_cost": round(standard_finance_required),
         "finance_breakeven_revenue": finance_bep,
         "finance_breakeven_achievement_rate": finance_rate,
         "finance_revenue_gap_to_breakeven": finance_gap,
-        "debt_service_status": debt_service_status,
-        "finance_bep_note": debt_note,
+        # --- 高見屋返済込みBEP（別シナリオ。標準finance BEPには含めない）---
+        "takamiya_monthly_equivalent_cash_out": round(takamiya_placeholder),
+        "full_debt_reserve_required_cost": round(full_debt_reserve_required),
+        "full_debt_reserve_breakeven_revenue": full_debt_reserve_bep,
+        "full_debt_reserve_breakeven_achievement_rate": full_debt_reserve_rate,
+        "full_debt_reserve_revenue_gap_to_breakeven": full_debt_reserve_gap,
+        "debt_service_status": effective_debt_status,
+        "debt_service_note": debt_note,
+        "finance_bep_note": debt_note,  # 後方互換（旧フィールド名）
         # --- 旧フィールド（後方互換。BI主指標には使わない）---
         "fixed_non_labor_cost_used": fixed["cash_fixed_cost_before_labor"],
         "labor_cost_used": round(labor_total_base_case),

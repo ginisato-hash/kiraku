@@ -95,7 +95,7 @@ def write_monthly_kpi(month_ctxs: List[Dict], path: Path) -> Path:
             "cash_revenue_gap_to_breakeven": bm.get("cash_revenue_gap_to_breakeven", ""),
             "labor_total_forecast": lf.get("labor_total_forecast", ""),
             "labor_model_status": lf.get("labor_model_status", ""),
-            "debt_service_status": dbt.get("debt_service_status", ""),
+            "debt_service_status": bm.get("debt_service_status", dbt.get("debt_service_status", "")),
             "breakeven_model_status": bm.get("breakeven_model_status", ""),
             "gop_after_mc": bm.get("gop_after_mc", ""),
             "booking_pace_status": pace.get("booking_pace_status", ""),
@@ -134,6 +134,16 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "beds24_stay_month_revenue_excluding_cancelled":
             rr["beds24_stay_month_revenue_excluding_cancelled"],
         "beds24_stay_month_cancelled_revenue": rr["beds24_stay_month_cancelled_revenue"],
+        # --- 売上速報ロジック v2（クーポン加算・キャンセル除外の明確化）---
+        "beds24_revenue_gross_stay": rr["beds24_revenue_gross_stay"],
+        "beds24_coupon_revenue_included": rr["beds24_coupon_revenue_included"],
+        "beds24_cancelled_revenue_excluded": rr["beds24_cancelled_revenue_excluded"],
+        "beds24_revenue_net_for_bi": rr["beds24_revenue_net_for_bi"],
+        "beds24_revenue_logic_version": rr["beds24_revenue_logic_version"],
+        "beds24_revenue_logic_status": rr["beds24_revenue_logic_status"],
+        "beds24_revenue_logic_note": rr["beds24_revenue_logic_note"],
+        "beds24_cancelled_booking_count": rr["beds24_cancelled_booking_count"],
+        "beds24_coupon_booking_count": rr["beds24_coupon_booking_count"],
         "adr": rr["adr"],
         "revpar": rr["revpar"],
         "occupancy": rr["occupancy"],
@@ -208,6 +218,19 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "finance_breakeven_achievement_rate": bm.get("finance_breakeven_achievement_rate"),
         "finance_revenue_gap_to_breakeven": bm.get("finance_revenue_gap_to_breakeven"),
         "finance_bep_note": bm.get("finance_bep_note"),
+        # --- 固定費内訳（温泉代）・返済仮置き ---
+        "hot_spring_fee_monthly": bm.get("hot_spring_fee_monthly"),
+        "bank_debt_service_placeholder": bm.get("bank_debt_service_placeholder"),
+        "standard_finance_required_cost": bm.get("standard_finance_required_cost"),
+        # --- 高見屋返済込みBEP（別シナリオ。標準finance BEPには含めない）---
+        "takamiya_monthly_equivalent_cash_out": bm.get("takamiya_monthly_equivalent_cash_out"),
+        "full_debt_reserve_required_cost": bm.get("full_debt_reserve_required_cost"),
+        "full_debt_reserve_breakeven_revenue": bm.get("full_debt_reserve_breakeven_revenue"),
+        "full_debt_reserve_breakeven_achievement_rate":
+            bm.get("full_debt_reserve_breakeven_achievement_rate"),
+        "full_debt_reserve_revenue_gap_to_breakeven":
+            bm.get("full_debt_reserve_revenue_gap_to_breakeven"),
+        "debt_service_note": bm.get("debt_service_note"),
         # --- MC / GOP ---
         "gop_before_success_fee": bm.get("gop_before_success_fee"),
         "mc_fixed_fee": bm.get("mc_fixed_fee"),
@@ -232,7 +255,9 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "monthly_debt_principal_payment": dbt.get("monthly_debt_principal_payment"),
         "monthly_debt_interest_payment": dbt.get("monthly_debt_interest_payment"),
         "monthly_debt_total_payment": dbt.get("monthly_debt_total_payment"),
-        "debt_service_status": dbt.get("debt_service_status"),
+        # debt_service_status は breakeven_model側の実効値を採用する
+        # （実スケジュール投入済ならそれを尊重、未投入かつ返済仮置き有効時は「返済仮置き」）。
+        "debt_service_status": bm.get("debt_service_status", dbt.get("debt_service_status")),
         "debt_schedule_missing_count": dbt.get("debt_schedule_missing_count"),
         "debt_schedule_exception_amount": dbt.get("debt_schedule_exception_amount"),
         # === 予約ペース判定（達成率とは別軸。「大幅未達」でも予約ペースは別途評価する）===

@@ -114,6 +114,23 @@ def cmd_debug_beds24_revenue(args) -> int:
     return 0
 
 
+def cmd_inspect_beds24_fields(args) -> int:
+    """Beds24 raw payloadの実fieldを調査する（Phase 0）。個人情報は出力しない。"""
+    from .reports import beds24_field_probe
+    month = None if args.month in (None, "current") else _validate_month(args.month)
+    out_path = beds24_field_probe.write(month)
+    probe = json.loads(out_path.read_text(encoding="utf-8"))
+    _print(f"=== Beds24 raw payload field probe ===")
+    _print(f"予約件数(サンプル): {probe['booking_count_sampled']}")
+    _print(f"status分布: {probe['status_value_counts']}")
+    _print(f"cancelTime有り件数: {probe['cancel_time_present_count']}")
+    _print(f"invoiceItems type分布: {probe['invoice_item_type_counts']}")
+    for note in probe["notes"]:
+        _print(f"  note: {note}")
+    _print(f"出力: {out_path}（Gitには載せません）")
+    return 0
+
+
 # ---------------------------------------------------------------- fetch-beds24
 def cmd_fetch_beds24(args, conn=None, soft_fail=False) -> Dict:
     month = _validate_month(args.month)
@@ -562,6 +579,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_month("fetch-beds24", "Beds24予約取得")
     add_month("debug-beds24-revenue", "Beds24売上フィールド監査")
+    ib = sub.add_parser("inspect-beds24-fields", help="Beds24 raw payloadの実field調査（Phase 0）")
+    ib.add_argument("--month", default="current", help="対象月 YYYY-MM。省略/currentで全月")
     add_month("ingest-bank", "銀行CSV取込")
     add_month("ingest-cash", "現金レシートCSV取込")
     add_month("ingest-adjustments", "手動補正CSV取込")
@@ -592,6 +611,7 @@ def main(argv=None) -> int:
     handlers = {
         "ingest-opening": lambda: (cmd_ingest_opening(args), 0)[1],
         "debug-beds24-revenue": lambda: cmd_debug_beds24_revenue(args),
+        "inspect-beds24-fields": lambda: cmd_inspect_beds24_fields(args),
         "fetch-beds24": lambda: (cmd_fetch_beds24(args), 0)[1],
         "ingest-bank": lambda: (cmd_ingest_bank(args), 0)[1],
         "ingest-cash": lambda: (cmd_ingest_cash(args), 0)[1],

@@ -72,6 +72,12 @@ fixed_cost_items:
     include_in_cash_bep: true
     include_in_accounting_bep: true
 
+  hot_spring_fee:
+    label: "温泉代"
+    monthly_amount: 160000
+    include_in_cash_bep: true
+    include_in_accounting_bep: true
+
 # --- 変動費（三浦屋モデル参照。売上比例 or 客室泊数(RN)比例）---
 # 商品仕入高・売店仕入・接待交際費・営業外収益は削除（食事・売店廃止のため対象外）。
 variable_cost_items:
@@ -114,7 +120,27 @@ finance_cost:
   include_interest_in_finance_bep: true      # 返済込みBEPには含める
   include_principal_in_finance_bep: true     # 元本返済はPL費用ではないがキャッシュ必要売上には含める
 
+# --- 返済仮置き（返済予定表未投入・元本/利息内訳未確定の間の仮置きキャッシュアウト）---
+# 金融機関返済40万円は標準finance BEPに含める。
+# 高見屋本体70万円は毎月返済とは限らず一括返済も可能なため、標準finance BEPには混ぜず、
+# 「高見屋返済込みBEP」という別シナリオでのみ反映する。
+debt_service_placeholders:
+  bank_debt_service:
+    label: "金融機関返済 仮置き"
+    monthly_cash_out: 400000
+    include_in_finance_bep: true
+    include_in_operating_bep: false
+    note: "元本・利息内訳未確定のため、finance BEP上の月次キャッシュアウト仮置き"
+
+  takamiya_debt_reserve:
+    label: "高見屋本体返済 月次換算"
+    monthly_equivalent_cash_out: 700000
+    include_in_standard_finance_bep: false
+    include_in_full_debt_reserve_bep: true
+    note: "毎月返済とは限らず、一括返済も可能。月次換算の返済・積立必要額として別シナリオ表示"
+
 outputs:
   primary_bep: "cash_operating_breakeven_revenue"
   secondary_bep: "accounting_operating_breakeven_revenue"
   finance_bep: "finance_breakeven_revenue"
+  full_debt_reserve_bep: "full_debt_reserve_breakeven_revenue"
