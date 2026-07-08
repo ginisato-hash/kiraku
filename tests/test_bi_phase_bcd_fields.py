@@ -78,11 +78,14 @@ def test_snapshot_has_revenue_logic_and_debt_placeholder_fields(tmp_path):
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
 
     revenue_logic_fields = [
-        "beds24_revenue_gross_stay", "beds24_coupon_revenue_included",
+        "beds24_revenue_gross_stay", "beds24_point_revenue_included",
+        "beds24_point_booking_count", "beds24_coupon_discount_detected",
+        "beds24_coupon_discount_amount", "beds24_coupon_discount_booking_count",
         "beds24_cancelled_revenue_excluded", "beds24_revenue_net_for_bi",
         "beds24_revenue_logic_version", "beds24_revenue_logic_status",
         "beds24_revenue_logic_note", "beds24_cancelled_booking_count",
-        "beds24_coupon_booking_count",
+        # 旧field（deprecated。互換性のため0で残る）
+        "beds24_coupon_revenue_included", "beds24_coupon_booking_count",
     ]
     debt_placeholder_fields = [
         "hot_spring_fee_monthly", "bank_debt_service_placeholder",
@@ -102,6 +105,13 @@ def test_snapshot_has_revenue_logic_and_debt_placeholder_fields(tmp_path):
     assert snap["bank_debt_service_placeholder"] == 400000
     assert snap["takamiya_monthly_equivalent_cash_out"] == 700000
     assert snap["debt_service_status"] == "返済仮置き"
+
+    # couponは売上に加算されない（deprecated fieldは常に0）
+    assert snap["beds24_coupon_revenue_included"] == 0
+    assert snap["beds24_coupon_booking_count"] == 0
+    # net = gross_stay + point（couponは含まない）
+    assert snap["beds24_revenue_net_for_bi"] == (
+        snap["beds24_revenue_gross_stay"] + snap["beds24_point_revenue_included"])
 
     # 高見屋70万円は標準finance BEPに含まれない
     assert snap["standard_finance_required_cost"] == snap["cash_fixed_cost_total"] + 400000

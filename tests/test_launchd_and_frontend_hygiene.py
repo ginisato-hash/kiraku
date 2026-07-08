@@ -56,6 +56,20 @@ def test_css_is_separated_from_index_html():
         assert token in css_text
 
 
+FORBIDDEN_COUPON_WORDING = ["クーポン加算", "coupon revenue", "beds24_coupon_revenue_included"]
+
+
+def test_ui_files_do_not_use_coupon_as_addition_wording():
+    """coupon は直割引扱い。UI表示で「クーポン加算」等の誤表記が使われていないこと。
+    beds24_coupon_revenue_included はdeprecated fieldとしてJSONには残るが、画面表示では使わない。
+    """
+    bi_web = config.ROOT / "cloudflare" / "bi-web" / "public"
+    for filename in ["biViewModel.js", "components.js", "app.js", "index.html"]:
+        text = (bi_web / filename).read_text(encoding="utf-8")
+        for phrase in FORBIDDEN_COUPON_WORDING:
+            assert phrase not in text, f"{filename} に禁止文言が残っている: {phrase}"
+
+
 def test_bi_snapshot_json_still_retains_deprecated_fields_for_debug_csv_export(tmp_path):
     """bi_snapshot.jsonからは削除しない（将来の分析・デバッグ・CSV exportのため）。"""
     from yuge_finance import db, monthly

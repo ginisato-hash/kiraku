@@ -9,14 +9,20 @@ const baseSnapshot = {
   month: "2026-07",
   beds24_stay_month_revenue_excluding_cancelled: 500000,
   beds24_revenue_gross_stay: 480000,
-  beds24_coupon_revenue_included: 20000,
+  beds24_point_revenue_included: 20000,
+  beds24_point_booking_count: 2,
+  beds24_coupon_discount_detected: true,
+  beds24_coupon_discount_amount: 15000,
+  beds24_coupon_discount_booking_count: 4,
   beds24_cancelled_revenue_excluded: 30000,
   beds24_revenue_net_for_bi: 500000,
-  beds24_revenue_logic_version: "beds24_revenue_v2",
-  beds24_revenue_logic_status: "coupon_included",
+  beds24_revenue_logic_version: "beds24_revenue_v3",
+  beds24_revenue_logic_status: "point_added_from_invoice_items",
   beds24_revenue_logic_note: "test note",
   beds24_cancelled_booking_count: 3,
-  beds24_coupon_booking_count: 2,
+  // deprecated（意味が誤っていたため常に0。primary表示には使わない）
+  beds24_coupon_revenue_included: 0,
+  beds24_coupon_booking_count: 0,
   cash_operating_breakeven_revenue: 2009657,
   cash_operating_breakeven_achievement_rate: 0.2536, // 大幅未達水準
   cash_revenue_gap_to_breakeven: 951714,
@@ -123,21 +129,34 @@ await check("beds24 revenue card uses beds24_revenue_net_for_bi", async () => {
   assert.equal(revCard.value, "¥500,000"); // beds24_revenue_net_for_bi
 });
 
-await check("beds24 revenue card shows coupon/cancel wording", async () => {
+await check("beds24 revenue card shows point/cancel wording (not coupon加算)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const revCard = vm.primaryCards.find((c) => c.id === "beds24-revenue");
-  assert.ok(revCard.helper.includes("クーポン加算"));
+  assert.ok(revCard.helper.includes("ポイント加算"));
   assert.ok(revCard.helper.includes("キャンセル除外"));
+  assert.ok(!revCard.helper.includes("クーポン加算"), "クーポン加算という誤表記が残っている");
 });
 
-await check("revenue-logic detail shows coupon and cancel amounts", async () => {
+await check("revenue-logic detail shows point amount and cancel amount", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const section = vm.details.find((d) => d.id === "revenue-logic");
   const rowText = JSON.stringify(section.rows);
-  assert.ok(rowText.includes("¥20,000"));  // クーポン加算額
+  assert.ok(rowText.includes("¥20,000"));  // ポイント加算額
   assert.ok(rowText.includes("¥30,000"));  // キャンセル除外額
-  assert.ok(section.rows.some(([k]) => k === "クーポン加算額"));
+  assert.ok(section.rows.some(([k]) => k === "ポイント加算額"));
   assert.ok(section.rows.some(([k]) => k === "キャンセル除外額"));
+  assert.ok(!section.rows.some(([k]) => k === "クーポン加算額"), "クーポン加算額という誤表記が残っている");
+});
+
+await check("revenue-logic detail shows coupon as discount, not addition", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "revenue-logic");
+  assert.ok(section.rows.some(([k]) => k === "クーポン割引額"));
+  assert.ok(section.rows.some(([k]) => k === "クーポン割引検出"));
+  const discountRow = section.rows.find(([k]) => k === "クーポン割引額");
+  assert.equal(discountRow[1], "¥15,000");
+  const detectedRow = section.rows.find(([k]) => k === "クーポン割引検出");
+  assert.equal(detectedRow[1], "あり");
 });
 
 await check("finance detail shows bank 400k and takamiya 700k placeholders", async () => {

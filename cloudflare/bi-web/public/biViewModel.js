@@ -148,7 +148,8 @@ function buildPrimaryCards(s, achievement, pace) {
   const gapAchieved = gap != null && gap <= 0;
   const gopValue = s.gop_after_mc;
   const gopTone = isNil(gopValue) ? "gray" : Number(gopValue) >= 0 ? "green" : "red";
-  // 速報売上: 新ロジック(クーポン加算・キャンセル除外)を主参照。旧fieldはfallback。
+  // 速報売上: 新ロジック(ポイント加算・キャンセル除外)を主参照。旧fieldはfallback。
+  // coupon は直割引扱いのため加算しない（詳細accordionに「クーポン割引額」として表示するのみ）。
   const beds24Revenue = !isNil(s.beds24_revenue_net_for_bi)
     ? s.beds24_revenue_net_for_bi : s.beds24_stay_month_revenue_excluding_cancelled;
 
@@ -170,7 +171,7 @@ function buildPrimaryCards(s, achievement, pace) {
     },
     {
       id: "beds24-revenue", label: "速報売上", value: yen(beds24Revenue),
-      tone: "blue", size: "large", helper: "Beds24 / クーポン加算 / キャンセル除外",
+      tone: "blue", size: "large", helper: "Beds24 / ポイント加算 / キャンセル除外",
       note: "確定会計売上ではありません",
     },
     // --- 次点 ---
@@ -204,11 +205,14 @@ function buildDetailSections(s) {
       summary: `速報売上net ${yen(s.beds24_revenue_net_for_bi)}`,
       rows: [
         ["Beds24速報売上 本体", yen(s.beds24_revenue_gross_stay)],
-        ["クーポン加算額", yen(s.beds24_coupon_revenue_included)],
+        ["ポイント加算額", yen(s.beds24_point_revenue_included)],
         ["キャンセル除外額", yen(s.beds24_cancelled_revenue_excluded)],
         ["速報売上 net", yen(s.beds24_revenue_net_for_bi)],
         ["キャンセル除外件数", num(s.beds24_cancelled_booking_count)],
-        ["クーポン対象件数", num(s.beds24_coupon_booking_count)],
+        ["ポイント対象件数", num(s.beds24_point_booking_count)],
+        ["クーポン割引検出", s.beds24_coupon_discount_detected ? "あり" : "なし"],
+        ["クーポン割引額", yen(s.beds24_coupon_discount_amount)],
+        ["クーポン割引件数", num(s.beds24_coupon_discount_booking_count)],
         ["売上ロジック状態", s.beds24_revenue_logic_status || DASH],
         ["売上ロジック注記", s.beds24_revenue_logic_note || DASH],
       ],

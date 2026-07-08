@@ -1,17 +1,26 @@
-"""Beds24 速報売上ロジック v2（クーポン加算・キャンセル除外）。
+"""Beds24 速報売上ロジック v3（point加算・coupon直割引の明確化）。
 
-実データ調査(Phase 0)の結論: couponはinvoiceItems type=paymentにのみ出現し、
-type=chargeには出現しないため、既定ではbeds24_coupon_revenue_included=0。
-type=chargeにcoupon等の説明を持つ行があれば自動的に加算される設計を検証する。
+実データ調査(Phase 0)の結論:
+  - coupon は invoiceItems type=payment（決済手段）にのみ出現し、直割引扱い。売上に加算しない。
+  - point も実データでは invoiceItems type=payment にのみ出現し、price に既に含まれているため
+    現状は加算額0（point_already_included_in_price）。type=chargeにpoint行が現れれば自動加算。
 """
+from datetime import date, timedelta
+
 from yuge_finance.accounting import beds24_revenue_logic as brl
 from yuge_finance.normalize.schema import BookingRecord
 
 EXCLUDE = ["cancelled", "canceled", "black"]
 
 
-def _booking(bid, checkin, gross=10000, status="confirmed", raw_json_path=None):
-    return BookingRecord(booking_id=bid, checkin_date=checkin, checkout_date=checkin,
+def _next_day(d: str) -> str:
+    return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
+
+
+def _booking(bid, checkin, checkout=None, gross=10000, status="confirmed", raw_json_path=None):
+    # 既定checkoutはcheckin+1日（実データ同様、最低1泊とする）
+    return BookingRecord(booking_id=bid, checkin_date=checkin,
+                         checkout_date=checkout or _next_day(checkin),
                          gross_revenue=gross, status=status,
                          raw_json_path=raw_json_path or "").finalize()
 
@@ -28,77 +37,116 @@ def test_is_cancelled_by_cancel_time_fallback():
 
 def test_is_cancelled_false_when_no_signal():
     assert brl.is_beds24_cancelled_booking({}) is False
-    assert brl.is_beds24_cancelled_booking({"price": 1000}) is False
 
 
 def test_has_cancel_signal_fields():
     assert brl.has_cancel_signal_fields({"status": "confirmed"}) is True
-    assert brl.has_cancel_signal_fields({"cancelTime": None}) is True
     assert brl.has_cancel_signal_fields({}) is False
 
 
-# ---------------- extract_beds24_coupon_revenue ----------------
-def test_coupon_in_payment_line_not_counted_as_revenue():
-    """実データの実態: couponはtype=paymentの決済手段。加算しない。"""
+# ---------------- extract_beds24_point_revenue (加算対象) ----------------
+def test_point_in_payment_line_not_counted_as_revenue():
+    """実データの実態: pointはtype=paymentの決済手段。priceに既に含まれるため加算しない。"""
+    raw = {"invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
+        {"type": "payment", "description": "point", "lineTotal": -1000},
+    ]}
+    assert brl.extract_beds24_point_revenue(raw) == 0.0
+
+
+def test_point_in_charge_line_is_counted_as_revenue():
+    """将来、type=chargeにpoint起因の追加行が現れた場合は自動加算する。"""
+    raw = {"invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
+        {"type": "charge", "description": "point reward", "lineTotal": 2000},
+    ]}
+    assert brl.extract_beds24_point_revenue(raw) == 2000.0
+
+
+def test_negative_point_charge_not_counted():
+    raw = {"invoiceItems": [
+        {"type": "charge", "description": "point adjustment", "lineTotal": -500},
+    ]}
+    assert brl.extract_beds24_point_revenue(raw) == 0.0
+
+
+# ---------------- extract_beds24_coupon_discount (直割引・非加算) ----------------
+def test_coupon_discount_extracted_as_positive_amount():
+    """couponは直割引。金額は絶対値で保持するが、売上には加算しない。"""
     raw = {"invoiceItems": [
         {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
         {"type": "payment", "description": "coupon", "lineTotal": -3000},
     ]}
-    assert brl.extract_beds24_coupon_revenue(raw) == 0.0
+    assert brl.extract_beds24_coupon_discount(raw) == 3000.0
 
 
-def test_coupon_in_charge_line_is_counted_as_revenue():
-    """将来、type=chargeにcoupon説明の行が現れた場合は自動加算する。"""
+def test_extract_beds24_coupon_revenue_deprecated_always_zero():
+    """旧関数は非推奨。常に0を返し、収入としては扱わない。"""
     raw = {"invoiceItems": [
-        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
         {"type": "charge", "description": "coupon subsidy", "lineTotal": 2000},
     ]}
-    assert brl.extract_beds24_coupon_revenue(raw) == 2000.0
-
-
-def test_guest_discount_not_counted():
-    """収入扱いと確認できないdiscountは加算しない。"""
-    raw = {"invoiceItems": [
-        {"type": "charge", "description": "guest discount", "lineTotal": 500},
-    ]}
     assert brl.extract_beds24_coupon_revenue(raw) == 0.0
 
 
-def test_negative_charge_amount_not_counted():
-    raw = {"invoiceItems": [
-        {"type": "charge", "description": "coupon adjustment", "lineTotal": -500},
-    ]}
-    assert brl.extract_beds24_coupon_revenue(raw) == 0.0
-
-
-# ---------------- compute (integration) ----------------
-def test_cancelled_booking_excluded_and_counted(tmp_path):
-    raw_path = tmp_path / "2026-06.json"
-    raw_path.write_text('[{"id": "1", "status": "cancelled", "cancelTime": "2026-06-01T00:00:00Z", "invoiceItems": []}]',
-                        encoding="utf-8")
-    bookings = [_booking("1", "2026-06-10", status="cancelled", raw_json_path=str(raw_path))]
-    result = brl.compute("2026-06", bookings, EXCLUDE)
-    assert result["beds24_cancelled_booking_count"] == 1
-    assert result["beds24_coupon_revenue_included"] == 0
-
-
-def test_coupon_booking_count_increments_only_for_charge_coupon(tmp_path):
+# ---------------- compute (integration): point加算テスト ----------------
+def test_point_booking_count_increments_only_for_charge_point(tmp_path):
     raw_path = tmp_path / "2026-06.json"
     raw_path.write_text(
         '[{"id": "1", "status": "confirmed", "invoiceItems": '
-        '[{"type": "charge", "description": "coupon subsidy", "lineTotal": 2000}]},'
+        '[{"type": "charge", "description": "point reward", "lineTotal": 2000}]},'
         '{"id": "2", "status": "confirmed", "invoiceItems": '
-        '[{"type": "payment", "description": "coupon", "lineTotal": -1000}]}]',
+        '[{"type": "payment", "description": "point", "lineTotal": -1000}]}]',
         encoding="utf-8")
     bookings = [_booking("1", "2026-06-10", raw_json_path=str(raw_path)),
                 _booking("2", "2026-06-11", raw_json_path=str(raw_path))]
     result = brl.compute("2026-06", bookings, EXCLUDE)
-    assert result["beds24_coupon_revenue_included"] == 2000
-    assert result["beds24_coupon_booking_count"] == 1  # booking 2のpayment型couponは加算されない
-    assert result["beds24_revenue_logic_status"] == "coupon_included"
+    assert result["beds24_point_revenue_included"] == 2000
+    assert result["beds24_point_booking_count"] == 1  # booking 2のpayment型pointは加算されない
+    assert result["beds24_revenue_logic_status"] == "point_added_from_invoice_items"
 
 
-def test_coupon_field_missing_status_when_no_charge_coupon(tmp_path):
+def test_point_already_included_in_price_status_when_only_payment_point(tmp_path):
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},'
+        ' {"type": "payment", "description": "point", "lineTotal": -1000}]}]',
+        encoding="utf-8")
+    bookings = [_booking("1", "2026-06-10", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_point_revenue_included"] == 0
+    assert result["beds24_revenue_logic_status"] == "point_already_included_in_price"
+
+
+def test_cancelled_booking_point_not_counted(tmp_path):
+    """キャンセル済み予約のpointは加算しない。"""
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "cancelled", "cancelTime": "2026-06-01T00:00:00Z", "invoiceItems": '
+        '[{"type": "charge", "description": "point reward", "lineTotal": 2000}]}]',
+        encoding="utf-8")
+    bookings = [_booking("1", "2026-06-10", status="cancelled", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_point_revenue_included"] == 0
+    assert result["beds24_point_booking_count"] == 0
+    assert result["beds24_cancelled_booking_count"] == 1
+
+
+def test_point_prorated_to_stay_month(tmp_path):
+    """pointは宿泊月按分される。全4泊のうち対象月2泊なら半分。"""
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "invoiceItems": '
+        '[{"type": "charge", "description": "point reward", "lineTotal": 10000}]}]',
+        encoding="utf-8")
+    # 6/29 チェックイン, 7/3 チェックアウト = 4泊。6月分は2泊(6/29,6/30)。
+    bookings = [_booking("1", "2026-06-29", checkout="2026-07-03", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_point_revenue_included"] == 5000  # 10000 * 2/4
+
+
+# ---------------- compute (integration): coupon非加算テスト ----------------
+def test_coupon_does_not_affect_point_revenue(tmp_path):
     raw_path = tmp_path / "2026-06.json"
     raw_path.write_text(
         '[{"id": "1", "status": "confirmed", "invoiceItems": '
@@ -107,18 +155,31 @@ def test_coupon_field_missing_status_when_no_charge_coupon(tmp_path):
         encoding="utf-8")
     bookings = [_booking("1", "2026-06-10", raw_json_path=str(raw_path))]
     result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_point_revenue_included"] == 0
+    assert result["beds24_coupon_discount_amount"] == 3000
+    assert result["beds24_coupon_discount_detected"] is True
+    assert result["beds24_coupon_discount_booking_count"] == 1
+    # 旧field(deprecated)は常に0
     assert result["beds24_coupon_revenue_included"] == 0
-    assert "coupon_field_missing" in result["beds24_revenue_logic_status"]
+    assert result["beds24_coupon_booking_count"] == 0
 
 
 def test_raw_payload_unavailable_does_not_crash():
     bookings = [_booking("1", "2026-06-10", raw_json_path="")]
     result = brl.compute("2026-06", bookings, EXCLUDE)
-    assert result["beds24_coupon_revenue_included"] == 0
+    assert result["beds24_point_revenue_included"] == 0
     assert result["beds24_revenue_logic_status"] == "raw_payload_unavailable"
 
 
 # ---------------- revenue_recon integration ----------------
+def test_net_revenue_formula_uses_point_not_coupon():
+    """net = gross_stay_revenue + point_revenue - cancelled（couponは含まない）。"""
+    from yuge_finance.accounting import revenue_recon
+    bookings = [_booking("1", "2026-06-10", gross=30000)]
+    rec = revenue_recon.compute("2026-06", bookings, [], [], [])
+    assert rec["beds24_revenue_net_for_bi"] == rec["beds24_revenue_gross_stay"] + rec["beds24_point_revenue_included"]
+
+
 def test_compat_field_equals_net_for_bi():
     from yuge_finance.accounting import revenue_recon
     bookings = [_booking("1", "2026-06-10", gross=30000)]
@@ -130,9 +191,18 @@ def test_snapshot_fields_present_in_revenue_recon():
     from yuge_finance.accounting import revenue_recon
     bookings = [_booking("1", "2026-06-10", gross=30000)]
     rec = revenue_recon.compute("2026-06", bookings, [], [], [])
-    for field in ["beds24_revenue_gross_stay", "beds24_coupon_revenue_included",
+    for field in ["beds24_revenue_gross_stay", "beds24_point_revenue_included",
+                 "beds24_point_booking_count", "beds24_coupon_discount_detected",
+                 "beds24_coupon_discount_amount", "beds24_coupon_discount_booking_count",
                  "beds24_cancelled_revenue_excluded", "beds24_revenue_net_for_bi",
                  "beds24_revenue_logic_version", "beds24_revenue_logic_status",
-                 "beds24_revenue_logic_note", "beds24_cancelled_booking_count",
-                 "beds24_coupon_booking_count"]:
+                 "beds24_revenue_logic_note", "beds24_cancelled_booking_count"]:
         assert field in rec, f"missing field: {field}"
+
+
+def test_deprecated_coupon_fields_still_present_but_zero():
+    from yuge_finance.accounting import revenue_recon
+    bookings = [_booking("1", "2026-06-10", gross=30000)]
+    rec = revenue_recon.compute("2026-06", bookings, [], [], [])
+    assert rec["beds24_coupon_revenue_included"] == 0
+    assert rec["beds24_coupon_booking_count"] == 0

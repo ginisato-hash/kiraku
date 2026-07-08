@@ -57,10 +57,11 @@ def compute(month: str,
     occupancy = round(room_nights / available, 4) if available else 0.0
     revpar = round(recognized / available) if available else 0
 
-    # ---- クーポン加算（Phase 0調査で実証済みのロジック。キャンセルは二重控除しない）----
-    coupon_info = beds24_revenue_logic.compute(month, bookings, exclude)
-    coupon_revenue = coupon_info["beds24_coupon_revenue_included"]
-    net_for_bi = round(recognized + coupon_revenue)
+    # ---- point加算・coupon直割引（Phase 0調査で実証済みのロジック。キャンセルは二重控除しない）----
+    # coupon は直割引扱いのため売上に加算しない。point は施設収入として加算対象。
+    revenue_logic_info = beds24_revenue_logic.compute(month, bookings, exclude)
+    point_revenue = revenue_logic_info["beds24_point_revenue_included"]
+    net_for_bi = round(recognized + point_revenue)
 
     # ---- B. 入金月ベース会計/資金実績（銀行/現金）----
     def _rev(src):
@@ -90,19 +91,26 @@ def compute(month: str,
         "month": month,
         # A. 宿泊月ベース速報（Beds24）
         "beds24_stay_month_gross_revenue": round(gross),
-        # 互換field: 新ロジック(クーポン加算込み)の値と同値にする。coupon=0の間は従来値と一致。
+        # 互換field: 新ロジック(point加算込み)の値と同値にする。point=0の間は従来値と一致。
         "beds24_stay_month_revenue_excluding_cancelled": net_for_bi,
         "beds24_stay_month_cancelled_revenue": round(cancelled),
-        # --- 売上速報ロジック v2（クーポン加算・キャンセル除外の明確化）---
-        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・クーポン加算前
-        "beds24_coupon_revenue_included": coupon_revenue,
+        # --- 売上速報ロジック v3（point加算・coupon直割引の明確化）---
+        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・point加算前
+        "beds24_point_revenue_included": point_revenue,
+        "beds24_point_booking_count": revenue_logic_info["beds24_point_booking_count"],
+        "beds24_coupon_discount_detected": revenue_logic_info["beds24_coupon_discount_detected"],
+        "beds24_coupon_discount_amount": revenue_logic_info["beds24_coupon_discount_amount"],
+        "beds24_coupon_discount_booking_count":
+            revenue_logic_info["beds24_coupon_discount_booking_count"],
+        # 旧field（意味が誤っていたためdeprecated。互換性のため0で残す。UIでは使わない）
+        "beds24_coupon_revenue_included": revenue_logic_info["beds24_coupon_revenue_included"],
+        "beds24_coupon_booking_count": revenue_logic_info["beds24_coupon_booking_count"],
         "beds24_cancelled_revenue_excluded": round(cancelled),
         "beds24_revenue_net_for_bi": net_for_bi,          # BI主指標
-        "beds24_revenue_logic_version": coupon_info["beds24_revenue_logic_version"],
-        "beds24_revenue_logic_status": coupon_info["beds24_revenue_logic_status"],
-        "beds24_revenue_logic_note": coupon_info["beds24_revenue_logic_note"],
-        "beds24_cancelled_booking_count": coupon_info["beds24_cancelled_booking_count"],
-        "beds24_coupon_booking_count": coupon_info["beds24_coupon_booking_count"],
+        "beds24_revenue_logic_version": revenue_logic_info["beds24_revenue_logic_version"],
+        "beds24_revenue_logic_status": revenue_logic_info["beds24_revenue_logic_status"],
+        "beds24_revenue_logic_note": revenue_logic_info["beds24_revenue_logic_note"],
+        "beds24_cancelled_booking_count": revenue_logic_info["beds24_cancelled_booking_count"],
         "adr": adr,
         "revpar": revpar,
         "occupancy": occupancy,

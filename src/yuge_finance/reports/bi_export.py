@@ -134,15 +134,21 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "beds24_stay_month_revenue_excluding_cancelled":
             rr["beds24_stay_month_revenue_excluding_cancelled"],
         "beds24_stay_month_cancelled_revenue": rr["beds24_stay_month_cancelled_revenue"],
-        # --- 売上速報ロジック v2（クーポン加算・キャンセル除外の明確化）---
+        # --- 売上速報ロジック v3（point加算・coupon直割引の明確化）---
         "beds24_revenue_gross_stay": rr["beds24_revenue_gross_stay"],
-        "beds24_coupon_revenue_included": rr["beds24_coupon_revenue_included"],
+        "beds24_point_revenue_included": rr["beds24_point_revenue_included"],
+        "beds24_point_booking_count": rr["beds24_point_booking_count"],
+        "beds24_coupon_discount_detected": rr["beds24_coupon_discount_detected"],
+        "beds24_coupon_discount_amount": rr["beds24_coupon_discount_amount"],
+        "beds24_coupon_discount_booking_count": rr["beds24_coupon_discount_booking_count"],
         "beds24_cancelled_revenue_excluded": rr["beds24_cancelled_revenue_excluded"],
         "beds24_revenue_net_for_bi": rr["beds24_revenue_net_for_bi"],
         "beds24_revenue_logic_version": rr["beds24_revenue_logic_version"],
         "beds24_revenue_logic_status": rr["beds24_revenue_logic_status"],
         "beds24_revenue_logic_note": rr["beds24_revenue_logic_note"],
         "beds24_cancelled_booking_count": rr["beds24_cancelled_booking_count"],
+        # --- 旧field（意味が誤っていたためdeprecated。互換性のため0で残す。UIでは使わない）---
+        "beds24_coupon_revenue_included": rr["beds24_coupon_revenue_included"],
         "beds24_coupon_booking_count": rr["beds24_coupon_booking_count"],
         "adr": rr["adr"],
         "revpar": rr["revpar"],
