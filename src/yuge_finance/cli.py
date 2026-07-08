@@ -7,7 +7,7 @@ import re
 import shutil
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -396,6 +396,12 @@ def cmd_refresh_beds24_bi(args) -> int:
     do_publish = bool(args.publish) and not bool(args.no_publish)
     do_publish_r2 = bool(args.publish_r2) and not bool(args.no_publish_r2)
     auto_months = bool(getattr(args, "auto_months_with_bookings", False))
+    today_jst_override = getattr(args, "today_jst", None)
+    if today_jst_override:
+        try:
+            date.fromisoformat(today_jst_override)
+        except ValueError:
+            raise SystemExit("ERROR: --today-jst は YYYY-MM-DD 形式で指定してください")
 
     lock = locks.FileLock(config.LOG_DIR / "beds24_bi_refresh.lock", stale_seconds=3600)
     try:
@@ -405,9 +411,11 @@ def cmd_refresh_beds24_bi(args) -> int:
         return 0
     try:
         label = "自動抽出（予約が1件でもある月）" if auto_months else months
-        _print(f"=== refresh-beds24-bi 対象={label} dry_run={bool(args.dry_run)} ===")
+        today_label = today_jst_override or "実行時JST今日（自動計算）"
+        _print(f"=== refresh-beds24-bi 対象={label} today_jst={today_label} dry_run={bool(args.dry_run)} ===")
         status = bi_refresh.refresh(months, dry_run=bool(args.dry_run),
-                                    auto_months_with_bookings=auto_months)
+                                    auto_months_with_bookings=auto_months,
+                                    today_jst_override=today_jst_override)
         _print(f"[refresh-beds24-bi] 成功月={status['success_months']} エラー={len(status['errors'])} "
                f"revenue_data_status={status.get('revenue_data_status')}")
         _print(f"[refresh-beds24-bi] default_month={status.get('default_month')} "
@@ -469,6 +477,9 @@ def cmd_publish_bi_r2(args) -> int:
         for k in res["uploaded_keys"]:
             _print(f"  uploaded: {k}")
         _print(f"  generated_at_jst: {res['generated_at_jst']}")
+        _print(f"published manifest generated_at_jst={res['generated_at_jst']}")
+        _print(f"published default_month={res['default_month']}")
+        _print(f"uploaded files={res['uploaded_count']}")
     return 0
 
 
@@ -607,6 +618,9 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--auto-months-with-bookings", action="store_true",
                     help="Beds24予約が1件でもある月（宿泊日ベース、キャンセル含む）を自動抽出して対象にする"
                          "（指定時は--month/--monthsより優先）")
+    rb.add_argument("--today-jst", default=None,
+                    help="「本日」の基準日をYYYY-MM-DDで明示指定（日付跨ぎ検証用）。"
+                         "未指定時は実行時のJST今日を都度計算する。本番launchdでは指定しない。")
     rb.add_argument("--publish", action="store_true", help="生成後にCloudflare公開ディレクトリへ反映")
     rb.add_argument("--no-publish", action="store_true", help="公開しない（--publishを上書き）")
     rb.add_argument("--publish-r2", action="store_true",

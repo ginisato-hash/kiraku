@@ -11,12 +11,19 @@ from __future__ import annotations
 import calendar
 import json
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List
 
 from .. import config, csvio
 from ..ingest import opening_balance as opening_balance_mod
 from . import bank_cashflow_report
+
+JST = timezone(timedelta(hours=9))
+
+
+def _jst_now_str() -> str:
+    return datetime.now(timezone.utc).astimezone(JST).isoformat(timespec="seconds")
 
 DAILY_COLS = ["date", "宿泊売上", "現金入金", "現金支払", "銀行入金", "銀行出金",
               "予約件数", "仕訳件数"]
@@ -130,6 +137,7 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
     snapshot = {
         "month": month,
         "property": "喜らく",
+        "generated_at_jst": _jst_now_str(),
         # === A. 宿泊月ベース速報（Beds24・KPI先行指標）===
         "beds24_stay_month_gross_revenue": rr["beds24_stay_month_gross_revenue"],
         "beds24_stay_month_revenue_excluding_cancelled":

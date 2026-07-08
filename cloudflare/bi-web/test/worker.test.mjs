@@ -175,4 +175,42 @@ await check("/data/months/2026-09/bi_snapshot.json missing in R2 -> 404", async 
   assert.equal(r.status, 404);
 });
 
+// ---------------- no-store cache headers（日付跨ぎ更新不具合対応） ----------------
+function assertNoStore(r) {
+  const cc = r.headers.get("cache-control") || "";
+  assert.ok(cc.includes("no-store"), `expected no-store, got: ${cc}`);
+  assert.ok(cc.includes("no-cache"), `expected no-cache, got: ${cc}`);
+  assert.ok(cc.includes("must-revalidate"), `expected must-revalidate, got: ${cc}`);
+}
+
+await check("/api/manifest has no-store cache headers", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/manifest"), env);
+  assertNoStore(r);
+});
+
+await check("/api/snapshot has no-store cache headers", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot"), env);
+  assertNoStore(r);
+});
+
+await check("/api/snapshot?month=YYYY-MM has no-store cache headers", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2026-07"), env);
+  assertNoStore(r);
+});
+
+await check("/api/months has no-store cache headers", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/months"), env);
+  assertNoStore(r);
+});
+
+await check("/data/months/2026-07/bi_snapshot.json has no-store cache headers", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/data/months/2026-07/bi_snapshot.json"), env);
+  assertNoStore(r);
+});
+
 console.log(`\n${passed} worker checks passed`);

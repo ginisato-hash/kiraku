@@ -13,10 +13,10 @@ let manifestCache = null;
 let lastGoodVm = null;
 let currentSelectedMonth = null;
 
+// 日付跨ぎ後もブラウザ/中間キャッシュに古いBIデータを見せない（重大不具合対応）。
 async function getJSON(url) {
   try {
-    const sep = url.includes("?") ? "&" : "?";
-    const r = await fetch(url + sep + "t=" + Date.now());
+    const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) return null;
     return await r.json();
   } catch (e) {

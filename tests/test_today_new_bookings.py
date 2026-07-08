@@ -2,7 +2,7 @@
 import json
 from datetime import date
 
-from yuge_finance import db, monthly
+from yuge_finance import config, db, monthly
 from yuge_finance.accounting import beds24_revenue_logic as brl
 from yuge_finance.api.beds24_client import normalize_booking
 from yuge_finance.normalize.schema import BookingRecord
@@ -173,4 +173,78 @@ def test_today_new_booking_prorates_across_months_in_snapshot(tmp_path, monkeypa
                         out_dir=tmp_path / "sep")
     snap_sep = json.loads((tmp_path / "sep" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
     assert snap_sep["today_new_booking_revenue"] == 30000
+    conn.close()
+
+
+# ---------------- 日付跨ぎ更新不具合対応: today_jst override / generated_at_jst ----------------
+def test_snapshot_has_explicit_today_jst_field(tmp_path):
+    """today_jstをsnapshotに明示出力する（日付跨ぎ検証のため必須）。"""
+    monkeypatch_free_conn = db.connect(tmp_path / "t.sqlite")
+    ctx = monthly.assemble("2026-07", monkeypatch_free_conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap["today_jst"] == "2026-07-08"
+    monkeypatch_free_conn.close()
+
+
+def test_snapshot_has_generated_at_jst_field(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap.get("generated_at_jst")
+    conn.close()
+
+
+def test_today_jst_override_via_monthly_assemble_2026_07_08(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    assert ctx["today_new_bookings"]["today_jst"] == "2026-07-08"
+    conn.close()
+
+
+def test_today_jst_override_via_monthly_assemble_2026_07_09(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 9))
+    assert ctx["today_new_bookings"]["today_jst"] == "2026-07-09"
+    conn.close()
+
+
+def test_today_jst_override_via_cli_refresh(tmp_path, monkeypatch):
+    """--today-jst 相当のbi_refresh.refresh(today_jst_override=...) が正しく効く。"""
+    from yuge_finance import bi_refresh
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(bi_refresh, "_fetch_beds24", lambda month, conn: 0)
+    conn = db.connect(tmp_path / "ledger.sqlite")
+    status = bi_refresh.refresh(["2026-07"], conn=conn, today_jst_override="2026-07-08")
+    assert status["ok"] is True
+    conn.close()
+
+
+def test_day_rollover_resets_today_new_booking_count(tmp_path):
+    """日付が変わったら、本日の新規予約は新しいJST日付で0から再計算される。
+
+    booking A created_at=2026-07-08T23:50:00+09:00 (=2026-07-08T14:50:00Z)
+    booking B created_at=2026-07-09T00:05:00+09:00 (=2026-07-08T15:05:00Z)
+    target_month=2026-07
+    """
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("A", "2026-07-15", "2026-07-16", gross=10000,
+                created_at_raw="2026-07-08T14:50:00Z"),
+        _booking("B", "2026-07-20", "2026-07-21", gross=20000,
+                created_at_raw="2026-07-08T15:05:00Z"),
+    ])
+
+    result_day1 = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result_day1["today_new_booking_count"] == 1
+    assert result_day1["today_new_booking_ids_sample"] == ["A"]
+
+    result_day2 = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 9), EXCLUDE)
+    assert result_day2["today_new_booking_count"] == 1
+    assert result_day2["today_new_booking_ids_sample"] == ["B"]
     conn.close()

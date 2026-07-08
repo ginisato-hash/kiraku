@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -189,7 +189,10 @@ def _load_prev_status() -> Dict:
 
 
 def refresh(months: List[str], dry_run: bool = False, conn=None,
-           auto_months_with_bookings: bool = False) -> Dict:
+           auto_months_with_bookings: bool = False, today_jst_override: str = None) -> Dict:
+    """today_jst_override: --today-jst検証用のYYYY-MM-DD文字列。本番launchdでは指定しない
+    （未指定時は実行のたびにJST今日を再計算する）。
+    """
     own = conn is None
     conn = conn or db.connect()
     started = jst_str()
@@ -199,6 +202,7 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
 
     exclude = config.kiraku().get("revenue", {}).get(
         "exclude_statuses", ["cancelled", "canceled", "black"])
+    today_jst = date.fromisoformat(today_jst_override) if today_jst_override else None
 
     if auto_months_with_bookings:
         discovered = discover_months_with_bookings(conn, exclude)
@@ -211,7 +215,7 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
         except Exception as e:  # noqa: BLE001 - 既存BIを壊さず継続
             errors.append({"month": m, "stage": "fetch", "error": str(e)})
             continue
-        ctx = monthly.assemble(m, conn)          # 読み取り計算のみ（永続化しない）
+        ctx = monthly.assemble(m, conn, today_jst=today_jst)  # 読み取り計算のみ（永続化しない）
         checks = reconciliation.run(m, ctx)      # workbook_path無し→Excelチェック無し
         sev = reconciliation.severity(checks)
         if not dry_run:

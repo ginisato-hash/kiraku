@@ -53,6 +53,24 @@ def test_refresh_wrapper_script_never_deploys_or_touches_ledger():
         assert forbidden not in text
 
 
+def test_refresh_wrapper_script_checks_manifest_after_publish():
+    """R2 publish後にmanifestのgenerated_at_jstを確認するログを出す（日付跨ぎ不具合対応）。"""
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    assert "curl" in text
+    assert "/api/manifest" in text
+    assert "generated_at_jst" in text
+    publish_idx = text.index("publish-bi-r2")
+    curl_idx = text.index("curl")
+    assert curl_idx > publish_idx, "manifest確認curlはpublish-bi-r2の後に実行すること"
+
+
+def test_refresh_wrapper_script_sets_path_for_launchd():
+    """launchdの最小PATHではnpx/wranglerが見つからないため、明示的にPATHを通す。"""
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    assert "/usr/local/bin" in text
+    assert "PATH=" in text
+
+
 def test_app_js_does_not_reference_deprecated_fields_directly():
     """app.js は生のsnapshotフィールドを直接大量参照せず、biViewModel経由で描画する。"""
     app_js = config.ROOT / "cloudflare" / "bi-web" / "public" / "app.js"

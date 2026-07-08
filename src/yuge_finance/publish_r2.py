@@ -186,12 +186,15 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
                    + [fn for fn in OPTIONAL_UPLOAD_FILES if (source_dir / fn).exists()]
                    + _month_upload_targets(source_dir, manifest))
 
+    default_month = manifest.get("default_month")
+
     if dry_run:
         return {
             "dry_run": True, "bucket": bucket, "prefix": prefix,
             "uploaded_count": 0,
             "would_upload_keys": [f"{prefix}/{fn}" for fn in target_files],
             "generated_at_jst": generated_at,
+            "default_month": default_month,
         }
 
     if not _wrangler_available():
@@ -217,4 +220,5 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
         "uploaded_count": len(succeeded),
         "uploaded_keys": [r["key"] for r in succeeded],
         "generated_at_jst": generated_at,
+        "default_month": default_month,
     }

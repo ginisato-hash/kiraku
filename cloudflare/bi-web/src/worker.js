@@ -27,10 +27,17 @@ const MONTH_FILE_TYPES = {
   "bi_exception_summary.json": "application/json; charset=utf-8",
 };
 
+// 日付跨ぎ後もCDN/ブラウザに古いBIデータをキャッシュさせない（重大不具合対応。Phase 7）。
+const NO_STORE_HEADERS = {
+  "cache-control": "no-store, no-cache, must-revalidate",
+  "pragma": "no-cache",
+  "expires": "0",
+};
+
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", ...NO_STORE_HEADERS },
   });
 }
 
@@ -53,7 +60,7 @@ async function r2ObjectResponse(env, key, type) {
   }
   return new Response(obj.body, {
     status: 200,
-    headers: { "content-type": type, "cache-control": "no-store" },
+    headers: { "content-type": type, ...NO_STORE_HEADERS },
   });
 }
 
@@ -82,7 +89,7 @@ async function handleApiSnapshot(env, url) {
       if (obj) {
         return new Response(obj.body, {
           status: 200,
-          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+          headers: { "content-type": "application/json; charset=utf-8", ...NO_STORE_HEADERS },
         });
       }
     }
@@ -151,7 +158,7 @@ export default {
         }
         return new Response(obj.body, {
           status: 200,
-          headers: { "content-type": route.type, "cache-control": "no-store" },
+          headers: { "content-type": route.type, ...NO_STORE_HEADERS },
         });
       } catch (e) {
         return jsonResponse({ ok: false, error: String(e) }, 500);

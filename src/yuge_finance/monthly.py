@@ -38,7 +38,10 @@ def _net(entries: List[JournalEntry], account: str, normal: str) -> float:
     return (d - c) if normal == "debit" else (c - d)
 
 
-def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
+def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Dict:
+    """today_jst: 「本日」の基準日を明示指定する場合のみ渡す（日付跨ぎ検証用）。
+    未指定時は実行時のJST今日を都度計算する（インポート時・デフォルト引数での固定は禁止）。
+    """
     bookings = db.load_objects(conn, "beds24_bookings", month, "checkin_date")
     bank = db.load_objects(conn, "bank_transactions", month, "transaction_date")
     cash = db.load_objects(conn, "cash_transactions", month, "transaction_date")
@@ -127,8 +130,10 @@ def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
         r.finalize()
     revenue_exclude = config.kiraku().get("revenue", {}).get(
         "exclude_statuses", ["cancelled", "canceled", "black"])
+    effective_today_jst = today_jst if today_jst is not None else beds24_revenue_logic.jst_today()
     today_new_bookings = beds24_revenue_logic.calculate_today_new_bookings_for_month(
-        all_bookings, month, beds24_revenue_logic.jst_today(), revenue_exclude)
+        all_bookings, month, effective_today_jst, revenue_exclude)
+    today_new_bookings["today_jst"] = effective_today_jst.isoformat()
 
     return {
         "month": month,
