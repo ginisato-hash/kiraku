@@ -164,3 +164,90 @@ def test_publish_does_not_touch_local_bi_on_failure(tmp_path):
         publish_r2.publish(source_dir=tmp_path, dry_run=False)
     # ローカルBIファイルは書き換えられていない
     assert (tmp_path / "bi_daily_timeseries.csv").read_bytes() == before
+
+
+# ---------------- --preserve-bank-fields-from-r2 (sticky bank field merge) ----------------
+class _FakeWrangler:
+    """_put()をモック化し、実際のwrangler呼び出しをせず成功扱いにする。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, bucket, prefix, relative_key, file_path, cwd):
+        self.calls.append(relative_key)
+        return {"key": f"{prefix}/{relative_key}", "ok": True}
+
+
+def test_preserve_bank_fields_option_exists_in_cli():
+    from yuge_finance.cli import build_parser
+    args = build_parser().parse_args(["publish-bi-r2", "--preserve-bank-fields-from-r2"])
+    assert args.preserve_bank_fields_from_r2 is True
+
+
+def test_preserve_bank_fields_merges_root_and_month_snapshots(tmp_path, monkeypatch):
+    _seed_with_months(tmp_path)
+    previous = {
+        "generated_at_jst": "2026-07-09T07:00:00+09:00",
+        "bank_actual_latest_balance": 3052421.0,
+        "bank_csv_import_status": "imported",
+        "bank_csv_imported_rows": 89,
+    }
+    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot", lambda month=None, timeout=20: previous)
+    monkeypatch.setattr(publish_r2, "_wrangler_available", lambda: True)
+    fake_put = _FakeWrangler()
+    monkeypatch.setattr(publish_r2, "_put", fake_put)
+
+    res = publish_r2.publish(source_dir=tmp_path, dry_run=False, preserve_bank_fields_from_r2=True)
+
+    assert res["bank_fields_sources"]["previous_r2_snapshot"] == 3  # root + 2 months
+    root_snap = json.loads((tmp_path / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert root_snap["bank_actual_latest_balance"] == 3052421.0
+    assert root_snap["bank_fields_source"] == "previous_r2_snapshot"
+    month_snap = json.loads((tmp_path / "months" / "2026-07" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert month_snap["bank_actual_latest_balance"] == 3052421.0
+    # 非bank系フィールドは今回値のまま
+    assert month_snap["target_month"] == "2026-07"
+    assert month_snap["booking_pace_status"] == "green"
+
+
+def test_preserve_bank_fields_does_not_reduce_upload_target_count(tmp_path, monkeypatch):
+    _seed_with_months(tmp_path)
+    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot", lambda month=None, timeout=20: None)
+    monkeypatch.setattr(publish_r2, "_wrangler_available", lambda: True)
+    fake_put = _FakeWrangler()
+    monkeypatch.setattr(publish_r2, "_put", fake_put)
+
+    res_without = publish_r2.publish(source_dir=tmp_path, dry_run=True)
+    res_with = publish_r2.publish(source_dir=tmp_path, dry_run=False, preserve_bank_fields_from_r2=True)
+    assert res_with["uploaded_count"] == len(res_without["would_upload_keys"])
+
+
+def test_preserve_bank_fields_keeps_current_import_when_new_snapshot_has_bank_data(tmp_path, monkeypatch):
+    _seed(tmp_path)
+    snap_path = tmp_path / "bi_snapshot.json"
+    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    snap.update({"bank_actual_latest_balance": 111.0, "bank_csv_import_status": "imported",
+                "bank_csv_imported_rows": 3})
+    snap_path.write_text(json.dumps(snap), encoding="utf-8")
+
+    previous = {"bank_actual_latest_balance": 999.0, "bank_csv_import_status": "imported",
+               "bank_csv_imported_rows": 99}
+    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot", lambda month=None, timeout=20: previous)
+    monkeypatch.setattr(publish_r2, "_wrangler_available", lambda: True)
+    monkeypatch.setattr(publish_r2, "_put", _FakeWrangler())
+
+    res = publish_r2.publish(source_dir=tmp_path, dry_run=False, preserve_bank_fields_from_r2=True)
+    assert res["bank_fields_sources"]["current_import"] == 1
+    merged = json.loads(snap_path.read_text(encoding="utf-8"))
+    assert merged["bank_actual_latest_balance"] == 111.0  # 今回値のまま
+
+
+def test_dry_run_never_calls_fetch_or_rewrites_files(tmp_path, monkeypatch):
+    _seed(tmp_path)
+    before = (tmp_path / "bi_snapshot.json").read_bytes()
+    called = []
+    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot",
+                        lambda month=None, timeout=20: called.append(month) or None)
+    publish_r2.publish(source_dir=tmp_path, dry_run=True, preserve_bank_fields_from_r2=True)
+    assert called == []
+    assert (tmp_path / "bi_snapshot.json").read_bytes() == before

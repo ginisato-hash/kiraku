@@ -82,6 +82,18 @@ function buildPaceComment(achievement, pace) {
   return { text: (achText + paceText).slice(0, 80), tone };
 }
 
+// 銀行CF summaryの出所（GitHub Actions実行時はローカル銀行CSVが無いため、
+// 直近公開snapshotから引き継ぐ場合がある。raw明細ではなく集計フィールドのみ）。
+const BANK_FIELDS_SOURCE_LABELS = {
+  current_import: "今回取込",
+  previous_r2_snapshot: "前回公開データを維持",
+  not_available: "未取込",
+};
+
+function bankFieldsSourceLabel(source) {
+  return BANK_FIELDS_SOURCE_LABELS[source] || DASH;
+}
+
 // "2026-07" -> "2026年7月"（内部valueは常にYYYY-MM。表示は日本語）
 function monthLabel(m) {
   if (!m || !/^\d{4}-\d{2}$/.test(m)) return DASH;
@@ -373,6 +385,11 @@ function buildDetailSections(s) {
         ["銀行CSV取込状態", s.bank_csv_import_status || "未取込"],
         ["銀行CSV取込件数", num(s.bank_csv_imported_rows)],
         ["分類レビュー必要件数", num(s.bank_classification_review_required_count)],
+        ["銀行CFデータ出所", bankFieldsSourceLabel(s.bank_fields_source)],
+        ...(s.bank_fields_source === "previous_r2_snapshot"
+          ? [["データ出所の補足", s.bank_fields_preserved_note ||
+              "GitHub Actions更新時に銀行CSVは再取込されないため、直近公開済みの銀行CF summaryを維持しています。"]]
+          : []),
       ],
     },
     {
@@ -473,5 +490,5 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
 
 export const _internal = {
   DEPRECATED_FIELDS, yen, pct, ratio, num, achievementStatus, paceInfo, buildPaceComment,
-  monthLabel, buildMonthOptions, buildMonthContextNote,
+  monthLabel, buildMonthOptions, buildMonthContextNote, bankFieldsSourceLabel,
 };

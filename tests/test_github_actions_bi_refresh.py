@@ -48,6 +48,12 @@ def test_workflow_runs_publish_bi_r2():
     assert "publish-bi-r2" in text
 
 
+def test_workflow_uses_preserve_bank_fields_from_r2():
+    """GitHub Actionsはローカル銀行CSVが無いため、既存R2 snapshotの銀行CFを引き継ぐ。"""
+    text = _raw_text()
+    assert "publish-bi-r2 --bucket \"$CLOUDFLARE_R2_BUCKET\" --preserve-bank-fields-from-r2" in text
+
+
 def test_workflow_never_deploys_worker_or_closes_month():
     text = _raw_text()
     for forbidden in ("wrangler deploy", "close-month", "build-ledger", "export-excel"):

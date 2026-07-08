@@ -214,12 +214,17 @@ Cloudflare側の認証情報もGitHub Actions Secretsにのみ置き、Worker側
 > **注意（銀行CSV/開始残高セクションについて）**: GitHub Actionsは毎回まっさらな
 > checkoutで動くため、`imports/bank/`・`imports/opening_balance/`配下のローカル実データ
 > （銀行CSV・会計士確定開始残高）にはアクセスできません（これらは意図的にGitに載せない
-> 機密データのため）。そのため速報BIの「銀行残高・実績CF」セクションや会計士確定開始残高
-> 由来の一部フィールド（`opening_cash_balance`等）は、GitHub Actions実行時は未取込/空状態に
-> なります。銀行CSVを反映したい場合は、引き続きMacで手動 `ingest-bank-csv --apply` →
-> `refresh-beds24-bi --publish` → `publish-bi-r2` を実行してください（ただし次回の
-> GitHub Actions実行(最大15分後)でこのセクションは再び空状態に戻ります。銀行CF表示を
-> 常時反映させたい場合は追加対応が必要です）。
+> 機密データのため）。会計士確定開始残高由来の一部フィールド（`opening_cash_balance`等）は
+> GitHub Actions実行時は空になります。
+>
+> 「銀行残高・実績CF」セクションについては、`publish-bi-r2 --preserve-bank-fields-from-r2`
+> （GitHub Actions workflowで常時有効）により、今回生成分に有効な銀行データが無い場合のみ
+> 直近公開済みsnapshotの銀行CF summary(集計フィールドのみ。raw明細やopening balanceは
+> 引き継がない)を自動的に維持します。Macで手動 `ingest-bank-csv --apply` →
+> `refresh-beds24-bi --publish` → `publish-bi-r2 --preserve-bank-fields-from-r2` を実行すれば、
+> それ以降のGitHub Actions実行でもその銀行CFデータが消えずに引き継がれ続けます。
+> 画面の「銀行残高・実績CF」アコーディオンの「銀行CFデータ出所」で、今回取込
+> （`current_import`）か前回データ維持（`previous_r2_snapshot`）かを確認できます。
 
 ```bash
 # BIデータ生成のみ（仕訳/Excelは触らない）。予約が1件でもある月を自動抽出する。

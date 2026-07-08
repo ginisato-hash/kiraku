@@ -245,6 +245,48 @@ await check("bank-actuals detail section renders with latest balance and import 
   assert.ok(section.summary.includes("¥3,052,421"));
 });
 
+// ---------------- 銀行CFデータ出所 (sticky bank field source) ----------------
+await check("bank-actuals shows 今回取込 for bank_fields_source=current_import", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "current_import" }, {});
+  const section = vm.details.find((d) => d.id === "bank-actuals");
+  assert.ok(section.rows.some(([k, v]) => k === "銀行CFデータ出所" && v === "今回取込"));
+});
+
+await check("bank-actuals shows 前回公開データを維持 and a note for previous_r2_snapshot", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, bank_fields_source: "previous_r2_snapshot",
+    bank_fields_preserved_note: "GitHub Actions更新時に銀行CSVは再取込されないため、直近公開済みの銀行CF summaryを維持しています。",
+  }, {});
+  const section = vm.details.find((d) => d.id === "bank-actuals");
+  assert.ok(section.rows.some(([k, v]) => k === "銀行CFデータ出所" && v === "前回公開データを維持"));
+  assert.ok(section.rows.some(([k, v]) => k === "データ出所の補足" && v.includes("GitHub Actions更新時")));
+});
+
+await check("bank-actuals shows 未取込 for bank_fields_source=not_available with no extra note", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "not_available" }, {});
+  const section = vm.details.find((d) => d.id === "bank-actuals");
+  assert.ok(section.rows.some(([k, v]) => k === "銀行CFデータ出所" && v === "未取込"));
+  assert.ok(!section.rows.some(([k]) => k === "データ出所の補足"));
+});
+
+await check("bank fields source display does not increase top card count", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "previous_r2_snapshot" }, {});
+  assert.equal(vm.primaryCards.length, 7);
+});
+
+await check("month selector / daily new bookings / booking pace remain intact alongside bank source field", async () => {
+  const manifestForBankSourceCheck = {
+    default_month: "2026-07", available_months: ["2026-07", "2026-08"],
+    months_with_any_booking: ["2026-07", "2026-08"],
+  };
+  const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "previous_r2_snapshot" },
+    manifestForBankSourceCheck, null, null, { selectedMonth: "2026-08" });
+  assert.ok(vm.header.monthOptions.length > 0);
+  assert.ok(vm.dailyNewBookings.label === "本日の新規予約");
+  const paceCard = vm.primaryCards.find((c) => c.id === "booking-pace");
+  assert.equal(paceCard.value, "グリーン");
+});
+
 await check("bank-cost-candidates detail section shows fixed/variable candidate summary", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const section = vm.details.find((d) => d.id === "bank-cost-candidates");

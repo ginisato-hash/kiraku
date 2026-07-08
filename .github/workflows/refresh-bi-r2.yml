@@ -81,7 +81,7 @@ jobs:
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
           TZ: Asia/Tokyo
         run: |
-          yuge-finance publish-bi-r2 --bucket "$CLOUDFLARE_R2_BUCKET"
+          yuge-finance publish-bi-r2 --bucket "$CLOUDFLARE_R2_BUCKET" --preserve-bank-fields-from-r2
 
       - name: Verify public manifest
         run: |
@@ -105,3 +105,5 @@ jobs:
           echo "- finished_at_utc: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
           echo "- public_manifest:" >> "$GITHUB_STEP_SUMMARY"
           curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep -E "generated_at_jst|default_month" >> "$GITHUB_STEP_SUMMARY" || true
+          echo "- public_snapshot:" >> "$GITHUB_STEP_SUMMARY"
+          curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/snapshot | python3 -m json.tool | grep -E "generated_at_jst|today_jst|bank_fields_source|bank_actual_latest_balance|bank_csv_import_status" >> "$GITHUB_STEP_SUMMARY" || true

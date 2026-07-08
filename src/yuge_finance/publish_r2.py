@@ -12,9 +12,17 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+import requests
 
 from . import config
+from .reports import bank_sticky_fields
+
+# 銀行CF summary sticky field引き継ぎ用の公開API(Worker)。R2 credentialのpublish処理と
+# 同じタイミングで、直近公開済みsnapshotを読むために使う（rawのbank明細ではなく
+# 集計済みsnapshotフィールドのみを対象とする）。
+PUBLIC_API_BASE = "https://kiraku-bi.s-sato-dce.workers.dev"
 
 UPLOAD_FILES = [
     "manifest.json", "bi_snapshot.json", "bi_daily_timeseries.csv",
@@ -151,6 +159,51 @@ def _month_upload_targets(source_dir: Path, manifest: Dict) -> List[str]:
     return targets
 
 
+def _fetch_public_snapshot(month: Optional[str] = None, timeout: int = 20) -> Optional[Dict]:
+    """公開Worker APIから直近snapshotを取得する。失敗時はNoneを返す(publishを止めない)。"""
+    url = f"{PUBLIC_API_BASE}/api/snapshot"
+    if month:
+        url += f"?month={month}"
+    try:
+        resp = requests.get(url, timeout=timeout)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def _apply_bank_sticky_fields(source_dir: Path, manifest: Dict) -> Dict[str, int]:
+    """root/月別snapshotのbank_*フィールドについて、今回値が無効な場合のみ直近公開snapshotから
+    引き継ぎ、ローカルファイルを書き換える。bank_fields_sourceの内訳件数を返す。
+    """
+    counts = {"current_import": 0, "previous_r2_snapshot": 0, "not_available": 0}
+
+    root_path = source_dir / "bi_snapshot.json"
+    root_snapshot = json.loads(root_path.read_text(encoding="utf-8"))
+    previous_root = _fetch_public_snapshot()
+    merged_root = bank_sticky_fields.merge_sticky_bank_fields(root_snapshot, previous_root)
+    root_path.write_text(
+        json.dumps(merged_root, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    counts[merged_root["bank_fields_source"]] += 1
+
+    for month in manifest.get("available_months") or []:
+        month_path = source_dir / "months" / month / "bi_snapshot.json"
+        if not month_path.exists():
+            continue
+        month_snapshot = json.loads(month_path.read_text(encoding="utf-8"))
+        previous_month = _fetch_public_snapshot(month)
+        if previous_month is None:
+            # 月別previousが取得できない場合はdefault previous snapshotから引き継ぐ。
+            previous_month = previous_root
+        merged_month = bank_sticky_fields.merge_sticky_bank_fields(month_snapshot, previous_month)
+        month_path.write_text(
+            json.dumps(merged_month, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        counts[merged_month["bank_fields_source"]] += 1
+
+    return counts
+
+
 def _wrangler_available() -> bool:
     return shutil.which("npx") is not None or shutil.which("wrangler") is not None
 
@@ -170,7 +223,7 @@ def _put(bucket: str, prefix: str, relative_key: str, file_path: Path, cwd: Path
 
 def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
            prefix: str = DEFAULT_PREFIX, dry_run: bool = False,
-           worker_dir: Path = None) -> Dict:
+           worker_dir: Path = None, preserve_bank_fields_from_r2: bool = False) -> Dict:
     source_dir = source_dir or default_source_dir()
     worker_dir = worker_dir or (config.ROOT / "cloudflare" / "bi-web")
 
@@ -178,9 +231,15 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
     if issues:
         raise PublishR2Error("アップロード前検証に失敗:\n  - " + "\n  - ".join(issues))
 
+    manifest = json.loads((source_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    # dry-runはローカルファイルを書き換えず、ネットワークアクセスもしない（一覧表示のみ）。
+    bank_fields_sources = None
+    if preserve_bank_fields_from_r2 and not dry_run:
+        bank_fields_sources = _apply_bank_sticky_fields(source_dir, manifest)
+
     snapshot = json.loads((source_dir / "bi_snapshot.json").read_text(encoding="utf-8"))
     generated_at = snapshot.get("generated_at_jst") or snapshot.get("current_date_jst")
-    manifest = json.loads((source_dir / "manifest.json").read_text(encoding="utf-8"))
 
     target_files = (UPLOAD_FILES
                    + [fn for fn in OPTIONAL_UPLOAD_FILES if (source_dir / fn).exists()]
@@ -195,6 +254,7 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
             "would_upload_keys": [f"{prefix}/{fn}" for fn in target_files],
             "generated_at_jst": generated_at,
             "default_month": default_month,
+            "bank_fields_sources": bank_fields_sources,
         }
 
     if not _wrangler_available():
@@ -221,4 +281,5 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
         "uploaded_keys": [r["key"] for r in succeeded],
         "generated_at_jst": generated_at,
         "default_month": default_month,
+        "bank_fields_sources": bank_fields_sources,
     }

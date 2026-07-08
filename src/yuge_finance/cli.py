@@ -462,7 +462,8 @@ def cmd_publish_bi_r2(args) -> int:
     source_dir = Path(args.source_dir) if args.source_dir else publish_r2.default_source_dir()
     try:
         res = publish_r2.publish(source_dir=source_dir, bucket=args.bucket, prefix=args.prefix,
-                                 dry_run=bool(args.dry_run))
+                                 dry_run=bool(args.dry_run),
+                                 preserve_bank_fields_from_r2=bool(args.preserve_bank_fields_from_r2))
     except publish_r2.PublishR2Error as e:
         _print(f"[publish-bi-r2] エラー: {e}")
         return 1
@@ -477,6 +478,8 @@ def cmd_publish_bi_r2(args) -> int:
         for k in res["uploaded_keys"]:
             _print(f"  uploaded: {k}")
         _print(f"  generated_at_jst: {res['generated_at_jst']}")
+        if res.get("bank_fields_sources"):
+            _print(f"  bank_fields_sources: {res['bank_fields_sources']}")
         _print(f"published manifest generated_at_jst={res['generated_at_jst']}")
         _print(f"published default_month={res['default_month']}")
         _print(f"uploaded files={res['uploaded_count']}")
@@ -610,6 +613,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--bucket", default=publish_r2.DEFAULT_BUCKET, help="R2 bucket名")
     pr.add_argument("--prefix", default=publish_r2.DEFAULT_PREFIX, help="R2 key prefix")
     pr.add_argument("--dry-run", action="store_true", help="アップロードせず対象を列挙")
+    pr.add_argument("--preserve-bank-fields-from-r2", action="store_true",
+                    help="今回生成snapshotのbank_*フィールドが未取込/空の場合のみ、"
+                         "公開中のR2 snapshotから引き継ぐ（GitHub Actions実行時に"
+                         "ローカル銀行CSVが無い場合の欠落対策）")
 
     rb = sub.add_parser("refresh-beds24-bi",
                         help="Beds24速報BIの巡回更新（仕訳/Excelは触らない）")
