@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Dict, List
 
 from . import config, db
-from .accounting import (breakeven_model, debt_journal, journal_engine, kpi,
-                         labor_model, pace_model, pl_bs_cf, reconciliation,
+from .accounting import (beds24_revenue_logic, breakeven_model, debt_journal, journal_engine,
+                         kpi, labor_model, pace_model, pl_bs_cf, reconciliation,
                          revenue_recon, trial_balance)
 from .ingest import opening_balance
 from .normalize import validators
@@ -121,6 +121,15 @@ def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
     # --- 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）---
     bank_actual_bi = bank_cashflow_report.compute_bi_fields(conn)
 
+    # --- 本日の新規予約（BI専用。月またぎ予約を按分するため月フィルタ無しで全件読む）---
+    all_bookings = db.load_objects(conn, "beds24_bookings")
+    for r in all_bookings:
+        r.finalize()
+    revenue_exclude = config.kiraku().get("revenue", {}).get(
+        "exclude_statuses", ["cancelled", "canceled", "black"])
+    today_new_bookings = beds24_revenue_logic.calculate_today_new_bookings_for_month(
+        all_bookings, month, beds24_revenue_logic.jst_today(), revenue_exclude)
+
     return {
         "month": month,
         "bookings": bookings, "bank_txns": bank, "cash_txns": cash, "manual": manual,
@@ -151,4 +160,5 @@ def assemble(month: str, conn, workbook_path: Path = None) -> Dict:
         "debit_total": jd, "credit_total": jc,
         "image_issues": 0, "workbook_path": workbook_path,
         "bank_actual_bi": bank_actual_bi,
+        "today_new_bookings": today_new_bookings,
     }

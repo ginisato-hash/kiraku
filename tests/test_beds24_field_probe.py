@@ -27,3 +27,25 @@ def test_probe_does_not_leak_pii():
     text = str(probe["sample_bookings_pii_redacted"])
     for pii_key in ["firstName", "lastName", "email", "phone", "address", "notes", "comments"]:
         assert f"'{pii_key}'" not in text
+
+
+# ---------------- 「本日の新規予約」判定用field（Phase 0） ----------------
+def test_probe_finds_booking_created_at_candidate_from_real_payload():
+    """推測ではなく実payloadのキー一覧からcandidateを出す。実データではbookingTimeが該当する。"""
+    probe = beds24_field_probe.build_probe()
+    assert "booking_created_at" in probe["candidate_fields"]
+    assert "bookingTime" in probe["candidate_fields"]["booking_created_at"]
+    assert probe["selected_fields"]["booking_created_at"] == "bookingTime"
+
+
+def test_probe_finds_booking_modified_at_and_status_candidates():
+    probe = beds24_field_probe.build_probe()
+    assert "modifiedTime" in probe["candidate_fields"]["booking_modified_at"]
+    assert probe["selected_fields"]["booking_modified_at"] == "modifiedTime"
+    assert "status" in probe["candidate_fields"]["booking_status"]
+
+
+def test_probe_returns_no_created_at_candidates_when_key_absent():
+    """実payloadに候補keyが無い場合はcandidateを空リストで返し、決め打ちしない。"""
+    assert beds24_field_probe._find_candidate_keys({"foo", "bar"},
+                                                    beds24_field_probe.CREATED_AT_TOKENS) == []

@@ -173,6 +173,45 @@ body.is-loading .dashboard {
 .status-pill.tone-red .dot { background: var(--red); }
 .status-pill.tone-blue .dot { background: var(--blue); }
 
+/* ---------- 本日の新規予約（トップカードより上のsummary strip） ---------- */
+.daily-summary-strip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.daily-summary-strip .eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.daily-summary-value {
+  margin: 0 0 4px;
+  font-size: clamp(24px, 4vw, 40px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.daily-summary-helper {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.daily-summary-strip.tone-green { border-color: var(--green); background: var(--green-bg); }
+.daily-summary-strip.tone-green .daily-summary-value { color: var(--green); }
+.daily-summary-strip.tone-blue { border-color: var(--blue); background: var(--blue-bg); }
+.daily-summary-strip.tone-blue .daily-summary-value { color: var(--blue); }
+.daily-summary-strip.tone-amber { border-color: var(--amber); background: var(--amber-bg); }
+.daily-summary-strip.tone-amber .daily-summary-value { color: var(--amber); }
+@media (max-width: 640px) {
+  .daily-summary-strip { flex-direction: column; }
+}
+
 /* ---------- Command center (Bento grid) ---------- */
 .command-center {
   display: grid;

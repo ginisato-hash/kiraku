@@ -30,6 +30,13 @@ PII_KEYS = {
 
 CANCEL_CANDIDATE_KEYS = ["status", "subStatus", "statusCode", "cancelTime"]
 
+# 「本日の新規予約」判定用の作成日時/更新日時/ステータスfield探索トークン（推測で決め打ちしない。
+# 実payloadのキー一覧(all_keys)に対してトークン一致するものだけをcandidateとして出す）。
+CREATED_AT_TOKENS = ["created", "bookingtime", "booktime", "bookedat", "bookdate",
+                     "datecreated", "firstcreated", "entered"]
+MODIFIED_AT_TOKENS = ["modified", "updated", "lastchanged"]
+STATUS_TOKENS = ["status"]
+
 # coupon/discount系（直割引。売上加算しない）
 COUPON_TOKENS = ["coupon", "voucher", "discount", "promotion", "promo", "campaign",
                 "クーポン", "割引"]
@@ -80,6 +87,11 @@ def _load_bookings(month: str = None) -> List[dict]:
         except (OSError, json.JSONDecodeError):
             continue
     return out
+
+
+def _find_candidate_keys(all_keys: set, tokens: List[str]) -> List[str]:
+    """実payloadのキー一覧からトークン一致するもののみ返す（推測で決め打ちしない）。"""
+    return sorted(k for k in all_keys if "." not in k and any(t in k.lower() for t in tokens))
 
 
 def _classify_hits(bookings: List[dict], tokens: List[str]):
@@ -147,6 +159,18 @@ def build_probe(month: str = None) -> Dict:
 
     samples = [_redact_sample(b) for b in bookings[:3]]
 
+    # 「本日の新規予約」判定用field候補（実キー一覧のみから抽出。無ければ空リスト＝判定不可扱い）
+    created_at_candidates = _find_candidate_keys(all_keys, CREATED_AT_TOKENS)
+    modified_at_candidates = _find_candidate_keys(all_keys, MODIFIED_AT_TOKENS)
+    status_candidates = _find_candidate_keys(all_keys, STATUS_TOKENS)
+    selected_created_at = "bookingTime" if "bookingTime" in created_at_candidates else (
+        created_at_candidates[0] if created_at_candidates else None)
+    selected_modified_at = "modifiedTime" if "modifiedTime" in modified_at_candidates else (
+        modified_at_candidates[0] if modified_at_candidates else None)
+    created_at_sample_values = sorted({
+        b.get(selected_created_at) for b in bookings[:5] if selected_created_at and b.get(selected_created_at)
+    }) if selected_created_at else []
+
     point_status = ("point_already_included_in_price"
                     if point_in_charge == 0 and point_in_payment > 0
                     else "point_added_from_invoice_items" if point_in_charge > 0
@@ -171,6 +195,12 @@ def build_probe(month: str = None) -> Dict:
            "将来type=chargeにpoint起因の追加行が見つかった場合のみ自動加算する。"
            if point_status == "point_already_included_in_price" else ""),
         "subStatus/statusCodeは全件で固定値のみが観測され、キャンセル判定には有用でない。",
+        (f"[本日の新規予約 判定用] 予約作成日時のfield候補: {created_at_candidates or '見つからず'}。"
+         + (f"実データでbookingTimeがUTC ISO8601形式(例: {created_at_sample_values[0] if created_at_sample_values else ''})"
+            "で存在することを確認したため booking_created_at として採用する。"
+            if selected_created_at else
+            "実payloadに該当fieldが見つからないため、本日の新規予約判定はできない"
+            "(today_new_booking_logic_status=created_at_field_missing)。")),
     ]
 
     return {
@@ -195,6 +225,10 @@ def build_probe(month: str = None) -> Dict:
             "payment_items": ["invoiceItems (type=payment)"],
             "room_price": ["price"],
             "total_price": ["price"],
+            # --- 「本日の新規予約」判定用（Phase 0） ---
+            "booking_created_at": created_at_candidates,
+            "booking_modified_at": modified_at_candidates,
+            "booking_status": status_candidates,
         },
         "selected_fields": {
             "cancel_status": "status",
@@ -202,7 +236,11 @@ def build_probe(month: str = None) -> Dict:
                              "point_already_included_in_price)"),
             "point_invoice_items": "invoiceItems (type=payment, description='point')",
             "coupon_discount_amount": "invoiceItems[].lineTotal (type=payment, description='coupon')",
+            # --- 「本日の新規予約」判定用（Phase 0。実データで確認: bookingTime=UTC ISO8601） ---
+            "booking_created_at": selected_created_at,
+            "booking_modified_at": selected_modified_at,
         },
+        "booking_created_at_sample_values": created_at_sample_values,
         "classification": {
             "coupon": "direct_discount_not_revenue",
             "point": "revenue_addition_candidate",

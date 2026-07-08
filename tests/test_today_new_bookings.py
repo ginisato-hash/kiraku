@@ -1,0 +1,176 @@
+"""「本日の新規予約」件数・金額の計算テスト（Beds24 bookingTime基準、JST判定）。"""
+import json
+from datetime import date
+
+from yuge_finance import db, monthly
+from yuge_finance.accounting import beds24_revenue_logic as brl
+from yuge_finance.api.beds24_client import normalize_booking
+from yuge_finance.normalize.schema import BookingRecord
+from yuge_finance.reports import bi_export
+
+EXCLUDE = ["cancelled", "canceled", "black"]
+
+
+def _booking(bid, checkin, checkout=None, gross=10000, status="confirmed",
+            created_at_raw="", raw_json_path=""):
+    return BookingRecord(
+        booking_id=bid, checkin_date=checkin, checkout_date=checkout or checkin,
+        gross_revenue=gross, status=status, created_at_raw=created_at_raw,
+        raw_json_path=raw_json_path,
+    ).finalize()
+
+
+# ---------------- created date extraction ----------------
+def test_normalize_booking_extracts_booking_time_as_created_at_raw():
+    raw = {"id": "1", "bookingTime": "2026-07-08T12:01:31Z", "arrival": "2026-07-10",
+          "departure": "2026-07-11", "price": 10000, "status": "confirmed"}
+    rec = normalize_booking(raw)
+    assert rec.created_at_raw == "2026-07-08T12:01:31Z"
+
+
+def test_created_date_jst_converts_utc_to_jst_correctly():
+    # 2026-07-08T16:00:00Z(UTC) = 2026-07-09 01:00 JST -> 日付は07-09に繰り上がる
+    assert brl._created_date_jst("2026-07-08T16:00:00Z") == date(2026, 7, 9)
+    assert brl._created_date_jst("2026-07-08T10:00:00Z") == date(2026, 7, 8)
+
+
+def test_created_date_jst_returns_none_when_missing_or_unparseable():
+    assert brl._created_date_jst("") is None
+    assert brl._created_date_jst(None) is None
+    assert brl._created_date_jst("not-a-date") is None
+
+
+def test_logic_status_is_field_missing_when_no_booking_has_created_at():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11", created_at_raw="")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_logic_status"] == "created_at_field_missing"
+    assert result["today_new_booking_count"] == 0
+
+
+# ---------------- today new booking count ----------------
+def test_booking_created_today_is_counted():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11",
+                         created_at_raw="2026-07-08T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 1
+    assert result["today_new_booking_logic_status"] == "ok"
+
+
+def test_booking_created_yesterday_is_not_counted():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11",
+                         created_at_raw="2026-07-07T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 0
+
+
+def test_booking_created_in_future_is_not_counted():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11",
+                         created_at_raw="2026-07-09T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 0
+
+
+def test_cancelled_booking_excluded_from_count():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11", status="cancelled",
+                         created_at_raw="2026-06-01T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 0
+
+
+def test_same_day_created_and_cancelled_goes_to_cancelled_excluded():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11", gross=15000, status="cancelled",
+                         created_at_raw="2026-07-08T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 0
+    assert result["today_new_booking_cancelled_count"] == 1
+    assert result["today_new_booking_cancelled_revenue_excluded"] == 15000
+    assert result["today_new_booking_revenue"] == -15000  # gross(0) + point(0) - excluded(15000)
+
+
+# ---------------- month allocation ----------------
+def test_booking_not_overlapping_target_month_is_excluded():
+    bookings = [_booking("1", "2026-09-01", "2026-09-02",
+                         created_at_raw="2026-07-08T03:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 0
+
+
+def test_cross_month_booking_counted_in_both_months():
+    bookings = [_booking("1", "2026-08-30", "2026-09-02", gross=90000,
+                         created_at_raw="2026-07-08T03:00:00Z")]
+    aug = brl.calculate_today_new_bookings_for_month(bookings, "2026-08", date(2026, 7, 8), EXCLUDE)
+    sep = brl.calculate_today_new_bookings_for_month(bookings, "2026-09", date(2026, 7, 8), EXCLUDE)
+    assert aug["today_new_booking_count"] == 1
+    assert sep["today_new_booking_count"] == 1
+
+
+def test_cross_month_revenue_prorated_by_nights():
+    """90,000円・2026-08-30〜09-02(3泊、8月2泊/9月1泊)は 60,000/30,000 に按分される。"""
+    bookings = [_booking("1", "2026-08-30", "2026-09-02", gross=90000,
+                         created_at_raw="2026-07-08T03:00:00Z")]
+    aug = brl.calculate_today_new_bookings_for_month(bookings, "2026-08", date(2026, 7, 8), EXCLUDE)
+    sep = brl.calculate_today_new_bookings_for_month(bookings, "2026-09", date(2026, 7, 8), EXCLUDE)
+    assert aug["today_new_booking_gross_stay_revenue"] == 60000
+    assert aug["today_new_booking_revenue"] == 60000
+    assert sep["today_new_booking_gross_stay_revenue"] == 30000
+    assert sep["today_new_booking_revenue"] == 30000
+
+
+def test_multiple_bookings_aggregate_count_and_revenue():
+    bookings = [
+        _booking("1", "2026-07-10", "2026-07-11", gross=20000, created_at_raw="2026-07-08T01:00:00Z"),
+        _booking("2", "2026-07-15", "2026-07-16", gross=30000, created_at_raw="2026-07-08T02:00:00Z"),
+        _booking("3", "2026-07-20", "2026-07-21", gross=40000, created_at_raw="2026-07-01T02:00:00Z"),
+    ]
+    result = brl.calculate_today_new_bookings_for_month(bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 2
+    assert result["today_new_booking_revenue"] == 50000
+
+
+# ---------------- snapshot integration ----------------
+def test_today_new_booking_fields_present_in_bi_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(brl, "jst_today", lambda: date(2026, 7, 8))
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=20000,
+                created_at_raw="2026-07-08T01:00:00Z"),
+    ])
+    ctx = monthly.assemble("2026-07", conn)
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap["today_new_booking_count"] == 1
+    assert snap["today_new_booking_revenue"] == 20000
+    assert snap["today_new_booking_logic_status"] == "ok"
+    conn.close()
+
+
+def test_today_new_booking_prorates_across_months_in_snapshot(tmp_path, monkeypatch):
+    """月をまたぐ予約が両方の月別snapshotに按分計上される。"""
+    monkeypatch.setattr(brl, "jst_today", lambda: date(2026, 7, 8))
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-08-30", "2026-09-02", gross=90000,
+                created_at_raw="2026-07-08T01:00:00Z"),
+    ])
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+
+    ctx_aug = monthly.assemble("2026-08", conn)
+    bi_export.write_all("2026-08", ctx_aug, checks=[], wb_checks=[], severity=sev,
+                        out_dir=tmp_path / "aug")
+    snap_aug = json.loads((tmp_path / "aug" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap_aug["today_new_booking_revenue"] == 60000
+
+    ctx_sep = monthly.assemble("2026-09", conn)
+    bi_export.write_all("2026-09", ctx_sep, checks=[], wb_checks=[], severity=sev,
+                        out_dir=tmp_path / "sep")
+    snap_sep = json.loads((tmp_path / "sep" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert snap_sep["today_new_booking_revenue"] == 30000
+    conn.close()

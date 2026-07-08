@@ -269,6 +269,18 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
                        month_ctxs[0] if month_ctxs else {})
         rr_cur = cur_ctx.get("revenue_recon", {})
         month_snapshots = {m: _month_snapshot_paths(m) for m in available_months}
+        today_new_by_month = {
+            c["month"]: {
+                "count": c.get("today_new_bookings", {}).get("today_new_booking_count"),
+                "revenue": c.get("today_new_bookings", {}).get("today_new_booking_revenue"),
+            }
+            for c in month_ctxs if c["month"] in available_months
+        }
+        today_new_summary = {
+            "calculated_at_jst": jst_str(),
+            "date_jst": jst_now().date().isoformat(),
+            "by_month": today_new_by_month,
+        }
         for name in ("current", "latest"):
             _atomic_write_json(_bi_dir(name) / "bi_refresh_status.json", status)
             # publish-bi-r2 が data/output/latest/bi/manifest.json をそのまま読めるように、
@@ -286,6 +298,7 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
                 "months_with_any_booking": booking_months["months_with_any_booking"],
                 "months_with_active_booking": booking_months["months_with_active_booking"],
                 "month_snapshots": month_snapshots,
+                "today_new_booking_summary": today_new_summary,
             })
 
     if own:

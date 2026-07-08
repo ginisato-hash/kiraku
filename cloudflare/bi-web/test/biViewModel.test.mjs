@@ -338,4 +338,71 @@ await check("existing pace/finance/bank sections remain intact with month option
   assert.ok(JSON.stringify(bankSection.rows).includes("¥3,052,421"));
 });
 
+// ---------------- 本日の新規予約 summary strip ----------------
+await check("dailyNewBookings is built with count/revenue formatted", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot,
+    today_new_booking_count: 3,
+    today_new_booking_revenue: 84000,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vm.dailyNewBookings.label, "本日の新規予約");
+  assert.equal(vm.dailyNewBookings.count, "3件");
+  assert.equal(vm.dailyNewBookings.revenue, "¥84,000");
+  assert.equal(vm.dailyNewBookings.targetMonthLabel, "2026年8月宿泊分");
+});
+
+await check("dailyNewBookings tone is green when count > 0", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths);
+  assert.equal(vm.dailyNewBookings.tone, "green");
+});
+
+await check("dailyNewBookings tone is neutral when count = 0", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 0, today_new_booking_revenue: 0,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths);
+  assert.equal(vm.dailyNewBookings.tone, "neutral");
+  assert.ok(vm.dailyNewBookings.helper.includes("まだありません"));
+});
+
+await check("dailyNewBookings tone is amber and shows 判定不可 when logic status is field-missing", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_logic_status: "created_at_field_missing",
+  }, manifestWithMonths);
+  assert.equal(vm.dailyNewBookings.tone, "amber");
+  assert.equal(vm.dailyNewBookings.count, "判定不可");
+  assert.ok(vm.dailyNewBookings.helper.includes("作成日時"));
+});
+
+await check("dailyNewBookings falls back to amber/判定不可 when snapshot has no logic status at all", async () => {
+  const vm = buildBiViewModel(baseSnapshot, manifestWithMonths);
+  assert.equal(vm.dailyNewBookings.tone, "amber");
+});
+
+await check("dailyNewBookings does not affect top card count (still 7)", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 3, today_new_booking_revenue: 84000,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vm.primaryCards.length, 7);
+});
+
+await check("dailyNewBookings switches value when selectedMonth/snapshot changes", async () => {
+  const vmJuly = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
+  const vmAugust = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 3, today_new_booking_revenue: 84000,
+    today_new_booking_logic_status: "ok",
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vmJuly.dailyNewBookings.count, "1件");
+  assert.equal(vmAugust.dailyNewBookings.count, "3件");
+  assert.notEqual(vmJuly.dailyNewBookings.targetMonthLabel, vmAugust.dailyNewBookings.targetMonthLabel);
+});
+
 console.log(`\n${passed} biViewModel checks passed`);

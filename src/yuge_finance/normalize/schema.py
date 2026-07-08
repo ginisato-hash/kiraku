@@ -161,6 +161,9 @@ class BookingRecord:
     payment_status: str = ""
     invoice_status: str = ""
     raw_json_path: str = ""
+    # Beds24 raw payloadの予約作成日時（実field名はbookingTime。UTC ISO8601、例: 2026-07-07T12:01:31Z）。
+    # 「本日の新規予約」判定はJST変換してから行う（beds24_revenue_logic側）。
+    created_at_raw: str = ""
     import_hash: str = ""
 
     def finalize(self) -> "BookingRecord":

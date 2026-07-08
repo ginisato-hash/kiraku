@@ -78,6 +78,9 @@ def normalize_booking(raw: dict, property_name_default: str = "喜らく") -> Bo
         status=str(_first(raw, "status", default="")).lower(),
         payment_status=str(_first(raw, "payment_status", "paymentStatus", default="")),
         invoice_status=str(_first(raw, "invoice_status", "invoiceStatus", default="")),
+        # 予約作成日時。実payload確認済み(Phase 0): bookingTime (UTC ISO8601)。
+        created_at_raw=str(_first(raw, "bookingTime", "createdTime", "createdAt", "created",
+                                  default="") or ""),
     )
     return rec.finalize()
 

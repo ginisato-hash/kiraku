@@ -4,7 +4,7 @@
 import { buildBiViewModel } from "./biViewModel.js";
 import {
   renderCommandCenter, renderInsightBanner, renderStatusChips, renderNotes,
-  renderDetails, renderHeader, renderErrorState, renderSkeleton,
+  renderDetails, renderHeader, renderErrorState, renderSkeleton, renderDailyNewBookings,
 } from "./components.js";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -67,6 +67,7 @@ function showSkeleton() {
 }
 
 function showFullError() {
+  document.getElementById("daily-summary-section").innerHTML = "";
   document.getElementById("command-center").innerHTML = renderErrorState();
   document.getElementById("pace-summary").innerHTML = "";
   document.getElementById("status-row").innerHTML = "";
@@ -106,6 +107,7 @@ function render(vm) {
   document.getElementById("header-right").innerHTML = header.monthSelectorHtml + header.pillHtml;
   attachMonthSelectListener();
 
+  document.getElementById("daily-summary-section").innerHTML = renderDailyNewBookings(vm.dailyNewBookings);
   document.getElementById("command-center").innerHTML = renderCommandCenter(vm.primaryCards);
   document.getElementById("pace-summary").innerHTML = renderInsightBanner(vm.paceComment);
   document.getElementById("status-row").innerHTML = renderStatusChips(vm.statusChips);

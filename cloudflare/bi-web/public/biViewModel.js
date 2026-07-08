@@ -395,6 +395,39 @@ function defaultCurrentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// トップカード群より上のsummary strip。「本日の新規予約」件数・金額（選択中対象月・宿泊日ベース）。
+function buildDailyNewBookings(s, selectedMonth) {
+  const label = "本日の新規予約";
+  const targetMonthLabel = selectedMonth ? `${monthLabel(selectedMonth)}宿泊分` : DASH;
+  const status = s.today_new_booking_logic_status;
+
+  if (!status || status === "created_at_field_missing") {
+    return {
+      label, count: "判定不可", revenue: "",
+      helper: "Beds24の予約作成日時fieldを確認できません",
+      tone: "amber", targetMonthLabel, status: status || "created_at_field_missing",
+    };
+  }
+
+  const count = s.today_new_booking_count;
+  const countText = isNil(count) ? DASH : `${Number(count).toLocaleString("ja-JP")}件`;
+  const revenueText = yen(s.today_new_booking_revenue);
+
+  if (!count) {
+    return {
+      label, count: countText, revenue: revenueText,
+      helper: "本日、選択月の新規予約はまだありません",
+      tone: "neutral", targetMonthLabel, status,
+    };
+  }
+
+  return {
+    label, count: countText, revenue: revenueText,
+    helper: "JST今日作成された予約のみ",
+    tone: "green", targetMonthLabel, status,
+  };
+}
+
 export function buildBiViewModel(snapshot, manifest, validation, exception, options) {
   const s = snapshot || {};
   const opts = options || {};
@@ -428,6 +461,7 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
                    tone: s.revenue_data_status === "会計確定" ? "green" : "blue" },
     },
     primaryCards: buildPrimaryCards(s, achievement, pace),
+    dailyNewBookings: buildDailyNewBookings(s, selectedMonth),
     paceComment: buildPaceComment(achievement, pace),
     statusChips: buildStatusChips(s),
     notes,

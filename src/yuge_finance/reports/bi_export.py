@@ -321,6 +321,8 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
             c["status"] == "critical" for c in ctx.get("opening_critical", [])),
         # === 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）===
         **ctx.get("bank_actual_bi", {}),
+        # === 本日の新規予約（BI専用サマリ。仕訳・PL/BS/CFには一切反映しない）===
+        **ctx.get("today_new_bookings", {}),
     }
     (bi_dir / "bi_snapshot.json").write_text(
         json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

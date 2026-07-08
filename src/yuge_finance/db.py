@@ -48,7 +48,22 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             constraint = " UNIQUE" if f.name == key else ""
             cols.append(f'"{f.name}" {ctype}{constraint}')
         conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" ({", ".join(cols)})')
+        _migrate_new_columns(conn, table, cls)
     conn.commit()
+
+
+def _migrate_new_columns(conn: sqlite3.Connection, table: str, cls: Type) -> None:
+    """既存テーブルにdataclassの新しいfieldが無ければ ALTER TABLE ADD COLUMN する。
+
+    dataclassへ列を追加してもDB再作成/手動移行なしで既存DBファイルを使い続けられるようにする
+    （UNIQUE制約はADD COLUMNでは付与できないため、新規追加列には付けない）。
+    """
+    existing = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+    for f in fields(cls):
+        if f.name in existing:
+            continue
+        ctype = _coltype(f.default if f.default is not None else "")
+        conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{f.name}" {ctype}')
 
 
 def upsert(conn: sqlite3.Connection, table: str, records: Iterable) -> dict:

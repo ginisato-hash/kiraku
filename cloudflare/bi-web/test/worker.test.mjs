@@ -54,12 +54,13 @@ await check("unknown path -> ASSETS fallback", async () => {
 });
 
 // ---------------- 月別対応（/api/months, /api/snapshot?month=, /data/months/...） ----------------
-function makeMonthEnv() {
+function makeMonthEnv(manifestExtra) {
   const manifest = {
     default_month: "2026-07",
     available_months: ["2026-07", "2026-08"],
     months_with_any_booking: ["2026-07", "2026-08"],
     months_with_active_booking: ["2026-07", "2026-08"],
+    ...manifestExtra,
   };
   const store = {
     "latest/manifest.json": JSON.stringify(manifest),
@@ -84,6 +85,7 @@ await check("/api/months returns month lists from manifest", async () => {
     available_months: ["2026-07", "2026-08"],
     months_with_any_booking: ["2026-07", "2026-08"],
     months_with_active_booking: ["2026-07", "2026-08"],
+    today_new_booking_summary: null,
   });
 });
 
@@ -92,6 +94,16 @@ await check("/api/months 404s when manifest missing", async () => {
     BI_DATA: { get: async () => null } };
   const r = await worker.fetch(new Request("https://x/api/months"), env);
   assert.equal(r.status, 404);
+});
+
+await check("/api/months includes today_new_booking_summary when present in manifest", async () => {
+  const env = makeMonthEnv({
+    today_new_booking_summary: { calculated_at_jst: "x", date_jst: "2026-07-08",
+      by_month: { "2026-07": { count: 1, revenue: 12000 } } },
+  });
+  const r = await worker.fetch(new Request("https://x/api/months"), env);
+  const j = await r.json();
+  assert.deepEqual(j.today_new_booking_summary.by_month["2026-07"], { count: 1, revenue: 12000 });
 });
 
 await check("/api/snapshot?month=2026-07 reads latest/months/2026-07/bi_snapshot.json", async () => {

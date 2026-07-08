@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import json
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..normalize.schema import BookingRecord
 
 REVENUE_LOGIC_VERSION = "beds24_revenue_v3"
+JST = timezone(timedelta(hours=9))
 
 CANCEL_TOKENS = ("cancelled", "canceled", "キャンセル")
 
@@ -225,4 +226,117 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
         "beds24_revenue_logic_status": logic_status,
         "beds24_revenue_logic_note": note,
         "beds24_cancelled_booking_count": cancelled_count,
+    }
+
+
+def jst_today() -> date:
+    return datetime.now(timezone.utc).astimezone(JST).date()
+
+
+def _created_date_jst(created_at_raw: str) -> Optional[date]:
+    """Beds24 bookingTime(UTC ISO8601, 例: 2026-07-07T12:01:31Z) をJST日付へ変換する。"""
+    if not created_at_raw:
+        return None
+    s = str(created_at_raw).strip()
+    try:
+        if s.endswith("Z"):
+            dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        else:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(JST).date()
+    except ValueError:
+        return None
+
+
+def _booking_overlaps_month(checkin: str, checkout: str, month: str) -> bool:
+    """予約の宿泊期間[checkin, checkout)がmonth(YYYY-MM)に1泊以上かかるか。"""
+    if not checkin:
+        return False
+    if not checkout or checkout <= checkin:
+        return checkin[:7] == month
+    try:
+        ci = date.fromisoformat(checkin[:10])
+        co = date.fromisoformat(checkout[:10])
+    except ValueError:
+        return checkin[:7] == month
+    y, m = (int(x) for x in month.split("-"))
+    month_start = date(y, m, 1)
+    month_end_exclusive = date(y, m, monthrange(y, m)[1]) + timedelta(days=1)
+    return ci < month_end_exclusive and co > month_start
+
+
+def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target_month: str,
+                                           today_jst: date, exclude_statuses: List[str]) -> Dict:
+    """選択中の対象月について、JST今日Beds24上で新規作成された予約の件数・金額を計算する。
+
+    - 対象: 宿泊期間が target_month に1泊以上かかるbooking（月またぎは既存の宿泊月按分を再利用）。
+    - count/revenueはbooking単位（既存システムがroom night単位ではなくbooking単位のため）。
+    - 非キャンセルのみをcount/revenueに含める。同日作成・同日キャンセルは除外件数/除外額に計上する。
+    - created_at_raw が無い/解析できないbookingは判定不可として logic_status に反映する
+      （created_at_field_missing。推測で当日扱いにしない）。
+    """
+    relevant = [b for b in bookings if _booking_overlaps_month(b.checkin_date, b.checkout_date, target_month)]
+    raw_json_path = next((b.raw_json_path for b in relevant if b.raw_json_path), None)
+    raw_index = _load_raw_index(raw_json_path)
+
+    count = 0
+    gross_stay_revenue = 0.0
+    point_revenue = 0.0
+    cancelled_revenue_excluded = 0.0
+    cancelled_count = 0
+    sample_ids: List[str] = []
+    any_created_at_present = False
+
+    for b in relevant:
+        created_date = _created_date_jst(b.created_at_raw)
+        if created_date is None:
+            continue
+        any_created_at_present = True
+        if created_date != today_jst:
+            continue
+
+        is_cancelled = b.is_cancelled(exclude_statuses)
+        prorated_gross = _prorate_to_month(b.gross_revenue, b.checkin_date, b.checkout_date, target_month)
+        if is_cancelled:
+            # 同日作成・同日キャンセルのみを除外件数/除外額として計上する（原則除外対象は少ない想定）。
+            cancelled_count += 1
+            cancelled_revenue_excluded += prorated_gross
+            continue
+
+        count += 1
+        gross_stay_revenue += prorated_gross
+        raw = raw_index.get(b.booking_id)
+        if raw:
+            pt = extract_beds24_point_revenue(raw)
+            if pt > 0:
+                point_revenue += _prorate_to_month(pt, b.checkin_date, b.checkout_date, target_month)
+        if len(sample_ids) < 5:
+            sample_ids.append(b.booking_id)
+
+    revenue = gross_stay_revenue + point_revenue - cancelled_revenue_excluded
+
+    if not any_created_at_present:
+        logic_status = "created_at_field_missing"
+        note = ("Beds24予約に作成日時field(bookingTime)が見つからないため、"
+               "本日の新規予約を判定できません。")
+    else:
+        logic_status = "ok"
+        note = ("JST今日(bookingTime基準)に作成され、対象月に1泊以上かかる非キャンセル予約を集計。"
+               "金額は既存の宿泊月按分ロジックで対象月に按分したgross stay revenue + point加算"
+               "（couponは直割引のため加算しない）。同日作成・同日キャンセルは除外件数/除外額に計上。")
+
+    return {
+        "today_new_booking_count": count,
+        "today_new_booking_revenue": round(revenue),
+        "today_new_booking_gross_stay_revenue": round(gross_stay_revenue),
+        "today_new_booking_point_revenue": round(point_revenue),
+        "today_new_booking_cancelled_revenue_excluded": round(cancelled_revenue_excluded),
+        "today_new_booking_cancelled_count": cancelled_count,
+        "today_new_booking_ids_sample": sample_ids,
+        "today_new_booking_logic_status": logic_status,
+        "today_new_booking_logic_note": note,
+        "today_new_booking_calculated_at_jst": datetime.now(timezone.utc).astimezone(JST).isoformat(
+            timespec="seconds"),
     }

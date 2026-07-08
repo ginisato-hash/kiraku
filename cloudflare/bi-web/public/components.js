@@ -26,6 +26,19 @@ export function renderCommandCenter(primaryCards) {
   return primaryCards.map(renderMetricCard).join("");
 }
 
+// トップカード群より上のsummary strip。「本日の新規予約」件数・金額。
+export function renderDailyNewBookings(summary) {
+  const valueText = summary.revenue ? `${summary.count} / ${summary.revenue}` : summary.count;
+  const helperLine = summary.helper ? `${summary.targetMonthLabel} / ${summary.helper}` : summary.targetMonthLabel;
+  return `<section class="daily-summary-strip tone-${summary.tone}">
+    <div>
+      <p class="eyebrow">${summary.label}</p>
+      <p class="daily-summary-value">${valueText}</p>
+      <p class="daily-summary-helper">${helperLine}</p>
+    </div>
+  </section>`;
+}
+
 export function renderInsightBanner(paceComment) {
   return `<div class="insight-banner tone-${paceComment.tone}">
     <span class="status-dot"></span>

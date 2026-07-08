@@ -2,7 +2,7 @@
 import assert from "node:assert";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
-  renderDetails, renderErrorState, renderMonthSelector, renderHeader,
+  renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
 } from "../public/components.js";
 
 let passed = 0;
@@ -85,6 +85,28 @@ await check("renderHeader includes monthSelectorHtml alongside pillHtml", async 
   });
   assert.ok(header.monthSelectorHtml.includes("2026年7月"));
   assert.ok(header.pillHtml.includes("速報"));
+});
+
+await check("renderDailyNewBookings returns HTML with count/revenue and tone class", async () => {
+  const html = renderDailyNewBookings({
+    label: "本日の新規予約", count: "3件", revenue: "¥84,000",
+    helper: "JST今日作成された予約のみ", tone: "green", targetMonthLabel: "2026年8月宿泊分",
+  });
+  assert.ok(html.includes("daily-summary-strip"));
+  assert.ok(html.includes("tone-green"));
+  assert.ok(html.includes("本日の新規予約"));
+  assert.ok(html.includes("3件 / ¥84,000"));
+  assert.ok(html.includes("2026年8月宿泊分"));
+});
+
+await check("renderDailyNewBookings shows 判定不可 without a revenue slash", async () => {
+  const html = renderDailyNewBookings({
+    label: "本日の新規予約", count: "判定不可", revenue: "",
+    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber", targetMonthLabel: "2026年8月宿泊分",
+  });
+  assert.ok(html.includes("tone-amber"));
+  assert.ok(html.includes("判定不可"));
+  assert.ok(!html.includes("判定不可 /"));
 });
 
 console.log(`\n${passed} components checks passed`);
