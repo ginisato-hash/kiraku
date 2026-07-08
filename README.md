@@ -199,21 +199,33 @@ rm imports/bank/*.csv imports/cash_receipts/csv/*.csv imports/manual_adjustments
 Beds24速報BIは**会計確定処理と完全に分離**しています。15分ごとの巡回では
 仕訳生成・PL/BS/CF確定・Excel更新は一切行いません（Beds24取得・BIファイル再生成のみ）。
 
+Beds24予約・キャンセル・変更は、Macのlaunchdが15分ごとに以下を実行することで、
+最大15分程度でCloudflare BIへ反映されます（`scripts/refresh_beds24_bi_and_publish_r2.sh`）。
+
+1. `refresh-beds24-bi --auto-months-with-bookings --publish`
+2. `publish-bi-r2`
+
+WorkerはBeds24 APIを直接叩かず、R2上の`latest/*`を読むだけです。
+予約データ更新時に`wrangler deploy`は不要です。Worker本体を変更した場合のみ
+`wrangler deploy`します（本節末尾・12節参照）。
+
 ```bash
-# BIデータ生成のみ（仕訳/Excelは触らない）
-./.venv/bin/yuge-finance refresh-beds24-bi --month current --months 2
+# BIデータ生成のみ（仕訳/Excelは触らない）。予約が1件でもある月を自動抽出する。
+./.venv/bin/yuge-finance refresh-beds24-bi --auto-months-with-bookings
 
 # Cloudflare公開ディレクトリ(cloudflare/bi-web/public/data/)へローカル反映
-./.venv/bin/yuge-finance refresh-beds24-bi --month current --months 2 --publish
+./.venv/bin/yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
 
-# R2(kiraku-bi-data)へ直接アップロード（Worker本体はdeployしない。手動検証用）
+# R2(kiraku-bi-data)へ直接アップロード（Worker本体はdeployしない）
 ./.venv/bin/yuge-finance publish-bi-r2 --dry-run
 ./.venv/bin/yuge-finance publish-bi-r2
+
+# 上記2つをまとめて実行するwrapper（launchdから15分ごとに呼ばれるものと同じ）
+./scripts/refresh_beds24_bi_and_publish_r2.sh
 ```
 
-`--publish-r2` / `--no-publish-r2` を `refresh-beds24-bi` に渡すと同時にR2アップロードできますが、
-**現時点ではlaunchdには自動で組み込んでいません**（手動検証優先）。将来的には
-`refresh-beds24-bi --month current --months 2 --publish --publish-r2` に統一する想定です。
+従来の `--month current --months 2` 形式（明示月数指定）も引き続き使えます
+（`--auto-months-with-bookings` 未指定時の既存互換パス）。
 
 ## 11. Cloudflare Workers + R2 公開
 
@@ -236,9 +248,24 @@ npx wrangler deploy                   # Worker本体を手動デプロイ
 
 ## 12. launchd（15分巡回）
 
-`launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template` を `~/Library/LaunchAgents/` に
-配置し `launchctl bootstrap` します。**現時点では `refresh-beds24-bi --publish` まで**で、
-R2アップロード（`--publish-r2`）は含みません（手動検証が済むまで変更しません）。
+`launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template` を
+`~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist` としてコピーし、
+`launchctl load` します。plist自体はCLIフラグを持たず、
+`scripts/refresh_beds24_bi_and_publish_r2.sh` を15分ごと(`StartInterval=900`)に呼ぶだけです。
+
+```bash
+cp launchd/com.yuge.kiraku.beds24-bi-refresh.plist.template \
+   ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
+launchctl unload ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist 2>/dev/null || true
+launchctl load  ~/Library/LaunchAgents/com.yuge.kiraku.beds24-bi-refresh.plist
+launchctl start com.yuge.kiraku.beds24-bi-refresh
+```
+
+wrapper scriptが行うのは `refresh-beds24-bi --auto-months-with-bookings --publish` と
+`publish-bi-r2` の2つのみです。**`wrangler deploy` や `close-month` はここには含めません**
+（Worker本体の変更をdeployする場合のみ、11節の手順で手動 `wrangler deploy` してください）。
+ログは `logs/beds24_bi_refresh.out.log` / `.err.log` に出力されます。
+二重起動防止は`refresh-beds24-bi`内のCLI側 FileLock（stale 60分）が担います。
 
 ## 13. GitHub / CI
 

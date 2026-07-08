@@ -15,6 +15,11 @@
 
   二重起動防止は CLI 側 FileLock (logs/beds24_bi_refresh.lock, stale 60分) が担う。
   APIエラー時は既存BIを壊さず非ゼロ終了する。
+
+  実行内容は scripts/refresh_beds24_bi_and_publish_r2.sh に集約する:
+    1) refresh-beds24-bi --auto-months-with-bookings --publish
+       （予約が1件でもある月を自動抽出してBIを再生成。仕訳/PL/BS/CF/Excelは触らない）
+    2) publish-bi-r2（R2 latest/*.json,*.csv へアップロードのみ。Worker本体は再deployしない）
 -->
 <plist version="1.0">
 <dict>
@@ -23,13 +28,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/ginisato/YugeFinance/kiraku-finance-automation/.venv/bin/yuge-finance</string>
-    <string>refresh-beds24-bi</string>
-    <string>--month</string>
-    <string>current</string>
-    <string>--months</string>
-    <string>2</string>
-    <string>--publish</string>
+    <string>/Users/ginisato/YugeFinance/kiraku-finance-automation/scripts/refresh_beds24_bi_and_publish_r2.sh</string>
   </array>
 
   <key>WorkingDirectory</key>

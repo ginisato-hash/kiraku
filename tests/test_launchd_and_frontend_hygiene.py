@@ -1,17 +1,56 @@
-"""launchdは今回変更しない／画面のprimary描画がdeprecated fieldを直接参照しないことのgrepチェック。"""
+"""launchd 15分自動更新（refresh-beds24-bi + publish-bi-r2）／
+画面のprimary描画がdeprecated fieldを直接参照しないことのgrepチェック。"""
+import os
 from pathlib import Path
 
 from yuge_finance import config
 
 DEPRECATED_FIELDS = ["breakeven_revenue_current_structure", "revenue_reconciliation_difference"]
 
+WRAPPER_SCRIPT = config.ROOT / "scripts" / "refresh_beds24_bi_and_publish_r2.sh"
+LAUNCHD_PLIST = config.ROOT / "launchd" / "com.yuge.kiraku.beds24-bi-refresh.plist.template"
 
-def test_launchd_plist_does_not_reference_publish_r2():
-    """--publish-r2 はまだlaunchdに組み込まない（Phase 9）。"""
-    plist = config.ROOT / "launchd" / "com.yuge.kiraku.beds24-bi-refresh.plist.template"
-    text = plist.read_text(encoding="utf-8")
-    assert "--publish-r2" not in text
-    assert "--publish" in text  # 既存の --publish は維持
+
+def test_launchd_plist_calls_wrapper_script_not_raw_cli_flags():
+    """15分更新の実処理は wrapper script に集約する（plistは直接CLIフラグを持たない）。"""
+    text = LAUNCHD_PLIST.read_text(encoding="utf-8")
+    assert "scripts/refresh_beds24_bi_and_publish_r2.sh" in text
+    assert "--publish-r2" not in text  # フラグとしては使わない（wrapper内でpublish-bi-r2を別実行する）
+
+
+def test_launchd_plist_never_calls_wrangler_deploy_or_close_month():
+    text = LAUNCHD_PLIST.read_text(encoding="utf-8")
+    assert "wrangler deploy" not in text
+    assert "close-month" not in text
+
+
+def test_launchd_plist_start_interval_is_900_seconds():
+    text = LAUNCHD_PLIST.read_text(encoding="utf-8")
+    assert "<integer>900</integer>" in text
+
+
+def test_launchd_plist_uses_official_path_not_documents():
+    text = LAUNCHD_PLIST.read_text(encoding="utf-8")
+    assert "/Users/ginisato/YugeFinance/kiraku-finance-automation" in text
+    assert "Documents/YugeFinance" not in text
+
+
+def test_refresh_wrapper_script_exists_and_is_executable():
+    assert WRAPPER_SCRIPT.exists()
+    assert os.access(WRAPPER_SCRIPT, os.X_OK)
+
+
+def test_refresh_wrapper_script_runs_auto_discovery_refresh_and_r2_publish():
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    assert "refresh-beds24-bi --auto-months-with-bookings --publish" in text
+    assert "publish-bi-r2" in text
+
+
+def test_refresh_wrapper_script_never_deploys_or_touches_ledger():
+    """15分更新は仕訳/PL/BS/CF/Excelを触らない。wrangler deploy・close-monthも含めない。"""
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    for forbidden in ("wrangler deploy", "close-month", "build-ledger", "export-excel"):
+        assert forbidden not in text
 
 
 def test_app_js_does_not_reference_deprecated_fields_directly():
