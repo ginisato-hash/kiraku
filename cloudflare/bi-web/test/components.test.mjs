@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
   renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
+  renderDailyNewBookingDetails,
 } from "../public/components.js";
 
 let passed = 0;
@@ -107,6 +108,58 @@ await check("renderDailyNewBookings shows 判定不可 without a revenue slash",
   assert.ok(html.includes("tone-amber"));
   assert.ok(html.includes("判定不可"));
   assert.ok(!html.includes("判定不可 /"));
+});
+
+// ---------------- 本日新規予約 詳細drilldown ----------------
+const sampleDetails = [
+  { bookingId: "1", checkin: "2026-08-10", checkout: "2026-08-12", guestName: "Yamada Taro",
+    revenue: "¥24,000", roomName: "201", createdAtJst: "2026-08-10T09:00:00+09:00" },
+];
+
+await check("renderDailyNewBookings renders as <details> with 詳細を見る when hasDetails", async () => {
+  const html = renderDailyNewBookings({
+    label: "本日の新規予約", count: "1件", revenue: "¥24,000",
+    helper: "JST今日作成された予約のみ", tone: "green", targetMonthLabel: "2026年8月宿泊分",
+    details: sampleDetails, hasDetails: true, detailsTitle: "本日新規予約一覧", detailsCta: "詳細を見る",
+  });
+  assert.ok(html.startsWith("<details"));
+  assert.ok(html.includes("<summary"));
+  assert.ok(html.includes("is-clickable"));
+  assert.ok(html.includes("詳細を見る"));
+  assert.ok(html.includes("本日新規予約一覧"));
+});
+
+await check("daily booking detail table shows checkin/checkout/guest name/amount", async () => {
+  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("2026-08-10"));
+  assert.ok(html.includes("2026-08-12"));
+  assert.ok(html.includes("Yamada Taro"));
+  assert.ok(html.includes("¥24,000"));
+  assert.ok(html.includes("チェックイン"));
+  assert.ok(html.includes("チェックアウト"));
+  assert.ok(html.includes("宿泊者名"));
+});
+
+await check("renderDailyNewBookings does not render a booking list when hasDetails is false (0件)", async () => {
+  const html = renderDailyNewBookings({
+    label: "本日の新規予約", count: "0件", revenue: "¥0",
+    helper: "本日、選択月の新規予約はまだありません", tone: "neutral", targetMonthLabel: "2026年8月宿泊分",
+    details: [], hasDetails: false,
+  });
+  assert.ok(!html.includes("<details"));
+  assert.ok(!html.includes("daily-booking-list"));
+  assert.ok(html.includes("まだありません"));
+});
+
+await check("renderDailyNewBookings shows unavailable note when details cannot be determined", async () => {
+  const html = renderDailyNewBookings({
+    label: "本日の新規予約", count: "判定不可", revenue: "",
+    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber", targetMonthLabel: "2026年8月宿泊分",
+    details: [], hasDetails: false,
+    detailsUnavailableNote: "予約作成日時を確認できないため、詳細を表示できません",
+  });
+  assert.ok(!html.includes("<details"));
+  assert.ok(html.includes("予約作成日時を確認できないため、詳細を表示できません"));
 });
 
 console.log(`\n${passed} components checks passed`);

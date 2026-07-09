@@ -12,11 +12,11 @@ EXCLUDE = ["cancelled", "canceled", "black"]
 
 
 def _booking(bid, checkin, checkout=None, gross=10000, status="confirmed",
-            created_at_raw="", raw_json_path=""):
+            created_at_raw="", raw_json_path="", guest_name="", room_name=""):
     return BookingRecord(
         booking_id=bid, checkin_date=checkin, checkout_date=checkout or checkin,
         gross_revenue=gross, status=status, created_at_raw=created_at_raw,
-        raw_json_path=raw_json_path,
+        raw_json_path=raw_json_path, guest_name=guest_name, room_name=room_name,
     ).finalize()
 
 
@@ -247,4 +247,157 @@ def test_day_rollover_resets_today_new_booking_count(tmp_path):
         db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 9), EXCLUDE)
     assert result_day2["today_new_booking_count"] == 1
     assert result_day2["today_new_booking_ids_sample"] == ["B"]
+    conn.close()
+
+
+# ---------------- 本日新規予約 詳細一覧 (today_new_booking_details) ----------------
+def test_details_include_checkin_checkout_guest_name_and_revenue(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-12", gross=24000, created_at_raw="2026-07-08T01:00:00Z",
+                guest_name="Yamada Taro", room_name="201"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert len(result["today_new_booking_details"]) == 1
+    d = result["today_new_booking_details"][0]
+    assert d["checkin"] == "2026-07-10"
+    assert d["checkout"] == "2026-07-12"
+    assert d["guest_name"] == "Yamada Taro"
+    assert d["revenue_for_target_month"] == 24000
+    assert d["room_name"] == "201"
+    assert d["total_nights"] == 2
+    assert d["target_month_nights"] == 2
+    assert d["created_at_jst"] == "2026-07-08T10:00:00+09:00"
+    conn.close()
+
+
+def test_details_missing_guest_name_defaults_to_placeholder(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", created_at_raw="2026-07-08T01:00:00Z", guest_name=""),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_details"][0]["guest_name"] == "氏名未取得"
+    conn.close()
+
+
+def test_details_never_contain_pii_keys(tmp_path):
+    """detail dictにはemail/phone/address/message/notes/passport等のキーを一切持たせない。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", created_at_raw="2026-07-08T01:00:00Z",
+                guest_name="Yamada Taro"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail = result["today_new_booking_details"][0]
+    forbidden_keys = {"email", "phone", "address", "message", "notes", "passport",
+                      "invoiceItems", "raw", "raw_json_path", "comments", "firstName", "lastName"}
+    assert forbidden_keys.isdisjoint(detail.keys())
+    conn.close()
+
+
+def test_details_count_matches_today_new_booking_count(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z"),
+        _booking("2", "2026-07-15", "2026-07-16", gross=15000, created_at_raw="2026-07-08T02:00:00Z"),
+        _booking("3", "2026-07-20", "2026-07-21", gross=5000, created_at_raw="2026-07-07T02:00:00Z"),  # 前日作成
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == len(result["today_new_booking_details"]) == 2
+    conn.close()
+
+
+def test_details_revenue_sum_matches_today_new_booking_revenue(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z"),
+        _booking("2", "2026-07-15", "2026-07-16", gross=15000, created_at_raw="2026-07-08T02:00:00Z"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail_sum = sum(d["revenue_for_target_month"] for d in result["today_new_booking_details"])
+    assert detail_sum == result["today_new_booking_revenue"] == 25000
+    conn.close()
+
+
+def test_details_prorated_correctly_for_month_crossing_booking(tmp_path):
+    """予約総額90,000、2026-08-30〜2026-09-02(total 3泊: 08=2泊,09=1泊)。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-08-30", "2026-09-02", gross=90000, created_at_raw="2026-07-08T01:00:00Z"),
+    ])
+    bookings = db.load_objects(conn, "beds24_bookings")
+
+    result_aug = brl.calculate_today_new_bookings_for_month(bookings, "2026-08", date(2026, 7, 8), EXCLUDE)
+    d_aug = result_aug["today_new_booking_details"][0]
+    assert d_aug["revenue_for_target_month"] == 60000
+    assert d_aug["target_month_nights"] == 2
+    assert d_aug["total_nights"] == 3
+    assert d_aug["total_booking_revenue"] == 90000
+
+    result_sep = brl.calculate_today_new_bookings_for_month(bookings, "2026-09", date(2026, 7, 8), EXCLUDE)
+    d_sep = result_sep["today_new_booking_details"][0]
+    assert d_sep["revenue_for_target_month"] == 30000
+    assert d_sep["target_month_nights"] == 1
+    conn.close()
+
+
+def test_details_excludes_bookings_not_overlapping_target_month(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-09-10", "2026-09-12", gross=10000, created_at_raw="2026-07-08T01:00:00Z"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_details"] == []
+    assert result["today_new_booking_count"] == 0
+    conn.close()
+
+
+def test_details_excludes_cancelled_bookings(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, status="cancelled",
+                created_at_raw="2026-07-08T01:00:00Z"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_details"] == []
+    assert result["today_new_booking_cancelled_count"] == 1
+
+
+def test_details_excludes_same_day_created_and_cancelled_booking(tmp_path):
+    """同日作成・同日キャンセルはcancelled_countに入るがdetailsには出ない。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, status="confirmed",
+                created_at_raw="2026-07-08T01:00:00Z"),
+        _booking("2", "2026-07-12", "2026-07-13", gross=20000, status="cancelled",
+                created_at_raw="2026-07-08T02:00:00Z"),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_count"] == 1
+    assert len(result["today_new_booking_details"]) == 1
+    assert result["today_new_booking_details"][0]["booking_id"] == "1"
+    assert result["today_new_booking_cancelled_count"] == 1
+
+
+def test_snapshot_includes_today_new_booking_details(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
+                guest_name="Suzuki Hanako"),
+    ])
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    assert "today_new_booking_details" in snap
+    assert snap["today_new_booking_details"][0]["guest_name"] == "Suzuki Hanako"
     conn.close()

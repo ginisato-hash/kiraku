@@ -67,6 +67,37 @@ def has_cancel_signal_fields(raw: dict) -> bool:
     return bool(raw) and ("status" in raw or "cancelTime" in raw)
 
 
+def _total_nights(checkin: str, checkout: str) -> int:
+    """宿泊期間[checkin, checkout)の総泊数。BookingRecord.stay_nightsに依存しない
+    （正規化元で未設定/0のままの場合があるため、日付から直接算出する）。
+    """
+    if not checkin or not checkout:
+        return 0
+    try:
+        ci = date.fromisoformat(checkin[:10])
+        co = date.fromisoformat(checkout[:10])
+    except ValueError:
+        return 0
+    return max((co - ci).days, 0)
+
+
+def _nights_in_month(checkin: str, checkout: str, month: str) -> int:
+    """宿泊期間[checkin, checkout)のうち month(YYYY-MM) に属する泊数。"""
+    if not checkin or not checkout:
+        return 0
+    try:
+        ci = date.fromisoformat(checkin[:10])
+        co = date.fromisoformat(checkout[:10])
+    except ValueError:
+        return 0
+    y, m = (int(x) for x in month.split("-"))
+    month_start = date(y, m, 1)
+    month_end_exclusive = date(y, m, monthrange(y, m)[1]) + timedelta(days=1)
+    overlap_start = max(ci, month_start)
+    overlap_end = min(co, month_end_exclusive)
+    return max((overlap_end - overlap_start).days, 0)
+
+
 def _prorate_to_month(amount: float, checkin: str, checkout: str, month: str) -> float:
     """宿泊月按分。予約の全泊数のうち対象月に属する泊数の割合で按分する。"""
     if amount == 0 or not checkin or not checkout:
@@ -77,12 +108,7 @@ def _prorate_to_month(amount: float, checkin: str, checkout: str, month: str) ->
     except ValueError:
         return amount
     total_nights = max((co - ci).days, 1)
-    y, m = (int(x) for x in month.split("-"))
-    month_start = date(y, m, 1)
-    month_end_exclusive = date(y, m, monthrange(y, m)[1]) + timedelta(days=1)
-    overlap_start = max(ci, month_start)
-    overlap_end = min(co, month_end_exclusive)
-    target_nights = max((overlap_end - overlap_start).days, 0)
+    target_nights = _nights_in_month(checkin, checkout, month)
     if target_nights >= total_nights:
         return amount
     return amount * target_nights / total_nights
@@ -233,8 +259,8 @@ def jst_today() -> date:
     return datetime.now(timezone.utc).astimezone(JST).date()
 
 
-def _created_date_jst(created_at_raw: str) -> Optional[date]:
-    """Beds24 bookingTime(UTC ISO8601, 例: 2026-07-07T12:01:31Z) をJST日付へ変換する。"""
+def _created_datetime_jst(created_at_raw: str) -> Optional[datetime]:
+    """Beds24 bookingTime(UTC ISO8601, 例: 2026-07-07T12:01:31Z) をJST datetimeへ変換する。"""
     if not created_at_raw:
         return None
     s = str(created_at_raw).strip()
@@ -245,9 +271,15 @@ def _created_date_jst(created_at_raw: str) -> Optional[date]:
             dt = datetime.fromisoformat(s)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(JST).date()
+        return dt.astimezone(JST)
     except ValueError:
         return None
+
+
+def _created_date_jst(created_at_raw: str) -> Optional[date]:
+    """Beds24 bookingTime(UTC ISO8601) をJST日付へ変換する。"""
+    dt = _created_datetime_jst(created_at_raw)
+    return dt.date() if dt else None
 
 
 def _booking_overlaps_month(checkin: str, checkout: str, month: str) -> bool:
@@ -287,33 +319,53 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
     cancelled_revenue_excluded = 0.0
     cancelled_count = 0
     sample_ids: List[str] = []
+    details: List[Dict] = []
     any_created_at_present = False
 
     for b in relevant:
-        created_date = _created_date_jst(b.created_at_raw)
-        if created_date is None:
+        created_dt = _created_datetime_jst(b.created_at_raw)
+        if created_dt is None:
             continue
         any_created_at_present = True
-        if created_date != today_jst:
+        if created_dt.date() != today_jst:
             continue
 
         is_cancelled = b.is_cancelled(exclude_statuses)
         prorated_gross = _prorate_to_month(b.gross_revenue, b.checkin_date, b.checkout_date, target_month)
         if is_cancelled:
             # 同日作成・同日キャンセルのみを除外件数/除外額として計上する（原則除外対象は少ない想定）。
+            # detailsには出さない（一覧は非キャンセル予約のみが対象）。
             cancelled_count += 1
             cancelled_revenue_excluded += prorated_gross
             continue
 
         count += 1
         gross_stay_revenue += prorated_gross
+        prorated_point = 0.0
         raw = raw_index.get(b.booking_id)
         if raw:
             pt = extract_beds24_point_revenue(raw)
             if pt > 0:
-                point_revenue += _prorate_to_month(pt, b.checkin_date, b.checkout_date, target_month)
+                prorated_point = _prorate_to_month(pt, b.checkin_date, b.checkout_date, target_month)
+                point_revenue += prorated_point
         if len(sample_ids) < 5:
             sample_ids.append(b.booking_id)
+
+        # 一覧表示用の予約単位詳細。PII(email/phone/address/message等)は含めない。
+        # guest_nameは既存BookingRecord.guest_name(氏名のみ。BedsClient側で既に住所等を除外済み)を使う。
+        details.append({
+            "booking_id": b.booking_id,
+            "checkin": b.checkin_date,
+            "checkout": b.checkout_date,
+            "guest_name": b.guest_name or "氏名未取得",
+            "revenue_for_target_month": round(prorated_gross + prorated_point),
+            "total_booking_revenue": round(b.gross_revenue),
+            "target_month_nights": _nights_in_month(b.checkin_date, b.checkout_date, target_month),
+            "total_nights": _total_nights(b.checkin_date, b.checkout_date),
+            "room_name": b.room_name or None,
+            "status": b.status,
+            "created_at_jst": created_dt.isoformat(timespec="seconds"),
+        })
 
     revenue = gross_stay_revenue + point_revenue - cancelled_revenue_excluded
 
@@ -335,6 +387,7 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
         "today_new_booking_cancelled_revenue_excluded": round(cancelled_revenue_excluded),
         "today_new_booking_cancelled_count": cancelled_count,
         "today_new_booking_ids_sample": sample_ids,
+        "today_new_booking_details": details,
         "today_new_booking_logic_status": logic_status,
         "today_new_booking_logic_note": note,
         "today_new_booking_calculated_at_jst": datetime.now(timezone.utc).astimezone(JST).isoformat(

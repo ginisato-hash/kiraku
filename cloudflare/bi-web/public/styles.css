@@ -212,6 +212,77 @@ body.is-loading .dashboard {
   .daily-summary-strip { flex-direction: column; }
 }
 
+/* 本日新規予約 詳細drilldown（<details>/<summary>で展開。JS状態管理を増やさない） */
+.daily-summary-details {
+  margin-bottom: var(--space-4);
+}
+.daily-summary-details > summary {
+  list-style: none;
+}
+.daily-summary-details > summary::-webkit-details-marker {
+  display: none;
+}
+.daily-summary-strip.is-clickable {
+  cursor: pointer;
+}
+.daily-summary-strip.is-clickable:hover {
+  border-color: var(--blue);
+}
+.daily-summary-cta {
+  align-self: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.daily-summary-unavailable {
+  margin: var(--space-2) 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.daily-booking-list {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+.daily-booking-list h3 {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.daily-booking-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.daily-booking-table th,
+.daily-booking-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 0.82rem;
+}
+.daily-booking-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.daily-booking-table tr:last-child td {
+  border-bottom: none;
+}
+.daily-booking-table td.amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .daily-booking-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
 /* ---------- Command center (Bento grid) ---------- */
 .command-center {
   display: grid;

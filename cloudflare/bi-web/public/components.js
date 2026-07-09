@@ -26,17 +26,51 @@ export function renderCommandCenter(primaryCards) {
   return primaryCards.map(renderMetricCard).join("");
 }
 
+// 本日新規予約一覧テーブル（チェックイン/チェックアウト/宿泊者名/対象月按分金額のみ。PIIは含めない）。
+export function renderDailyNewBookingDetails(summary) {
+  const rows = (summary.details || []).map((d) => `<tr>
+      <td>${d.checkin}</td>
+      <td>${d.checkout}</td>
+      <td>${d.guestName}</td>
+      <td class="amount">${d.revenue}</td>
+    </tr>`).join("");
+  return `<div class="daily-booking-list">
+    <h3>${summary.detailsTitle || "本日新規予約一覧"}</h3>
+    <table class="daily-booking-table">
+      <thead>
+        <tr><th>チェックイン</th><th>チェックアウト</th><th>宿泊者名</th><th>金額</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 // トップカード群より上のsummary strip。「本日の新規予約」件数・金額。
+// hasDetails=trueの場合はクリックで対象予約一覧を展開できる(<details>/<summary>。JS状態管理は増やさない)。
 export function renderDailyNewBookings(summary) {
   const valueText = summary.revenue ? `${summary.count} / ${summary.revenue}` : summary.count;
   const helperLine = summary.helper ? `${summary.targetMonthLabel} / ${summary.helper}` : summary.targetMonthLabel;
-  return `<section class="daily-summary-strip tone-${summary.tone}">
-    <div>
+  const clickableClass = summary.hasDetails ? " is-clickable" : "";
+  const cta = summary.hasDetails
+    ? `<span class="daily-summary-cta">${summary.detailsCta || "詳細を見る"}</span>` : "";
+
+  const stripInner = `<div>
       <p class="eyebrow">${summary.label}</p>
       <p class="daily-summary-value">${valueText}</p>
       <p class="daily-summary-helper">${helperLine}</p>
     </div>
-  </section>`;
+    ${cta}`;
+
+  if (!summary.hasDetails) {
+    const unavailable = summary.detailsUnavailableNote
+      ? `<p class="daily-summary-unavailable">${summary.detailsUnavailableNote}</p>` : "";
+    return `<section class="daily-summary-strip tone-${summary.tone}">${stripInner}</section>${unavailable}`;
+  }
+
+  return `<details class="daily-summary-details">
+    <summary class="daily-summary-strip tone-${summary.tone}${clickableClass}">${stripInner}</summary>
+    ${renderDailyNewBookingDetails(summary)}
+  </details>`;
 }
 
 export function renderInsightBanner(paceComment) {

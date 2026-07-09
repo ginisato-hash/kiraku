@@ -412,29 +412,51 @@ function defaultCurrentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// 本日新規予約1件分の詳細行を表示用に整形する。PII(email/phone/address等)は
+// snapshot側にそもそも入っていないため、ここではchecked-inフィールドのみを扱う。
+function formatBookingDetail(raw) {
+  return {
+    bookingId: raw.booking_id || "",
+    checkin: raw.checkin || DASH,
+    checkout: raw.checkout || DASH,
+    guestName: raw.guest_name || "氏名未取得",
+    revenue: yen(raw.revenue_for_target_month),
+    roomName: raw.room_name || null,
+    createdAtJst: raw.created_at_jst || null,
+  };
+}
+
 // トップカード群より上のsummary strip。「本日の新規予約」件数・金額（選択中対象月・宿泊日ベース）。
+// クリックで対象予約一覧(details)を展開できる。
 function buildDailyNewBookings(s, selectedMonth) {
   const label = "本日の新規予約";
   const targetMonthLabel = selectedMonth ? `${monthLabel(selectedMonth)}宿泊分` : DASH;
   const status = s.today_new_booking_logic_status;
+  const detailsTitle = "本日新規予約一覧";
+  const detailsCta = "詳細を見る";
 
   if (!status || status === "created_at_field_missing") {
     return {
       label, count: "判定不可", revenue: "",
       helper: "Beds24の予約作成日時fieldを確認できません",
       tone: "amber", targetMonthLabel, status: status || "created_at_field_missing",
+      details: [], hasDetails: false, detailsTitle, detailsCta,
+      detailsUnavailableNote: "予約作成日時を確認できないため、詳細を表示できません",
     };
   }
 
   const count = s.today_new_booking_count;
   const countText = isNil(count) ? DASH : `${Number(count).toLocaleString("ja-JP")}件`;
   const revenueText = yen(s.today_new_booking_revenue);
+  const rawDetails = Array.isArray(s.today_new_booking_details) ? s.today_new_booking_details : [];
+  const details = rawDetails.map(formatBookingDetail);
 
   if (!count) {
     return {
       label, count: countText, revenue: revenueText,
       helper: "本日、選択月の新規予約はまだありません",
       tone: "neutral", targetMonthLabel, status,
+      details: [], hasDetails: false, detailsTitle, detailsCta,
     };
   }
 
@@ -442,6 +464,7 @@ function buildDailyNewBookings(s, selectedMonth) {
     label, count: countText, revenue: revenueText,
     helper: "JST今日作成された予約のみ",
     tone: "green", targetMonthLabel, status,
+    details, hasDetails: details.length > 0, detailsTitle, detailsCta,
   };
 }
 
