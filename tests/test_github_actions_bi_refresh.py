@@ -100,3 +100,29 @@ def test_workflow_pins_beds24_property_id_to_kiraku_only():
     """他物件を誤取得しないよう、プロパティIDを明示固定する。"""
     text = _raw_text()
     assert 'BEDS24_PROPERTY_IDS: "330695"' in text
+
+
+def test_workflow_reports_which_secret_is_missing_without_printing_values():
+    """Secret未設定時にどのsecretが欠けているか分かる出力にする（値そのものは出さない）。"""
+    text = _raw_text()
+    assert "::error::$name is missing" in text
+    assert "for name in BEDS24_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN CLOUDFLARE_R2_BUCKET" in text
+    # secret値そのものをechoする行が無いこと（名前のみ報告する設計を保証）
+    assert 'echo "$BEDS24_API_TOKEN"' not in text
+    assert 'echo "$CLOUDFLARE_API_TOKEN"' not in text
+
+
+def test_workflow_installs_node_and_wrangler_for_publish_bi_r2():
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    step_names = [s.get("name") for s in job["steps"]]
+    assert "Set up Node (for wrangler)" in step_names
+    assert "Install Wrangler" in step_names
+
+
+def test_workflow_job_summary_reports_job_status_and_runs_always():
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    summary_step = next(s for s in job["steps"] if s.get("name") == "Write job summary")
+    assert summary_step.get("if") == "always()"
+    assert "job.status" in summary_step["run"]

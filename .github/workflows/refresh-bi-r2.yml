@@ -59,10 +59,19 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
         run: |
-          test -n "$BEDS24_API_TOKEN"
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test -n "$CLOUDFLARE_R2_BUCKET"
+          # secret値そのものは絶対に表示しない。欠けているsecret名だけ報告する。
+          missing=0
+          for name in BEDS24_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN CLOUDFLARE_R2_BUCKET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name is missing. Set it at Settings > Secrets and variables > Actions."
+              missing=1
+            else
+              echo "$name is set"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Refresh BI from Beds24
         env:
@@ -103,6 +112,7 @@ jobs:
         run: |
           echo "## Refresh BI R2" >> "$GITHUB_STEP_SUMMARY"
           echo "- finished_at_utc: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_STEP_SUMMARY"
+          echo "- workflow_status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- public_manifest:" >> "$GITHUB_STEP_SUMMARY"
           curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep -E "generated_at_jst|default_month" >> "$GITHUB_STEP_SUMMARY" || true
           echo "- public_snapshot:" >> "$GITHUB_STEP_SUMMARY"
