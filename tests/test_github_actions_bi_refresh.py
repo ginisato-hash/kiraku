@@ -126,3 +126,55 @@ def test_workflow_job_summary_reports_job_status_and_runs_always():
     summary_step = next(s for s in job["steps"] if s.get("name") == "Write job summary")
     assert summary_step.get("if") == "always()"
     assert "job.status" in summary_step["run"]
+
+
+def test_workflow_has_verify_public_manifest_step():
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    step_names = [s.get("name") for s in job["steps"]]
+    assert "Verify public manifest" in step_names
+
+
+def test_public_manifest_verification_is_non_fatal():
+    """R2 publishが成功していれば、public API側の403等だけでworkflow全体をfailedにしない。"""
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
+    assert verify_step.get("continue-on-error") is True
+
+
+def test_public_manifest_verification_sends_custom_user_agent():
+    """CloudflareがPython urllibの既定UAを弾く事例があるため、User-Agentを明示する。"""
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
+    assert "User-Agent" in verify_step["run"]
+    assert "kiraku-bi-refresh-github-actions" in verify_step["run"]
+
+
+def test_public_manifest_verification_catches_http_error_as_warning():
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
+    assert "urllib.error.HTTPError" in verify_step["run"]
+    assert "::warning::" in verify_step["run"]
+
+
+def test_write_job_summary_does_not_fail_on_public_api_error():
+    """Write job summaryはpublic API失敗(403等)でstep自体が落ちない(|| フォールバックがある)。"""
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    summary_step = next(s for s in job["steps"] if s.get("name") == "Write job summary")
+    run_text = summary_step["run"]
+    assert "User-Agent" in run_text
+    assert run_text.count("|| echo") >= 2  # manifest確認・snapshot確認それぞれにフォールバックがある
+
+
+def test_publish_step_is_the_strict_success_gate():
+    """主検証はpublish-bi-r2自体のexit codeに委ねる(continue-on-errorが付いていない)。"""
+    wf = _load_workflow()
+    job = wf["jobs"]["refresh-bi-r2"]
+    publish_step = next(s for s in job["steps"] if s.get("name") == "Publish BI to R2")
+    assert publish_step.get("continue-on-error") is not True
+    refresh_step = next(s for s in job["steps"] if s.get("name") == "Refresh BI from Beds24")
+    assert refresh_step.get("continue-on-error") is not True
