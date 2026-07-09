@@ -77,6 +77,14 @@ def test_compute_bi_fields_empty_db_reports_not_imported(tmp_path):
     conn.close()
 
 
+def test_compute_bi_fields_always_includes_bank_fields_source_even_without_publish_flag(tmp_path):
+    """bank_fields_sourceはpublish-bi-r2の引き継ぎoption有無に関わらず常にsnapshotへ出る。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    fields = bank_cashflow_report.compute_bi_fields(conn)
+    assert fields["bank_fields_source"] == "not_available"
+    conn.close()
+
+
 def test_compute_bi_fields_after_import_reports_latest_balance(tmp_path):
     conn = db.connect(tmp_path / "t.sqlite")
     _seed(conn)
@@ -85,4 +93,5 @@ def test_compute_bi_fields_after_import_reports_latest_balance(tmp_path):
     assert fields["bank_csv_imported_rows"] == 3
     assert fields["bank_actual_latest_balance"] == 347452.0
     assert fields["bank_actual_latest_balance_date"] == "2026-06-03"
+    assert fields["bank_fields_source"] == "current_import"
     conn.close()

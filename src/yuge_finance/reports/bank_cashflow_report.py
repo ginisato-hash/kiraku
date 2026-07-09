@@ -203,6 +203,9 @@ def compute_bi_fields(conn) -> Dict:
         "bank_classification_review_required_count": 0,
         "bank_fixed_cost_candidate_total": 0, "bank_variable_cost_candidate_total": 0,
         "bank_debt_service_candidate_total": 0,
+        # ローカルに銀行実績データが無い状態。publish-bi-r2 --preserve-bank-fields-from-r2 が
+        # 直近公開snapshotに有効な銀行データを見つけた場合のみ "previous_r2_snapshot" へ上書きされる。
+        "bank_fields_source": "not_available",
     }
     if not txns:
         return empty
@@ -249,4 +252,5 @@ def compute_bi_fields(conn) -> Dict:
         "bank_fixed_cost_candidate_total": fixed_total,
         "bank_variable_cost_candidate_total": variable_total,
         "bank_debt_service_candidate_total": debt_total,
+        "bank_fields_source": "current_import",
     }

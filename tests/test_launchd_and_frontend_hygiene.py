@@ -46,6 +46,12 @@ def test_refresh_wrapper_script_runs_auto_discovery_refresh_and_r2_publish():
     assert "publish-bi-r2" in text
 
 
+def test_refresh_wrapper_script_preserves_bank_fields_from_r2():
+    """Mac fallback経路でもbank_fields_source欠落を防ぐため、常にこのoptionを使う。"""
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    assert "publish-bi-r2 --preserve-bank-fields-from-r2" in text
+
+
 def test_refresh_wrapper_script_never_deploys_or_touches_ledger():
     """15分更新は仕訳/PL/BS/CF/Excelを触らない。wrangler deploy・close-monthも含めない。"""
     text = WRAPPER_SCRIPT.read_text(encoding="utf-8")

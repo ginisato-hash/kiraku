@@ -13,7 +13,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S %z')] start"
 
 ./.venv/bin/yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
 
-./.venv/bin/yuge-finance publish-bi-r2
+./.venv/bin/yuge-finance publish-bi-r2 --preserve-bank-fields-from-r2
 
 curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep generated_at_jst || true
 
