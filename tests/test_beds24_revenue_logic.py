@@ -206,3 +206,156 @@ def test_deprecated_coupon_fields_still_present_but_zero():
     rec = revenue_recon.compute("2026-06", bookings, [], [], [])
     assert rec["beds24_coupon_revenue_included"] == 0
     assert rec["beds24_coupon_booking_count"] == 0
+
+
+# ---------------- extract_beds24_onsite_payment_revenue（現地決済/現地払い） ----------------
+def test_onsite_payment_method_only_not_counted_as_revenue():
+    """実データの実態: 現地決済はtype=payment(lineTotal=0)の決済手段マーカー。
+    room chargeは既にtype=chargeでpriceに全額計上済みのため加算しない。"""
+    raw = {"price": 13000, "invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},
+        {"type": "payment", "description": "現地支払い", "lineTotal": 0},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["added_amount"] == 0.0
+    assert result["added_count"] == 0
+    assert result["status"] == "payment_method_only_not_revenue"
+    assert result["candidate_count"] == 1
+
+
+def test_onsite_payment_as_payment_type_matching_price_not_added():
+    """charge合計==priceかつonsiteがtype=paymentのみ => 加算禁止。"""
+    raw = {"price": 14500, "invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 14500},
+        {"type": "payment", "description": "pay at property", "lineTotal": 5000},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["added_amount"] == 0.0
+    assert result["status"] == "payment_method_only_not_revenue"
+
+
+def test_onsite_payment_as_separate_charge_not_in_price_is_added():
+    """onsite決済がtype=chargeの別行として存在し、price(charge合計超過分)に含まれない場合は加算する。"""
+    raw = {"price": 10000, "invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
+        {"type": "charge", "description": "現地決済追加室料", "lineTotal": 3000},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["added_amount"] == 3000.0
+    assert result["added_count"] == 1
+    assert result["status"] == "added_from_separate_charge"
+
+
+def test_onsite_payment_charge_within_price_not_double_counted():
+    """onsite決済がtype=chargeでもcharge合計がprice以内なら既に反映済みとみなし加算しない。"""
+    raw = {"price": 10000, "invoiceItems": [
+        {"type": "charge", "description": "現地決済", "lineTotal": 10000},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["added_amount"] == 0.0
+    assert result["status"] == "already_included_in_price"
+
+
+def test_onsite_payment_candidate_not_selected_when_amount_non_positive():
+    raw = {"price": 10000, "invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
+        {"type": "charge", "description": "現地決済 値引き", "lineTotal": -500},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["added_amount"] == 0.0
+    assert result["status"] == "candidate_not_selected"
+
+
+def test_onsite_payment_field_missing_when_no_signal():
+    raw = {"price": 10000, "invoiceItems": [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},
+    ]}
+    result = brl.extract_beds24_onsite_payment_revenue(raw)
+    assert result["candidate_count"] == 0
+    assert result["status"] == "field_missing"
+
+
+def test_onsite_payment_empty_raw_is_field_missing():
+    result = brl.extract_beds24_onsite_payment_revenue({})
+    assert result["status"] == "field_missing"
+    assert result["added_amount"] == 0.0
+
+
+# ---------------- compute (integration): 現地決済 ----------------
+def test_compute_cancelled_booking_onsite_not_counted(tmp_path):
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "cancelled", "cancelTime": "2026-06-01T00:00:00Z", "price": 10000, '
+        '"invoiceItems": [{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},'
+        ' {"type": "charge", "description": "現地決済", "lineTotal": 3000}]}]',
+        encoding="utf-8")
+    bookings = [_booking("1", "2026-06-10", status="cancelled", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_onsite_payment_revenue_included"] == 0
+    assert result["beds24_onsite_payment_booking_count"] == 0
+
+
+def test_compute_onsite_payment_prorated_to_stay_month(tmp_path):
+    """現地決済の別建てchargeも宿泊月按分される。全4泊のうち対象月2泊なら半分。"""
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "price": 10000, "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},'
+        ' {"type": "charge", "description": "現地決済追加", "lineTotal": 4000}]}]',
+        encoding="utf-8")
+    # 6/29 チェックイン, 7/3 チェックアウト = 4泊。6月分は2泊。
+    bookings = [_booking("1", "2026-06-29", checkout="2026-07-03", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_onsite_payment_revenue_included"] == 2000  # 4000 * 2/4
+
+
+def test_compute_onsite_payment_status_and_candidate_amount(tmp_path):
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "price": 13000, "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},'
+        ' {"type": "payment", "description": "現地支払い", "lineTotal": 0}]}]',
+        encoding="utf-8")
+    bookings = [_booking("1", "2026-06-10", raw_json_path=str(raw_path))]
+    result = brl.compute("2026-06", bookings, EXCLUDE)
+    assert result["beds24_onsite_payment_revenue_included"] == 0
+    assert result["beds24_onsite_payment_booking_count"] == 0
+    assert result["beds24_onsite_payment_candidate_count"] == 1
+    assert result["beds24_onsite_payment_logic_status"] == "payment_method_only_not_revenue"
+    assert result["beds24_onsite_payment_logic_note"]
+
+
+# ---------------- revenue_recon: net = gross + point + onsite - cancelled ----------------
+def test_net_revenue_includes_onsite_payment_when_added(tmp_path):
+    from yuge_finance.accounting import revenue_recon
+    raw_path = tmp_path / "2026-06.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "price": 10000, "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},'
+        ' {"type": "charge", "description": "現地決済追加", "lineTotal": 3000}]}]',
+        encoding="utf-8")
+    bookings = [_booking("1", "2026-06-10", gross=10000, raw_json_path=str(raw_path))]
+    rec = revenue_recon.compute("2026-06", bookings, [], [], [])
+    assert rec["beds24_onsite_payment_revenue_included"] == 3000
+    assert rec["beds24_revenue_net_for_bi"] == (
+        rec["beds24_revenue_gross_stay"] + rec["beds24_point_revenue_included"]
+        + rec["beds24_onsite_payment_revenue_included"])
+
+
+def test_net_revenue_unchanged_when_onsite_is_zero():
+    """onsite=0の場合、既存値(gross+point)から変わらない。"""
+    from yuge_finance.accounting import revenue_recon
+    bookings = [_booking("1", "2026-06-10", gross=30000)]
+    rec = revenue_recon.compute("2026-06", bookings, [], [], [])
+    assert rec["beds24_onsite_payment_revenue_included"] == 0
+    assert rec["beds24_revenue_net_for_bi"] == rec["beds24_revenue_gross_stay"] + rec["beds24_point_revenue_included"]
+
+
+def test_snapshot_fields_include_onsite_payment():
+    from yuge_finance.accounting import revenue_recon
+    bookings = [_booking("1", "2026-06-10", gross=30000)]
+    rec = revenue_recon.compute("2026-06", bookings, [], [], [])
+    for field in ["beds24_onsite_payment_revenue_included", "beds24_onsite_payment_booking_count",
+                 "beds24_onsite_payment_candidate_amount", "beds24_onsite_payment_candidate_count",
+                 "beds24_onsite_payment_logic_status", "beds24_onsite_payment_logic_note"]:
+        assert field in rec, f"missing field: {field}"

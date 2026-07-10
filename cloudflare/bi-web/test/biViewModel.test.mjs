@@ -14,6 +14,12 @@ const baseSnapshot = {
   beds24_coupon_discount_detected: true,
   beds24_coupon_discount_amount: 15000,
   beds24_coupon_discount_booking_count: 4,
+  beds24_onsite_payment_revenue_included: 0,
+  beds24_onsite_payment_booking_count: 0,
+  beds24_onsite_payment_candidate_amount: 120000,
+  beds24_onsite_payment_candidate_count: 2,
+  beds24_onsite_payment_logic_status: "payment_method_only_not_revenue",
+  beds24_onsite_payment_logic_note: "現地決済はinvoiceItems type=payment（決済手段）としてのみ出現し、priceに既に含まれているため加算していません。",
   beds24_cancelled_revenue_excluded: 30000,
   beds24_revenue_net_for_bi: 500000,
   beds24_revenue_logic_version: "beds24_revenue_v3",
@@ -149,10 +155,11 @@ await check("beds24 revenue card uses beds24_revenue_net_for_bi", async () => {
   assert.equal(revCard.value, "¥500,000"); // beds24_revenue_net_for_bi
 });
 
-await check("beds24 revenue card shows point/cancel wording (not coupon加算)", async () => {
+await check("beds24 revenue card shows point/onsite/cancel wording (not coupon加算)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const revCard = vm.primaryCards.find((c) => c.id === "beds24-revenue");
-  assert.ok(revCard.helper.includes("ポイント加算"));
+  assert.ok(revCard.helper.includes("ポイント・現地決済確認"),
+    "現地決済加算0の実態を「確認」と表現し、誤って加算している印象を避ける");
   assert.ok(revCard.helper.includes("キャンセル除外"));
   assert.ok(!revCard.helper.includes("クーポン加算"), "クーポン加算という誤表記が残っている");
 });
@@ -166,6 +173,53 @@ await check("revenue-logic detail shows point amount and cancel amount", async (
   assert.ok(section.rows.some(([k]) => k === "ポイント加算額"));
   assert.ok(section.rows.some(([k]) => k === "キャンセル除外額"));
   assert.ok(!section.rows.some(([k]) => k === "クーポン加算額"), "クーポン加算額という誤表記が残っている");
+});
+
+// ---------------- 現地決済/現地払い ----------------
+await check("revenue-logic detail shows onsite payment added amount and candidate amount", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "revenue-logic");
+  const addedRow = section.rows.find(([k]) => k === "現地決済加算額");
+  const candidateRow = section.rows.find(([k]) => k === "現地決済候補額");
+  assert.ok(addedRow, "現地決済加算額の行が無い");
+  assert.equal(addedRow[1], "¥0");
+  assert.ok(candidateRow, "現地決済候補額の行が無い");
+  assert.equal(candidateRow[1], "¥120,000");
+});
+
+await check("revenue-logic detail shows onsite payment logic status and note", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "revenue-logic");
+  const statusRow = section.rows.find(([k]) => k === "現地決済ロジック状態");
+  const noteRow = section.rows.find(([k]) => k === "現地決済ロジック注記");
+  assert.ok(statusRow);
+  assert.equal(statusRow[1], "決済手段のみ（収入ではない）");
+  assert.ok(noteRow);
+  assert.ok(noteRow[1].includes("type=payment"));
+});
+
+await check("revenue-logic detail shows onsite payment candidate count", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const section = vm.details.find((d) => d.id === "revenue-logic");
+  const countRow = section.rows.find(([k]) => k === "現地決済対象件数");
+  assert.ok(countRow);
+  assert.equal(countRow[1], "2");
+});
+
+await check("onsite payment section does not increase top card count (still 7)", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  assert.equal(vm.primaryCards.length, 7);
+});
+
+await check("today new booking details remain intact alongside onsite payment fields", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
+    today_new_booking_logic_status: "ok",
+    today_new_booking_details: [{ booking_id: "1", checkin: "2026-07-10", checkout: "2026-07-11",
+      guest_name: "Tanaka Ichiro", revenue_for_target_month: 12000 }],
+  }, {});
+  assert.equal(vm.dailyNewBookings.hasDetails, true);
+  assert.equal(vm.dailyNewBookings.details[0].guestName, "Tanaka Ichiro");
 });
 
 await check("revenue-logic detail shows coupon as discount, not addition", async () => {

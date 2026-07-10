@@ -94,6 +94,19 @@ function bankFieldsSourceLabel(source) {
   return BANK_FIELDS_SOURCE_LABELS[source] || DASH;
 }
 
+// 現地決済/現地払いロジック状態の日本語表示（raw statusをそのまま出さない）。
+const ONSITE_PAYMENT_STATUS_LABELS = {
+  already_included_in_price: "priceに含まれているため加算なし",
+  added_from_separate_charge: "別建て収入として加算済み",
+  payment_method_only_not_revenue: "決済手段のみ（収入ではない）",
+  field_missing: "該当データなし",
+  candidate_not_selected: "候補はあるが未加算（要確認）",
+};
+
+function onsitePaymentStatusLabel(status) {
+  return ONSITE_PAYMENT_STATUS_LABELS[status] || DASH;
+}
+
 // "2026-07" -> "2026年7月"（内部valueは常にYYYY-MM。表示は日本語）
 function monthLabel(m) {
   if (!m || !/^\d{4}-\d{2}$/.test(m)) return DASH;
@@ -205,7 +218,7 @@ function buildPrimaryCards(s, achievement, pace) {
     },
     {
       id: "beds24-revenue", label: "速報売上", value: yen(beds24Revenue),
-      tone: "blue", size: "large", helper: "Beds24 / ポイント加算 / キャンセル除外",
+      tone: "blue", size: "large", helper: "Beds24 / ポイント・現地決済確認 / キャンセル除外",
       note: "確定会計売上ではありません",
     },
     // --- 次点 ---
@@ -240,6 +253,7 @@ function buildDetailSections(s) {
       rows: [
         ["Beds24速報売上 本体", yen(s.beds24_revenue_gross_stay)],
         ["ポイント加算額", yen(s.beds24_point_revenue_included)],
+        ["現地決済加算額", yen(s.beds24_onsite_payment_revenue_included)],
         ["キャンセル除外額", yen(s.beds24_cancelled_revenue_excluded)],
         ["速報売上 net", yen(s.beds24_revenue_net_for_bi)],
         ["キャンセル除外件数", num(s.beds24_cancelled_booking_count)],
@@ -247,6 +261,10 @@ function buildDetailSections(s) {
         ["クーポン割引検出", s.beds24_coupon_discount_detected ? "あり" : "なし"],
         ["クーポン割引額", yen(s.beds24_coupon_discount_amount)],
         ["クーポン割引件数", num(s.beds24_coupon_discount_booking_count)],
+        ["現地決済候補額", yen(s.beds24_onsite_payment_candidate_amount)],
+        ["現地決済対象件数", num(s.beds24_onsite_payment_candidate_count)],
+        ["現地決済ロジック状態", onsitePaymentStatusLabel(s.beds24_onsite_payment_logic_status)],
+        ["現地決済ロジック注記", s.beds24_onsite_payment_logic_note || DASH],
         ["売上ロジック状態", s.beds24_revenue_logic_status || DASH],
         ["売上ロジック注記", s.beds24_revenue_logic_note || DASH],
       ],
@@ -514,4 +532,5 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
 export const _internal = {
   DEPRECATED_FIELDS, yen, pct, ratio, num, achievementStatus, paceInfo, buildPaceComment,
   monthLabel, buildMonthOptions, buildMonthContextNote, bankFieldsSourceLabel,
+  onsitePaymentStatusLabel,
 };

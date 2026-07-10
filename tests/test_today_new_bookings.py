@@ -401,3 +401,45 @@ def test_snapshot_includes_today_new_booking_details(tmp_path):
     assert "today_new_booking_details" in snap
     assert snap["today_new_booking_details"][0]["guest_name"] == "Suzuki Hanako"
     conn.close()
+
+
+# ---------------- 現地決済加算のtoday new booking反映 ----------------
+def test_today_new_booking_revenue_includes_onsite_payment_addition(tmp_path):
+    raw_path = tmp_path / "2026-07.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "price": 10000, "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 10000},'
+        ' {"type": "charge", "description": "現地決済追加", "lineTotal": 3000}]}]',
+        encoding="utf-8")
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000,
+                created_at_raw="2026-07-08T01:00:00Z", raw_json_path=str(raw_path)),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_onsite_payment_revenue"] == 3000
+    assert result["today_new_booking_revenue"] == 13000
+    detail = result["today_new_booking_details"][0]
+    assert detail["onsite_payment_revenue_for_target_month"] == 3000
+    assert detail["revenue_for_target_month"] == 13000
+    conn.close()
+
+
+def test_today_new_booking_revenue_zero_onsite_when_payment_method_only(tmp_path):
+    raw_path = tmp_path / "2026-07.json"
+    raw_path.write_text(
+        '[{"id": "1", "status": "confirmed", "price": 13000, "invoiceItems": '
+        '[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},'
+        ' {"type": "payment", "description": "現地支払い", "lineTotal": 0}]}]',
+        encoding="utf-8")
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=13000,
+                created_at_raw="2026-07-08T01:00:00Z", raw_json_path=str(raw_path)),
+    ])
+    result = brl.calculate_today_new_bookings_for_month(
+        db.load_objects(conn, "beds24_bookings"), "2026-07", date(2026, 7, 8), EXCLUDE)
+    assert result["today_new_booking_onsite_payment_revenue"] == 0
+    assert result["today_new_booking_revenue"] == 13000
+    conn.close()

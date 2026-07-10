@@ -16,9 +16,15 @@ Phase 0調査の結論（喜らく実データ187件で実証・推測ではな�
     （status=point_already_included_in_price）とし、二重計上を避ける。
     将来 type="charge" にpoint起因の追加行（施設側が別途受け取る収入）が見つかった
     場合のみ、extract_beds24_point_revenue() が自動的にそれを収入として拾う設計。
+  - 現地決済/現地払い（売上加算候補。2026-05〜2026-11 実データ226件で実証）: "現地支払い"
+    invoiceItemが2件出現。いずれも type="payment"（決済手段。lineTotal=0）であり、
+    room chargeはtype="charge"として既にbooking.priceに全額計上済み（price一致）。
+    type="charge"として現地決済起因の別行が見つかった場合のみ加算候補とする設計
+    （extract_beds24_onsite_payment_revenue()）。他の探索語（cash/onsite/pay at property等）
+    は実データ上に一件も出現しなかった。
 
 本ロジックはキャンセル除外を既存(revenue_recon)の集計と同じ判定基準に揃えることで
-二重控除を避け、point加算・coupon直割引の情報のみを新規に追加する。
+二重控除を避け、point加算・coupon直割引・現地決済確認の情報のみを新規に追加する。
 """
 from __future__ import annotations
 
@@ -39,6 +45,12 @@ CANCEL_TOKENS = ("cancelled", "canceled", "キャンセル")
 COUPON_TOKENS = ("coupon", "voucher", "クーポン", "割引")
 # point/reward系（施設収入として加算可能な候補）
 POINT_TOKENS = ("point", "points", "reward", "rewards", "loyalty", "楽天ポイント", "ポイント")
+# 現地決済/現地払い系（実データで確認できた具体的な表現のみ。cash/due/collect等の
+# 汎用語は誤検出リスクが高く実データにも出現しなかったため含めない）
+ONSITE_PAYMENT_TOKENS = (
+    "現地決済", "現地払い", "現地支払", "施設払い", "宿払い",
+    "pay at property", "hotel collect", "onsite payment", "on-site payment", "pay onsite",
+)
 
 
 def is_beds24_cancelled_booking(raw: dict) -> bool:
@@ -164,6 +176,70 @@ def extract_beds24_coupon_revenue(raw: dict) -> float:
     return 0.0
 
 
+def _has_onsite_payment_signal(item: dict) -> bool:
+    desc = str(item.get("description", "") or "").lower()
+    return any(tok.lower() in desc for tok in ONSITE_PAYMENT_TOKENS)
+
+
+def extract_beds24_onsite_payment_revenue(raw: dict) -> Dict:
+    """raw Beds24 booking dict から現地決済/現地払い相当の収入を判定する。
+
+    ルール（推測ではなく実データ実証に基づく）:
+      1. 現地決済/現地払い系のinvoiceItemが無ければ field_missing。
+      2. type="payment"（決済手段）としてのみ出現する場合、room chargeは既に
+         type="charge"としてbooking.priceに全額計上済みのため加算しない
+         （payment_method_only_not_revenue）。
+      3. type="charge"として現地決済起因の別行がある場合のみ加算候補とする。
+         ただし、その行を含めてもcharge合計がbooking.price以内であれば、
+         既にprice側に反映済みとみなし加算しない（already_included_in_price）。
+      4. charge合計がbooking.priceを上回る場合のみ、その差分相当を加算する
+         （added_from_separate_charge）。
+      5. 金額が0以下の候補は値引き/返金の可能性があるため加算しない
+         （candidate_not_selected）。
+    """
+    empty = {"candidate_amount": 0.0, "candidate_count": 0, "added_amount": 0.0,
+            "added_count": 0, "status": "field_missing"}
+    if not raw:
+        return empty
+
+    items = raw.get("invoiceItems") or []
+    onsite_items = [it for it in items if _has_onsite_payment_signal(it)]
+    if not onsite_items:
+        return empty
+
+    payment_items = [it for it in onsite_items if it.get("type") == "payment"]
+    charge_items = [it for it in onsite_items if it.get("type") == "charge"]
+
+    payment_amount = sum(abs(float(it.get("lineTotal", it.get("amount", 0)) or 0))
+                        for it in payment_items)
+    charge_amount = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
+                       for it in charge_items)
+    candidate_amount = round(payment_amount + max(charge_amount, 0.0), 2)
+    candidate_count = len(payment_items) + len(charge_items)
+
+    if not charge_items:
+        # 現地決済は決済手段(type=payment)としてのみ出現。room chargeは既にtype=chargeで
+        # booking.priceに計上済みのため、追加加算すると二重計上になる。
+        return {"candidate_amount": candidate_amount, "candidate_count": candidate_count,
+                "added_amount": 0.0, "added_count": 0, "status": "payment_method_only_not_revenue"}
+
+    if charge_amount <= 0:
+        return {"candidate_amount": candidate_amount, "candidate_count": candidate_count,
+                "added_amount": 0.0, "added_count": 0, "status": "candidate_not_selected"}
+
+    charge_sum_all = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
+                        for it in items if it.get("type") == "charge")
+    price = float(raw.get("price") or 0)
+    if charge_sum_all <= price + 0.5:
+        # 現地決済起因のcharge行を含めても合計がprice以内 = 既にprice側に反映済み。
+        return {"candidate_amount": candidate_amount, "candidate_count": candidate_count,
+                "added_amount": 0.0, "added_count": 0, "status": "already_included_in_price"}
+
+    return {"candidate_amount": candidate_amount, "candidate_count": candidate_count,
+            "added_amount": round(charge_amount, 2), "added_count": len(charge_items),
+            "status": "added_from_separate_charge"}
+
+
 def _load_raw_index(raw_json_path: Optional[str]) -> Dict[str, dict]:
     """1つのraw JSONファイル(月次全予約)を読み、booking_idでインデックスする。"""
     if not raw_json_path:
@@ -193,6 +269,12 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
     cancel_field_missing = False
     point_signal_seen = False  # point系語がinvoiceItemsのどこかに出現したか（type問わず）
 
+    onsite_revenue = 0.0
+    onsite_booking_count = 0
+    onsite_candidate_amount = 0.0
+    onsite_candidate_count = 0
+    onsite_statuses_seen = set()
+
     for b in in_month:
         is_cancelled = b.is_cancelled(exclude_statuses)
         raw = raw_index.get(b.booking_id)
@@ -204,7 +286,7 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
             point_signal_seen = True
         if is_cancelled:
             cancelled_count += 1
-            continue  # キャンセル分にはpoint/couponも計上しない
+            continue  # キャンセル分にはpoint/coupon/現地決済も計上しない
         if raw:
             pt = extract_beds24_point_revenue(raw)
             if pt > 0:
@@ -215,6 +297,17 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
             if cp > 0:
                 coupon_discount += cp
                 coupon_count += 1
+            onsite = extract_beds24_onsite_payment_revenue(raw)
+            if onsite["status"] != "field_missing":
+                onsite_statuses_seen.add(onsite["status"])
+            if onsite["candidate_count"]:
+                onsite_candidate_amount += _prorate_to_month(
+                    onsite["candidate_amount"], b.checkin_date, b.checkout_date, month)
+                onsite_candidate_count += 1
+            if onsite["added_amount"] > 0:
+                onsite_revenue += _prorate_to_month(
+                    onsite["added_amount"], b.checkin_date, b.checkout_date, month)
+                onsite_booking_count += 1
 
     status_flags = []
     if not raw_index:
@@ -236,6 +329,23 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
             "（type=chargeにpoint起因の行が見つかった場合のみ自動加算）。"
             "キャンセル済み予約はstatusフィールドで判定し、速報売上・point・couponともに除外しています。")
 
+    onsite_priority = ["added_from_separate_charge", "payment_method_only_not_revenue",
+                      "already_included_in_price", "candidate_not_selected", "field_missing"]
+    onsite_logic_status = next(
+        (s for s in onsite_priority if s in onsite_statuses_seen), "field_missing")
+    onsite_note = {
+        "field_missing": "現地決済/現地払いに該当するinvoiceItemが見つかりませんでした。",
+        "payment_method_only_not_revenue": (
+            "現地決済/現地払いはinvoiceItems type=payment（決済手段）としてのみ出現し、"
+            "room chargeは既にtype=chargeでbooking.priceに全額計上済みのため加算していません。"),
+        "already_included_in_price": (
+            "現地決済起因のcharge行がありますが、charge合計がbooking.price以内のため"
+            "既に売上に反映済みとみなし加算していません。"),
+        "candidate_not_selected": "現地決済候補はありますが金額が0以下等のため加算していません。",
+        "added_from_separate_charge": (
+            "現地決済起因の別建てcharge行をbooking.priceの追加分として売上に加算しました。"),
+    }[onsite_logic_status]
+
     return {
         # --- point（売上加算対象）---
         "beds24_point_revenue_included": round(point_revenue),
@@ -244,6 +354,14 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
         "beds24_coupon_discount_detected": coupon_count > 0,
         "beds24_coupon_discount_amount": round(coupon_discount),
         "beds24_coupon_discount_booking_count": coupon_count,
+        # --- 現地決済/現地払い（原則priceに含まれているため既定は0。実データで別建てcharge
+        #     が見つかった場合のみ加算候補となる）---
+        "beds24_onsite_payment_revenue_included": round(onsite_revenue),
+        "beds24_onsite_payment_booking_count": onsite_booking_count,
+        "beds24_onsite_payment_candidate_amount": round(onsite_candidate_amount),
+        "beds24_onsite_payment_candidate_count": onsite_candidate_count,
+        "beds24_onsite_payment_logic_status": onsite_logic_status,
+        "beds24_onsite_payment_logic_note": onsite_note,
         # --- 旧field（意味が誤っていたためdeprecated。互換性のため0で残す）---
         "beds24_coupon_revenue_included": 0,
         "beds24_coupon_booking_count": 0,
@@ -316,6 +434,7 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
     count = 0
     gross_stay_revenue = 0.0
     point_revenue = 0.0
+    onsite_payment_revenue = 0.0
     cancelled_revenue_excluded = 0.0
     cancelled_count = 0
     sample_ids: List[str] = []
@@ -342,12 +461,18 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
         count += 1
         gross_stay_revenue += prorated_gross
         prorated_point = 0.0
+        prorated_onsite = 0.0
         raw = raw_index.get(b.booking_id)
         if raw:
             pt = extract_beds24_point_revenue(raw)
             if pt > 0:
                 prorated_point = _prorate_to_month(pt, b.checkin_date, b.checkout_date, target_month)
                 point_revenue += prorated_point
+            onsite = extract_beds24_onsite_payment_revenue(raw)
+            if onsite["added_amount"] > 0:
+                prorated_onsite = _prorate_to_month(
+                    onsite["added_amount"], b.checkin_date, b.checkout_date, target_month)
+                onsite_payment_revenue += prorated_onsite
         if len(sample_ids) < 5:
             sample_ids.append(b.booking_id)
 
@@ -358,7 +483,8 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
             "checkin": b.checkin_date,
             "checkout": b.checkout_date,
             "guest_name": b.guest_name or "氏名未取得",
-            "revenue_for_target_month": round(prorated_gross + prorated_point),
+            "revenue_for_target_month": round(prorated_gross + prorated_point + prorated_onsite),
+            "onsite_payment_revenue_for_target_month": round(prorated_onsite),
             "total_booking_revenue": round(b.gross_revenue),
             "target_month_nights": _nights_in_month(b.checkin_date, b.checkout_date, target_month),
             "total_nights": _total_nights(b.checkin_date, b.checkout_date),
@@ -367,7 +493,7 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
             "created_at_jst": created_dt.isoformat(timespec="seconds"),
         })
 
-    revenue = gross_stay_revenue + point_revenue - cancelled_revenue_excluded
+    revenue = gross_stay_revenue + point_revenue + onsite_payment_revenue - cancelled_revenue_excluded
 
     if not any_created_at_present:
         logic_status = "created_at_field_missing"
@@ -377,13 +503,15 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
         logic_status = "ok"
         note = ("JST今日(bookingTime基準)に作成され、対象月に1泊以上かかる非キャンセル予約を集計。"
                "金額は既存の宿泊月按分ロジックで対象月に按分したgross stay revenue + point加算"
-               "（couponは直割引のため加算しない）。同日作成・同日キャンセルは除外件数/除外額に計上。")
+               "+ 現地決済加算（couponは直割引のため加算しない）。"
+               "同日作成・同日キャンセルは除外件数/除外額に計上。")
 
     return {
         "today_new_booking_count": count,
         "today_new_booking_revenue": round(revenue),
         "today_new_booking_gross_stay_revenue": round(gross_stay_revenue),
         "today_new_booking_point_revenue": round(point_revenue),
+        "today_new_booking_onsite_payment_revenue": round(onsite_payment_revenue),
         "today_new_booking_cancelled_revenue_excluded": round(cancelled_revenue_excluded),
         "today_new_booking_cancelled_count": cancelled_count,
         "today_new_booking_ids_sample": sample_ids,

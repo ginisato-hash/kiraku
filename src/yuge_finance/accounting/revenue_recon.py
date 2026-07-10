@@ -57,11 +57,13 @@ def compute(month: str,
     occupancy = round(room_nights / available, 4) if available else 0.0
     revpar = round(recognized / available) if available else 0
 
-    # ---- point加算・coupon直割引（Phase 0調査で実証済みのロジック。キャンセルは二重控除しない）----
-    # coupon は直割引扱いのため売上に加算しない。point は施設収入として加算対象。
+    # ---- point加算・coupon直割引・現地決済確認（Phase 0調査で実証済みのロジック。キャンセルは二重控除しない）----
+    # coupon は直割引扱いのため売上に加算しない。point・現地決済は施設収入として加算対象
+    # （ただし現地決済は実データ上、原則既にpriceへ計上済みのため加算額は0のことが多い）。
     revenue_logic_info = beds24_revenue_logic.compute(month, bookings, exclude)
     point_revenue = revenue_logic_info["beds24_point_revenue_included"]
-    net_for_bi = round(recognized + point_revenue)
+    onsite_payment_revenue = revenue_logic_info["beds24_onsite_payment_revenue_included"]
+    net_for_bi = round(recognized + point_revenue + onsite_payment_revenue)
 
     # ---- B. 入金月ベース会計/資金実績（銀行/現金）----
     def _rev(src):
@@ -102,6 +104,14 @@ def compute(month: str,
         "beds24_coupon_discount_amount": revenue_logic_info["beds24_coupon_discount_amount"],
         "beds24_coupon_discount_booking_count":
             revenue_logic_info["beds24_coupon_discount_booking_count"],
+        "beds24_onsite_payment_revenue_included": onsite_payment_revenue,
+        "beds24_onsite_payment_booking_count": revenue_logic_info["beds24_onsite_payment_booking_count"],
+        "beds24_onsite_payment_candidate_amount":
+            revenue_logic_info["beds24_onsite_payment_candidate_amount"],
+        "beds24_onsite_payment_candidate_count":
+            revenue_logic_info["beds24_onsite_payment_candidate_count"],
+        "beds24_onsite_payment_logic_status": revenue_logic_info["beds24_onsite_payment_logic_status"],
+        "beds24_onsite_payment_logic_note": revenue_logic_info["beds24_onsite_payment_logic_note"],
         # 旧field（意味が誤っていたためdeprecated。互換性のため0で残す。UIでは使わない）
         "beds24_coupon_revenue_included": revenue_logic_info["beds24_coupon_revenue_included"],
         "beds24_coupon_booking_count": revenue_logic_info["beds24_coupon_booking_count"],

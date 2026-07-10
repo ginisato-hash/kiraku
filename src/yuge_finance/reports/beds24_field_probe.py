@@ -47,6 +47,24 @@ POINT_TOKENS = ["point", "points", "reward", "rewards", "loyalty", "楽天ポイ
 # その他の収入加算候補語（要継続調査）
 OTHER_CANDIDATE_TOKENS = ["subsidy", "grant", "adjustment"]
 
+# 現地決済/現地払い探索語（広く網羅的に調査する用。実際の加算判定ロジックで使う語は
+# beds24_revenue_logic.ONSITE_PAYMENT_TOKENS の方が誤検出防止のため厳密に絞ってある）
+ONSITE_PAYMENT_PROBE_TOKENS = [
+    "onsite", "on site", "on-site", "pay at property", "pay_at_property",
+    "property payment", "hotel collect", "cash", "cash payment", "front desk",
+    "local payment", "direct payment", "offline payment", "manual payment",
+    "pay later", "collect", "collected", "due", "balance", "outstanding", "unpaid", "paid",
+    "payment", "paymenttype", "paymentmethod",
+    "現地決済", "現地払い", "現地支払", "宿払い", "施設払い", "現金", "フロント",
+    "未収", "未払い", "残金", "支払済",
+]
+
+# top-levelでの決済方法/未収残高等field候補探索用トークン
+PAYMENT_METHOD_FIELD_TOKENS = ["paymentmethod", "paymenttype"]
+PAYMENT_STATUS_FIELD_TOKENS = ["paymentstatus", "invoicestatus"]
+OUTSTANDING_BALANCE_FIELD_TOKENS = ["balance", "outstanding"]
+PAID_AMOUNT_FIELD_TOKENS = ["paidamount", "amountpaid"]
+
 
 def _collect_keys(obj, prefix="") -> set:
     keys = set()
@@ -142,6 +160,9 @@ def build_probe(month: str = None) -> Dict:
     # point: type=charge / type=payment 別出現数
     point_in_charge, point_in_payment, point_hits = _classify_hits(bookings, POINT_TOKENS)
     _, _, other_hits = _classify_hits(bookings, OTHER_CANDIDATE_TOKENS)
+    # 現地決済/現地払い: type=charge / type=payment 別出現数
+    onsite_in_charge, onsite_in_payment, onsite_hits = _classify_hits(
+        bookings, ONSITE_PAYMENT_PROBE_TOKENS)
 
     # point payment行が予約のprice(charge合計)と重複していないかの実証チェック
     point_bookings_checked = 0
@@ -156,6 +177,40 @@ def build_probe(month: str = None) -> Dict:
                          for it in (b.get("invoiceItems") or []) if it.get("type") == "charge")
         if charge_sum == float(b.get("price") or 0):
             point_matches_price += 1
+
+    # 現地決済payment行が予約のprice(charge合計)と重複していないかの実証チェック
+    onsite_bookings_checked = 0
+    onsite_matches_price = 0
+    for b in bookings:
+        has_onsite = any(
+            any(tok in str(it.get("description") or "").lower() for tok in ONSITE_PAYMENT_PROBE_TOKENS)
+            for it in (b.get("invoiceItems") or []) if it.get("type") == "payment")
+        if not has_onsite:
+            continue
+        onsite_bookings_checked += 1
+        charge_sum = sum(float(it.get("lineTotal", 0) or 0)
+                         for it in (b.get("invoiceItems") or []) if it.get("type") == "charge")
+        if charge_sum == float(b.get("price") or 0):
+            onsite_matches_price += 1
+
+    payment_method_candidates = _find_candidate_keys(all_keys, PAYMENT_METHOD_FIELD_TOKENS)
+    payment_status_candidates = _find_candidate_keys(all_keys, PAYMENT_STATUS_FIELD_TOKENS)
+    outstanding_balance_candidates = _find_candidate_keys(all_keys, OUTSTANDING_BALANCE_FIELD_TOKENS)
+    paid_amount_candidates = _find_candidate_keys(all_keys, PAID_AMOUNT_FIELD_TOKENS)
+    onsite_invoice_item_candidates = (["invoiceItems (type=payment, description~現地決済/現地払い等)"]
+                                      if onsite_in_payment else [])
+    if onsite_in_charge:
+        onsite_invoice_item_candidates.append(
+            "invoiceItems (type=charge, description~現地決済/現地払い等)")
+
+    if onsite_in_charge > 0:
+        onsite_classification = "separate_revenue_addition"
+    elif onsite_in_payment > 0:
+        onsite_classification = ("already_included_in_price"
+                                 if onsite_bookings_checked and onsite_matches_price == onsite_bookings_checked
+                                 else "payment_method_only_not_revenue")
+    else:
+        onsite_classification = "field_missing"
 
     samples = [_redact_sample(b) for b in bookings[:3]]
 
@@ -201,6 +256,18 @@ def build_probe(month: str = None) -> Dict:
             if selected_created_at else
             "実payloadに該当fieldが見つからないため、本日の新規予約判定はできない"
             "(today_new_booking_logic_status=created_at_field_missing)。")),
+        (f"[現地決済/現地払い調査] 探索語はinvoiceItemsのdescriptionにtype=payment側"
+         f"{onsite_in_payment}件、type=charge側{onsite_in_charge}件出現。"
+         + (f"現地決済candidateを含む予約{onsite_bookings_checked}件のうち{onsite_matches_price}件で"
+            "charge合計=price（room chargeが既に全額計上済み）。よって現地決済はtype=payment"
+            "（決済手段）としてのみ出現し、priceに既に含まれているため加算していない"
+            "（beds24_onsite_payment_logic_status=payment_method_only_not_revenue/"
+            "already_included_in_price）。"
+            if onsite_in_payment else
+            "現地決済/現地払いに該当するinvoiceItemは実データ上見つからなかった"
+            "（beds24_onsite_payment_logic_status=field_missing）。")
+         + (" type=chargeとして現地決済起因の別行が見つかったため、加算候補として扱う。"
+            if onsite_in_charge else "")),
     ]
 
     return {
@@ -215,6 +282,7 @@ def build_probe(month: str = None) -> Dict:
         "coupon_candidate_token_hits_in_descriptions": dict(coupon_hits),
         "point_candidate_token_hits_in_descriptions": dict(point_hits),
         "other_candidate_token_hits_in_descriptions": dict(other_hits),
+        "onsite_payment_candidate_token_hits_in_descriptions": dict(onsite_hits),
         "candidate_fields": {
             "cancel_status": CANCEL_CANDIDATE_KEYS,
             "point_amount": ["invoiceItems[].lineTotal (description に point/ポイント等を含む行)"],
@@ -229,6 +297,13 @@ def build_probe(month: str = None) -> Dict:
             "booking_created_at": created_at_candidates,
             "booking_modified_at": modified_at_candidates,
             "booking_status": status_candidates,
+            # --- 現地決済/現地払い調査用（本フェーズ） ---
+            "onsite_payment_amount": onsite_invoice_item_candidates,
+            "onsite_payment_invoice_items": onsite_invoice_item_candidates,
+            "payment_method": payment_method_candidates,
+            "payment_status": payment_status_candidates,
+            "outstanding_balance": outstanding_balance_candidates,
+            "paid_amount": paid_amount_candidates,
         },
         "selected_fields": {
             "cancel_status": "status",
@@ -239,11 +314,20 @@ def build_probe(month: str = None) -> Dict:
             # --- 「本日の新規予約」判定用（Phase 0。実データで確認: bookingTime=UTC ISO8601） ---
             "booking_created_at": selected_created_at,
             "booking_modified_at": selected_modified_at,
+            # --- 現地決済/現地払い調査用（本フェーズ。実データで確認: type=payment, lineTotal=0） ---
+            "onsite_payment_amount": (
+                "invoiceItems[].lineTotal (type=charge限定。実データでは現地決済起因のcharge行は0件→"
+                "payment_method_only_not_revenue)" if not onsite_in_charge else
+                "invoiceItems[].lineTotal (type=charge, description~現地決済/現地払い等)"),
+            "payment_method": payment_method_candidates[0] if payment_method_candidates else None,
+            "payment_status": payment_status_candidates[0] if payment_status_candidates else None,
+            "outstanding_balance": outstanding_balance_candidates[0] if outstanding_balance_candidates else None,
         },
         "booking_created_at_sample_values": created_at_sample_values,
         "classification": {
             "coupon": "direct_discount_not_revenue",
             "point": "revenue_addition_candidate",
+            "onsite_payment": onsite_classification,
         },
         "notes": notes,
         "sample_bookings_pii_redacted": samples,

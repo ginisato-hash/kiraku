@@ -49,3 +49,30 @@ def test_probe_returns_no_created_at_candidates_when_key_absent():
     """実payloadに候補keyが無い場合はcandidateを空リストで返し、決め打ちしない。"""
     assert beds24_field_probe._find_candidate_keys({"foo", "bar"},
                                                     beds24_field_probe.CREATED_AT_TOKENS) == []
+
+
+# ---------------- 現地決済/現地払い調査 ----------------
+def test_probe_has_onsite_payment_candidate_fields():
+    probe = beds24_field_probe.build_probe()
+    for key in ["onsite_payment_amount", "onsite_payment_invoice_items",
+               "payment_method", "payment_status", "outstanding_balance", "paid_amount"]:
+        assert key in probe["candidate_fields"], f"missing candidate_fields key: {key}"
+
+
+def test_probe_has_onsite_payment_selected_fields():
+    probe = beds24_field_probe.build_probe()
+    for key in ["onsite_payment_amount", "payment_method", "payment_status", "outstanding_balance"]:
+        assert key in probe["selected_fields"], f"missing selected_fields key: {key}"
+
+
+def test_probe_classification_includes_onsite_payment():
+    probe = beds24_field_probe.build_probe()
+    assert "onsite_payment" in probe["classification"]
+    assert probe["classification"]["onsite_payment"] in (
+        "already_included_in_price", "separate_revenue_addition",
+        "payment_method_only_not_revenue", "candidate_not_selected", "field_missing")
+
+
+def test_probe_onsite_payment_token_hits_reported():
+    probe = beds24_field_probe.build_probe()
+    assert "onsite_payment_candidate_token_hits_in_descriptions" in probe
