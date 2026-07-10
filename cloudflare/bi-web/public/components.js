@@ -26,9 +26,10 @@ export function renderCommandCenter(primaryCards) {
   return primaryCards.map(renderMetricCard).join("");
 }
 
-// 部屋変更履歴ブロック。0件なら「部屋変更なし」、取得不可なら「変更履歴取得不可」を
-// 小さなmeta textで表示するだけ。1件以上あれば<details>に折り畳んで表示する。
+// 部屋変更履歴ブロック。取得不可(roomChangeSummary=null)の場合は何も表示しない。
+// 履歴を確認できて0件なら「部屋変更なし」、1件以上あれば<details>に折り畳んで表示する。
 function renderRoomChangeBlock(d) {
+  if (!d.roomChangeSummary) return "";
   if (d.hasRoomChange) {
     const items = d.roomChangeHistory.map((c) => {
       const when = c.changedAt ? `${c.changedAt} ` : "";

@@ -119,12 +119,18 @@ const sampleDetails = [
     roomType: "ツイン｜客室トイレ付", roomTypeKey: "twin_toilet",
     currentRoomType: "ツイン｜客室トイレ付", currentRoomTypeKey: "twin_toilet",
     originalRoomType: null, originalRoomTypeKey: null,
+    // 取得不可の場合はroomChangeSummary自体が無い(表示しない)
     hasRoomChange: false, roomChangeHistoryStatus: "not_available",
-    roomChangeSummary: "変更履歴取得不可", roomChangeHistory: [] },
+    roomChangeSummary: null, roomChangeHistory: [] },
+];
+
+const sampleDetailsNoRoomChange = [
+  { ...sampleDetails[0], bookingId: "2", roomChangeHistoryStatus: "available",
+    roomChangeSummary: "部屋変更なし" },
 ];
 
 const sampleDetailsWithRoomChange = [
-  { ...sampleDetails[0], bookingId: "2", hasRoomChange: true,
+  { ...sampleDetails[0], bookingId: "3", hasRoomChange: true,
     roomChangeHistoryStatus: "available", roomChangeSummary: "部屋変更 1件",
     roomChangeHistory: [{ changedAt: "2026-08-09T10:00:00+09:00",
       fromRoomType: "ツイン｜客室トイレ付", toRoomType: "ツイン｜客室バストイレ付",
@@ -161,9 +167,16 @@ await check("daily booking detail card shows OTA name and room type", async () =
   assert.ok(html.includes("ツイン｜客室トイレ付"));
 });
 
-await check("daily booking detail card shows 部屋変更なし-equivalent status when there is no room change", async () => {
+await check("daily booking detail card shows nothing for room-change when history is not_available", async () => {
   const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
-  assert.ok(html.includes("変更履歴取得不可"));
+  assert.ok(!html.includes("変更履歴取得不可"));
+  assert.ok(!html.includes("daily-booking-detail-room-change"));
+  assert.ok(!html.includes("<details class=\"room-change-details\""));
+});
+
+await check("daily booking detail card shows 部屋変更なし when history is confirmed empty", async () => {
+  const html = renderDailyNewBookingDetails({ details: sampleDetailsNoRoomChange, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("部屋変更なし"));
   assert.ok(!html.includes("<details class=\"room-change-details\""));
 });
 

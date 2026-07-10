@@ -449,10 +449,11 @@ function defaultCurrentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-// 部屋変更履歴の要約テキスト。statusが取得不可なら「取得不可」、履歴0件なら「なし」、
-// 履歴があれば件数を出す(詳細はroomChangeHistoryをdetails内で開いて見せる)。
+// 部屋変更履歴の要約テキスト。取得不可の場合はnull(=表示自体をしない)。
+// 履歴を確認できて0件なら「なし」、履歴があれば件数を出す
+// (詳細はroomChangeHistoryをdetails内で開いて見せる)。
 function roomChangeSummaryText(status, historyLen) {
-  if (status === "not_available" || status === "unknown") return "変更履歴取得不可";
+  if (status === "not_available" || status === "unknown") return null;
   if (historyLen > 0) return `部屋変更 ${historyLen}件`;
   return "部屋変更なし";
 }

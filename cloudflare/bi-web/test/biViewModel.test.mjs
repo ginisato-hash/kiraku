@@ -556,14 +556,14 @@ await check("dailyNewBookings.details exposes room_type/current_room_type/origin
   assert.equal(d.originalRoomType, null);
 });
 
-await check("dailyNewBookings.details reports 部屋変更履歴取得不可 when status is not_available", async () => {
+await check("dailyNewBookings.details omits the room-change summary entirely when status is not_available", async () => {
   const vm = buildBiViewModel({
     ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
     today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
   }, {});
   const d = vm.dailyNewBookings.details[0];
   assert.equal(d.hasRoomChange, false);
-  assert.equal(d.roomChangeSummary, "変更履歴取得不可");
+  assert.equal(d.roomChangeSummary, null, "no summary text should be shown when history cannot be retrieved");
 });
 
 await check("dailyNewBookings.details reports room change count in summary when history exists", async () => {
