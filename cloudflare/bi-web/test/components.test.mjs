@@ -251,10 +251,11 @@ await check("renderCommandCenter renders exactly one metric-card per primary car
   assert.match(html, /ADR|L\d/); // sanity: content renders at all
 });
 
-await check("styles.css defines a 2-column command-center grid with a single-column mobile override", async () => {
+await check("styles.css defines a 2-column command-center grid on both PC/tablet and mobile (2列×4段, no 1-column fallback)", async () => {
   const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
   assert.match(css, /\.command-center\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.command-center\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  // 運用上ほぼ携帯で見るため、モバイルも1列に落とさず2列を維持する
+  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.command-center\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   // 過去のroom-type-section overflowの再発防止: grid itemに対するmin-width:0が必須
   assert.match(css, /\.command-center\s*>\s*\*\s*\{\s*min-width:\s*0/);
 });
@@ -281,6 +282,32 @@ await check("all 8 primary cards (including 予約ペース評価) render as spa
 await check("room-type occupancy chart and revenue mix stay full-width (stacked, not squeezed to half)", async () => {
   const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
   assert.match(css, /\.room-type-section\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*\}/);
+});
+
+await check("room-type-section has no mobile-only override that would change it away from full-width", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  // room-type-sectionは常時1列(全幅)。過去にあった900px境界の2列/1列切替は撤廃済み。
+  assert.ok(!/@media[^{]*\{\s*\.room-type-section\s*\{[^}]*grid-template-columns:\s*1fr 1fr/.test(css));
+});
+
+// ---------------- モバイルの高密度化・横overflow防止 ----------------
+await check("styles.css keeps html/body overflow-x hidden with max-width 100% as a defensive guard", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  assert.match(css, /html,\s*body\s*\{[^}]*max-width:\s*100%[^}]*overflow-x:\s*hidden/);
+});
+
+await check("mobile media query compacts metric-card padding/font-size without dropping the 2-column grid", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  const mobileBlock = css.slice(css.indexOf("@media (max-width: 640px) {\n  .metric-card {"));
+  assert.match(mobileBlock, /min-height:\s*118px/);
+  assert.match(mobileBlock, /padding:\s*10px 10px/);
+});
+
+await check("daily-booking-table switches to a stacked block layout (no horizontal table) under 640px", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.daily-booking-table thead\s*\{\s*display:\s*none/);
+  // 旧: 720pxでdisplay:block+overflow-x:autoにして横スクロールさせていた実装は撤廃済み
+  assert.ok(!/\.daily-booking-table\s*\{\s*display:\s*block;\s*overflow-x:\s*auto/.test(css));
 });
 
 console.log(`\n${passed} components checks passed`);

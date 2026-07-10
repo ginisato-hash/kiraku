@@ -86,7 +86,7 @@ a:hover { text-decoration: underline; }
 /* 横overflow防止(過去にroom-type-sectionのgrid itemでmin-width未設定により発生した事例の再発防止)。
    根本原因はgrid item自体のmin-width:auto(content-based)なので、各grid containerの直接の子に
    min-widthを明示する。body側のoverflow-x: hiddenは保険であり根本対応ではない。 */
-body { overflow-x: hidden; }
+html, body { max-width: 100%; overflow-x: hidden; }
 .page-shell,
 .command-center,
 .chart-card,
@@ -289,16 +289,34 @@ body.is-loading .dashboard {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-@media (max-width: 720px) {
-  .daily-booking-table {
+/* スマホでは横スクロールのtableではなく、行を縦積みブロックに変える(横overflow禁止)。 */
+@media (max-width: 640px) {
+  .daily-booking-table thead { display: none; }
+  .daily-booking-table,
+  .daily-booking-table tbody,
+  .daily-booking-table tr,
+  .daily-booking-table td {
     display: block;
-    overflow-x: auto;
+    width: 100%;
+  }
+  .daily-booking-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .daily-booking-table tr:last-child { border-bottom: none; }
+  .daily-booking-table td {
+    padding: 1px 0;
+    border-bottom: none;
+  }
+  .daily-booking-table td.amount {
+    text-align: left;
+    font-weight: 600;
   }
 }
 
-/* ---------- Command center (2列 高密度グリッド) ---------- */
-/* PC/タブレットとも2列に統一(以前は4列/2列で分かれておりカードが横長・右側余白過多だった)。
-   スマホのみ1列。min-width:0はgrid item(直接の子である.metric-card自身)に必須。 */
+/* ---------- Command center (2列 高密度グリッド。PC/タブレット/モバイル共通) ---------- */
+/* モバイルもほぼ携帯運用が前提のため1列に落とさず、PC/タブレットと同じ2列×4段を維持する。
+   min-width:0はgrid item(直接の子である.metric-card自身)に必須(横overflow再発防止)。 */
 .command-center {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -307,7 +325,7 @@ body.is-loading .dashboard {
 }
 .command-center > * { min-width: 0; }
 @media (max-width: 640px) {
-  .command-center { grid-template-columns: minmax(0, 1fr); }
+  .command-center { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 }
 
 .metric-card {
@@ -368,6 +386,32 @@ body.is-loading .dashboard {
   line-height: 1.35;
 }
 
+/* モバイルは2列のまま(1列に落とさない)、狭い幅でも読めるようさらに高密度化する。 */
+@media (max-width: 640px) {
+  .metric-card {
+    min-height: 118px;
+    padding: 10px 10px;
+    gap: 6px;
+  }
+  .metric-card .metric-label {
+    font-size: 11px;
+  }
+  .metric-card .metric-value {
+    font-size: clamp(18px, 6vw, 24px);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+  }
+  .metric-card .metric-helper,
+  .metric-card .metric-note {
+    font-size: 10.5px;
+    /* 長文の補足でカード高さ・2列レイアウトが崩れないよう2行までに制限する */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
 .state-badge {
   display: inline-flex;
   align-items: center;
@@ -402,6 +446,10 @@ body.is-loading .dashboard {
 }
 .metric-meta-list .meta-item { font-size: 0.72rem; color: var(--text-muted); }
 .metric-meta-list .meta-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .metric-meta-list { gap: 8px; margin-top: 6px; padding-top: 6px; }
+  .metric-meta-list .meta-item { font-size: 10.5px; }
+}
 
 /* ---------- Insight banner (pace comment) ---------- */
 .insight-banner {
