@@ -12,11 +12,13 @@ EXCLUDE = ["cancelled", "canceled", "black"]
 
 
 def _booking(bid, checkin, checkout=None, gross=10000, status="confirmed",
-            created_at_raw="", raw_json_path="", guest_name="", room_name=""):
+            created_at_raw="", raw_json_path="", guest_name="", room_name="",
+            channel="", room_id=""):
     return BookingRecord(
         booking_id=bid, checkin_date=checkin, checkout_date=checkout or checkin,
         gross_revenue=gross, status=status, created_at_raw=created_at_raw,
         raw_json_path=raw_json_path, guest_name=guest_name, room_name=room_name,
+        channel=channel, room_id=room_id,
     ).finalize()
 
 
@@ -323,6 +325,43 @@ def test_details_never_contain_pii_keys(tmp_path):
     conn.close()
 
 
+# ---------------- 予約経路(OTA)・部屋変更履歴のdetails反映 ----------------
+def test_details_include_ota_name_and_raw_source():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11",
+                         created_at_raw="2026-07-08T01:00:00Z", channel="じゃらんnet")]
+    result = brl.calculate_today_new_bookings_for_month(bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail = result["today_new_booking_details"][0]
+    assert detail["ota_name"] == "じゃらん"
+    assert detail["booking_source_raw"] == "じゃらんnet"
+
+
+def test_details_default_ota_name_is_direct_when_channel_missing():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11", created_at_raw="2026-07-08T01:00:00Z")]
+    result = brl.calculate_today_new_bookings_for_month(bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail = result["today_new_booking_details"][0]
+    assert detail["ota_name"] == "Direct"
+
+
+def test_details_include_room_id_and_room_change_history_status():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11",
+                         created_at_raw="2026-07-08T01:00:00Z", room_id="685761")]
+    result = brl.calculate_today_new_bookings_for_month(bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail = result["today_new_booking_details"][0]
+    assert detail["room_id"] == "685761"
+    assert detail["room_change_history_status"] == "not_available"
+    assert detail["room_change_history"] == []
+
+
+def test_details_new_fields_are_not_pii():
+    bookings = [_booking("1", "2026-07-10", "2026-07-11", created_at_raw="2026-07-08T01:00:00Z",
+                         channel="じゃらんnet", room_id="685761")]
+    result = brl.calculate_today_new_bookings_for_month(bookings, "2026-07", date(2026, 7, 8), EXCLUDE)
+    detail = result["today_new_booking_details"][0]
+    forbidden_keys = {"email", "phone", "address", "message", "notes", "passport",
+                      "invoiceItems", "raw", "raw_json_path", "comments", "firstName", "lastName"}
+    assert forbidden_keys.isdisjoint(detail.keys())
+
+
 def test_details_count_matches_today_new_booking_count(tmp_path):
     conn = db.connect(tmp_path / "t.sqlite")
     db.upsert(conn, "beds24_bookings", [
@@ -424,6 +463,64 @@ def test_snapshot_includes_today_new_booking_details(tmp_path):
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
     assert "today_new_booking_details" in snap
     assert snap["today_new_booking_details"][0]["guest_name"] == "Suzuki Hanako"
+    conn.close()
+
+
+def test_snapshot_details_include_room_type_via_monthly_assemble(tmp_path):
+    """monthly.assemble()側でroom_type_metrics.classify_room_type()を再利用して
+    room_type/current_room_typeが付与されること(room_idは実configの実データroom_id)。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
+                guest_name="Suzuki Hanako", channel="じゃらんnet", room_id="685761"),
+    ])
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    detail = snap["today_new_booking_details"][0]
+    assert detail["ota_name"] == "じゃらん"
+    assert detail["room_id"] == "685761"
+    assert detail["room_type_key"] == "single_toilet"
+    assert detail["room_type"] == "シングル｜客室トイレ付"
+    assert detail["current_room_type_key"] == "single_toilet"
+    assert detail["current_room_id"] == "685761"
+    assert detail["original_room_type"] is None
+    assert detail["room_change_history_status"] == "not_available"
+    assert detail["room_change_history"] == []
+    conn.close()
+
+
+def test_snapshot_details_unknown_room_id_classified_as_unknown(tmp_path):
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
+                room_id="999999999"),
+    ])
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    detail = snap["today_new_booking_details"][0]
+    assert detail["room_type_key"] == "unknown"
+
+
+def test_revenue_equals_details_sum_still_holds_with_new_fields(tmp_path):
+    """今回のOTA/部屋タイプ拡張後もtoday_new_booking_revenue == sum(details)の不変条件を維持する。"""
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
+                channel="じゃらんnet", room_id="685761"),
+        _booking("2", "2026-07-15", "2026-07-16", gross=20000, created_at_raw="2026-07-08T02:00:00Z",
+                channel="Booking.com", room_id="686762"),
+    ])
+    ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+    bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
+    snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+    details = snap["today_new_booking_details"]
+    assert snap["today_new_booking_count"] == len(details) == 2
+    assert snap["today_new_booking_revenue"] == sum(d["revenue_for_target_month"] for d in details)
     conn.close()
 
 

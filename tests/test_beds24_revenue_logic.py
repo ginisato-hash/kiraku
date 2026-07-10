@@ -359,3 +359,47 @@ def test_snapshot_fields_include_onsite_payment():
                  "beds24_onsite_payment_candidate_amount", "beds24_onsite_payment_candidate_count",
                  "beds24_onsite_payment_logic_status", "beds24_onsite_payment_logic_note"]:
         assert field in rec, f"missing field: {field}"
+
+
+# ---------------- 予約経路(OTA)名の正規化 ----------------
+# 実データ確認済みのrefererEditable値(2026-07-10、238予約で全件確認): じゃらんnet/
+# Booking.com/楽天トラベル/Zaokiraku。BookingRecord.channelは既にrefererEditable優先で
+# 設定済みのため、その値をそのまま正規化対象にする。
+def test_normalize_booking_source_jalan():
+    assert brl.normalize_booking_source("じゃらんnet") == ("じゃらん", "じゃらんnet")
+
+
+def test_normalize_booking_source_rakuten():
+    assert brl.normalize_booking_source("楽天トラベル") == ("楽天トラベル", "楽天トラベル")
+
+
+def test_normalize_booking_source_booking_com():
+    assert brl.normalize_booking_source("Booking.com") == ("Booking.com", "Booking.com")
+
+
+def test_normalize_booking_source_direct_brand_site():
+    """自社直販サイト名(実データ確認済み)はDirectへ正規化する。"""
+    assert brl.normalize_booking_source("Zaokiraku") == ("Direct", "Zaokiraku")
+
+
+def test_normalize_booking_source_missing_defaults_to_direct():
+    assert brl.normalize_booking_source(None) == ("Direct", "Direct")
+    assert brl.normalize_booking_source("") == ("Direct", "Direct")
+
+
+def test_normalize_booking_source_unknown_value_passes_through():
+    """未知の値は「不明」に丸めず、生値をそのまま表示名にする(情報を失わない)。"""
+    assert brl.normalize_booking_source("SomeNewOTA") == ("SomeNewOTA", "SomeNewOTA")
+
+
+# ---------------- 部屋変更履歴(room change history) ----------------
+def test_extract_room_change_history_is_not_available():
+    """実データ調査(2026-07-10、229予約・includeInfoItems=true含む)の結論: Beds24 payloadに
+    部屋変更履歴を示すfield/infoItemは存在しないため、現状はnot_available固定。"""
+    booking = BookingRecord(booking_id="1", room_id="685761", checkin_date="2026-08-01",
+                            checkout_date="2026-08-02", status="confirmed").finalize()
+    result = brl.extract_room_change_history(booking)
+    assert result["status"] == "not_available"
+    assert result["original_room_id"] is None
+    assert result["current_room_id"] == "685761"
+    assert result["changes"] == []

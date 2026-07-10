@@ -114,7 +114,21 @@ await check("renderDailyNewBookings shows 判定不可 without a revenue slash",
 // ---------------- 本日新規予約 詳細drilldown ----------------
 const sampleDetails = [
   { bookingId: "1", checkin: "2026-08-10", checkout: "2026-08-12", guestName: "Yamada Taro",
-    revenue: "¥24,000", roomName: "201", createdAtJst: "2026-08-10T09:00:00+09:00" },
+    revenue: "¥24,000", roomName: "201", createdAtJst: "2026-08-10T09:00:00+09:00",
+    otaName: "じゃらん", bookingSourceRaw: "じゃらんnet",
+    roomType: "ツイン｜客室トイレ付", roomTypeKey: "twin_toilet",
+    currentRoomType: "ツイン｜客室トイレ付", currentRoomTypeKey: "twin_toilet",
+    originalRoomType: null, originalRoomTypeKey: null,
+    hasRoomChange: false, roomChangeHistoryStatus: "not_available",
+    roomChangeSummary: "変更履歴取得不可", roomChangeHistory: [] },
+];
+
+const sampleDetailsWithRoomChange = [
+  { ...sampleDetails[0], bookingId: "2", hasRoomChange: true,
+    roomChangeHistoryStatus: "available", roomChangeSummary: "部屋変更 1件",
+    roomChangeHistory: [{ changedAt: "2026-08-09T10:00:00+09:00",
+      fromRoomType: "ツイン｜客室トイレ付", toRoomType: "ツイン｜客室バストイレ付",
+      changedBy: "staff", rawNote: "お客様都合による変更" }] },
 ];
 
 await check("renderDailyNewBookings renders as <details> with 詳細を見る when hasDetails", async () => {
@@ -130,15 +144,36 @@ await check("renderDailyNewBookings renders as <details> with 詳細を見る wh
   assert.ok(html.includes("本日新規予約一覧"));
 });
 
-await check("daily booking detail table shows checkin/checkout/guest name/amount", async () => {
+await check("daily booking detail renders as a card list (not a table) with checkin/checkout/guest/amount", async () => {
   const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("daily-booking-detail-list"));
+  assert.ok(html.includes("daily-booking-detail-card"));
+  assert.ok(!html.includes("<table"), "table markup should be fully replaced by the card list");
   assert.ok(html.includes("2026-08-10"));
   assert.ok(html.includes("2026-08-12"));
   assert.ok(html.includes("Yamada Taro"));
   assert.ok(html.includes("¥24,000"));
-  assert.ok(html.includes("チェックイン"));
-  assert.ok(html.includes("チェックアウト"));
-  assert.ok(html.includes("宿泊者名"));
+});
+
+await check("daily booking detail card shows OTA name and room type", async () => {
+  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("じゃらん"));
+  assert.ok(html.includes("ツイン｜客室トイレ付"));
+});
+
+await check("daily booking detail card shows 部屋変更なし-equivalent status when there is no room change", async () => {
+  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("変更履歴取得不可"));
+  assert.ok(!html.includes("<details class=\"room-change-details\""));
+});
+
+await check("daily booking detail card shows room change summary in a <details> when history exists", async () => {
+  const html = renderDailyNewBookingDetails({ details: sampleDetailsWithRoomChange, detailsTitle: "本日新規予約一覧" });
+  assert.ok(html.includes("部屋変更 1件"));
+  assert.ok(html.includes("<details class=\"room-change-details\""));
+  assert.ok(html.includes("<summary>部屋変更 1件</summary>"));
+  assert.ok(html.includes("ツイン｜客室バストイレ付"));
+  assert.ok(html.includes("お客様都合による変更"));
 });
 
 await check("renderDailyNewBookings does not render a booking list when hasDetails is false (0件)", async () => {
@@ -303,11 +338,12 @@ await check("mobile media query compacts metric-card padding/font-size without d
   assert.match(mobileBlock, /padding:\s*10px 10px/);
 });
 
-await check("daily-booking-table switches to a stacked block layout (no horizontal table) under 640px", async () => {
+await check("daily-booking-detail-card uses a PC 2-column grid that collapses to 1 column under 640px", async () => {
   const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
-  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.daily-booking-table thead\s*\{\s*display:\s*none/);
-  // 旧: 720pxでdisplay:block+overflow-x:autoにして横スクロールさせていた実装は撤廃済み
-  assert.ok(!/\.daily-booking-table\s*\{\s*display:\s*block;\s*overflow-x:\s*auto/.test(css));
+  assert.match(css, /\.daily-booking-detail-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.2fr\)\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.daily-booking-detail-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  // 旧table形式は完全撤去済み(横スクロールのdisplay:block+overflow-x:auto実装は残らない)
+  assert.ok(!css.includes(".daily-booking-table"));
 });
 
 console.log(`\n${passed} components checks passed`);

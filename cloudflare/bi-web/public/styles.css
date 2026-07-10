@@ -267,50 +267,79 @@ body.is-loading .dashboard {
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
 }
-.daily-booking-table {
-  width: 100%;
-  border-collapse: collapse;
+/* 予約ごとの小型detail-card list(以前はtable。OTA名/部屋タイプ/部屋変更履歴が増えて
+   窮屈になったためカード化。PCは内部2カラムで右側スペースを使う、モバイルは縦積み)。 */
+.daily-booking-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--space-3) var(--space-4);
 }
-.daily-booking-table th,
-.daily-booking-table td {
+.daily-booking-detail-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 10px 14px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  font-size: 0.82rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  min-width: 0;
 }
-.daily-booking-table th {
-  color: var(--text-muted);
+.daily-booking-detail-main,
+.daily-booking-detail-sub {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.daily-booking-detail-guest {
+  font-size: 0.85rem;
   font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
-.daily-booking-table tr:last-child td {
-  border-bottom: none;
+.daily-booking-detail-ota {
+  font-weight: 500;
+  color: var(--text-muted);
 }
-.daily-booking-table td.amount {
-  text-align: right;
+.daily-booking-detail-dates {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.daily-booking-detail-room {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.daily-booking-detail-amount {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
-/* スマホでは横スクロールのtableではなく、行を縦積みブロックに変える(横overflow禁止)。 */
+.daily-booking-detail-room-change {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.room-change-details { font-size: 0.72rem; }
+.room-change-details > summary {
+  color: var(--amber);
+  cursor: pointer;
+  list-style: none;
+}
+.room-change-details > summary::-webkit-details-marker { display: none; }
+.room-change-list {
+  margin: 4px 0 0;
+  padding-left: 1.1em;
+  color: var(--text-muted);
+}
+.room-change-list li { margin-bottom: 2px; }
+
 @media (max-width: 640px) {
-  .daily-booking-table thead { display: none; }
-  .daily-booking-table,
-  .daily-booking-table tbody,
-  .daily-booking-table tr,
-  .daily-booking-table td {
-    display: block;
-    width: 100%;
-  }
-  .daily-booking-table tr {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .daily-booking-table tr:last-child { border-bottom: none; }
-  .daily-booking-table td {
-    padding: 1px 0;
-    border-bottom: none;
-  }
-  .daily-booking-table td.amount {
-    text-align: left;
-    font-weight: 600;
+  .daily-booking-detail-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
   }
 }
 

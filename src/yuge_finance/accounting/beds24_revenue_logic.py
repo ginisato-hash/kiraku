@@ -52,6 +52,62 @@ ONSITE_PAYMENT_TOKENS = (
     "pay at property", "hotel collect", "onsite payment", "on-site payment", "pay onsite",
 )
 
+# 予約経路(OTA)表示名の正規化。実データ確認済みの refererEditable 値
+# (じゃらんnet/Booking.com/楽天トラベル/Zaokiraku。2026-07-10、238予約で全件確認)を
+# 正としてキー化する。BookingRecord.channel は normalize_booking() で既に
+# refererEditable優先(_first(raw,"refererEditable","channel","apiSource","referer",...))
+# で設定済みのため、ここではその値を表示名へ整形するだけでよい。
+OTA_DISPLAY_NAMES = {
+    "じゃらんnet": "じゃらん",
+    "jalannet": "じゃらん",
+    "jalan": "じゃらん",
+    "楽天トラベル": "楽天トラベル",
+    "rakuten": "楽天トラベル",
+    "楽天": "楽天トラベル",
+    "booking.com": "Booking.com",
+    "booking": "Booking.com",
+    "zaokiraku": "Direct",  # 自社直販ブランドサイト名(実データ確認済み)
+    "direct": "Direct",
+    "直販": "Direct",
+}
+
+ROOM_CHANGE_HISTORY_STATUS_NOT_AVAILABLE = "not_available"
+
+
+def normalize_booking_source(source_value: Optional[str]):
+    """予約経路(OTA)の生値を表示名へ正規化する。戻り値: (display_name, raw_value)。
+
+    未知の値は生値をそのまま表示名として使う(「不明」に丸めない。実データに
+    今後別OTAが増えても情報を失わないため)。
+    """
+    raw = str(source_value).strip() if source_value else ""
+    if not raw:
+        return "Direct", "Direct"
+    display = OTA_DISPLAY_NAMES.get(raw.lower(), raw)
+    return display, raw
+
+
+def extract_room_change_history(booking: "BookingRecord") -> Dict:
+    """Beds24の部屋変更履歴(room movement history)を抽出する。
+
+    実データ調査の結論(2026-07-10、229予約・5か月分・includeInfoItems=true含む):
+      - roomIdは予約ごとに単一の現在値のみで、予約時点の部屋IDと現在の部屋IDを
+        区別できるfieldはBeds24 v2 bookings payloadに存在しない。
+      - infoItems(Beds24の予約イベント通知。includeInfoItems=trueで取得可能)にも
+        部屋変更を示すcode/textは1件も無かった(実際に出現したcodeはOTA通知
+        Jalan/Rakuten、決済通知BOOKINGCOMBANKTRANS、INVALIDEMAIL/CHECKIN/CHECKOUTのみ)。
+      - modifiedTimeはbookingTimeとほぼ全予約(236/238件)で異なり、通常の自動処理でも
+        更新されるため、部屋変更特有のシグナルとしては使えない(ノイズが多すぎる)。
+      よって現状は取得不可(not_available)固定。将来Beds24側に監査ログ相当のfieldや
+      別endpointが確認できた場合のみ、この関数を更新する(推測で実装しない)。
+    """
+    return {
+        "status": ROOM_CHANGE_HISTORY_STATUS_NOT_AVAILABLE,
+        "original_room_id": None,
+        "current_room_id": booking.room_id or None,
+        "changes": [],
+    }
+
 
 def is_beds24_cancelled_booking(raw: dict) -> bool:
     """raw Beds24 booking dict からキャンセル判定する。
@@ -479,6 +535,8 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
         # 一覧表示用の予約単位詳細。PII(email/phone/address/message等)は含めない。
         # guest_nameは既存BookingRecord.guest_name(氏名のみ。BedsClient側で既に住所等を除外済み)を使う。
         detail_revenue = round(prorated_gross + prorated_point + prorated_onsite)
+        ota_name, booking_source_raw = normalize_booking_source(b.channel)
+        room_change = extract_room_change_history(b)
         details.append({
             "booking_id": b.booking_id,
             "checkin": b.checkin_date,
@@ -492,6 +550,12 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
             "room_name": b.room_name or None,
             "status": b.status,
             "created_at_jst": created_dt.isoformat(timespec="seconds"),
+            # --- 予約経路(OTA)。room_type系は室タイプ設定を持つmonthly.py側で付与する ---
+            "ota_name": ota_name,
+            "booking_source_raw": booking_source_raw,
+            "room_id": b.room_id or None,
+            "room_change_history_status": room_change["status"],
+            "room_change_history": room_change["changes"],
         })
 
     # today_new_booking_revenue は details の合計と必ず一致させる(丸め誤差防止のため

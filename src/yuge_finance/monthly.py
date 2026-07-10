@@ -136,8 +136,25 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
     today_new_bookings["today_jst"] = effective_today_jst.isoformat()
 
     # --- 部屋タイプ別KPI（ADR/日別稼働率/売上構成。月またぎ按分のため月フィルタ無し全件を使う）---
+    room_type_config = room_type_metrics.load_room_type_config()
     room_type_kpi = room_type_metrics.calculate_room_type_metrics(
-        all_bookings, month, room_type_metrics.load_room_type_config(), revenue_exclude)
+        all_bookings, month, room_type_config, revenue_exclude)
+
+    # --- 本日の新規予約detailsに部屋タイプを付与（既存のroom_type_metrics分類ロジックを再利用。
+    #     Beds24 payloadには予約時/現在で別々の部屋IDが無いため、両方とも現在のroom_idで揃える）---
+    bookings_by_id = {b.booking_id: b for b in all_bookings}
+    for detail in today_new_bookings.get("today_new_booking_details", []):
+        booking = bookings_by_id.get(detail["booking_id"])
+        room_type_key = (room_type_metrics.classify_room_type(booking, room_type_config)
+                         if booking else "unknown")
+        room_type_label = room_type_config.get(room_type_key, {}).get("label", room_type_key)
+        detail["room_type"] = room_type_label
+        detail["room_type_key"] = room_type_key
+        detail["original_room_type"] = None
+        detail["original_room_type_key"] = None
+        detail["current_room_type"] = room_type_label
+        detail["current_room_type_key"] = room_type_key
+        detail["current_room_id"] = detail["room_id"]
 
     return {
         "month": month,

@@ -523,6 +523,82 @@ await check("dailyNewBookings.details is built from snapshot.today_new_booking_d
   assert.equal(vm.dailyNewBookings.hasDetails, true);
 });
 
+// ---------------- OTA名・部屋タイプ・部屋変更履歴 ----------------
+const sampleDetailWithRoomInfo = {
+  booking_id: "2", checkin: "2026-08-14", checkout: "2026-08-15", guest_name: "伊東 昌宏",
+  revenue_for_target_month: 36000, total_booking_revenue: 36000, target_month_nights: 1,
+  total_nights: 1, status: "confirmed", created_at_jst: "2026-08-14T09:00:00+09:00",
+  ota_name: "じゃらん", booking_source_raw: "じゃらんnet",
+  room_id: "685761", room_type: "シングル｜客室トイレ付", room_type_key: "single_toilet",
+  current_room_type: "シングル｜客室トイレ付", current_room_type_key: "single_toilet",
+  current_room_id: "685761", original_room_type: null, original_room_type_key: null,
+  room_change_history_status: "not_available", room_change_history: [],
+};
+
+await check("dailyNewBookings.details exposes ota_name/booking_source_raw", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
+    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+  }, {});
+  const d = vm.dailyNewBookings.details[0];
+  assert.equal(d.otaName, "じゃらん");
+  assert.equal(d.bookingSourceRaw, "じゃらんnet");
+});
+
+await check("dailyNewBookings.details exposes room_type/current_room_type/original_room_type", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
+    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+  }, {});
+  const d = vm.dailyNewBookings.details[0];
+  assert.equal(d.roomType, "シングル｜客室トイレ付");
+  assert.equal(d.currentRoomType, "シングル｜客室トイレ付");
+  assert.equal(d.originalRoomType, null);
+});
+
+await check("dailyNewBookings.details reports 部屋変更履歴取得不可 when status is not_available", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
+    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+  }, {});
+  const d = vm.dailyNewBookings.details[0];
+  assert.equal(d.hasRoomChange, false);
+  assert.equal(d.roomChangeSummary, "変更履歴取得不可");
+});
+
+await check("dailyNewBookings.details reports room change count in summary when history exists", async () => {
+  const detailWithChange = {
+    ...sampleDetailWithRoomInfo, booking_id: "3",
+    room_change_history_status: "available",
+    room_change_history: [{
+      changed_at: "2026-08-13T10:00:00+09:00", from_room_type: "シングル｜客室トイレ付",
+      to_room_type: "ツイン｜客室トイレ付", from_room_id: "685761", to_room_id: "686762",
+      changed_by: "staff", raw_note: "満室のため変更",
+    }],
+  };
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
+    today_new_booking_logic_status: "ok", today_new_booking_details: [detailWithChange],
+  }, {});
+  const d = vm.dailyNewBookings.details[0];
+  assert.equal(d.hasRoomChange, true);
+  assert.equal(d.roomChangeSummary, "部屋変更 1件");
+  assert.equal(d.roomChangeHistory.length, 1);
+  assert.equal(d.roomChangeHistory[0].toRoomType, "ツイン｜客室トイレ付");
+  assert.equal(d.roomChangeHistory[0].rawNote, "満室のため変更");
+});
+
+await check("dailyNewBookings.details does not leak PII fields for the new OTA/room-type additions", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
+    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+  }, {});
+  const json = JSON.stringify(vm.dailyNewBookings.details[0]);
+  for (const forbidden of ["email", "phone", "address", "firstName", "lastName", "passport"]) {
+    assert.ok(!json.toLowerCase().includes(forbidden.toLowerCase()), `must not leak ${forbidden}`);
+  }
+});
+
 await check("dailyNewBookings.guestName defaults to 氏名未取得 when missing", async () => {
   const vm = buildBiViewModel({
     ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,

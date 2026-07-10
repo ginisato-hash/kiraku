@@ -449,9 +449,19 @@ function defaultCurrentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// 部屋変更履歴の要約テキスト。statusが取得不可なら「取得不可」、履歴0件なら「なし」、
+// 履歴があれば件数を出す(詳細はroomChangeHistoryをdetails内で開いて見せる)。
+function roomChangeSummaryText(status, historyLen) {
+  if (status === "not_available" || status === "unknown") return "変更履歴取得不可";
+  if (historyLen > 0) return `部屋変更 ${historyLen}件`;
+  return "部屋変更なし";
+}
+
 // 本日新規予約1件分の詳細行を表示用に整形する。PII(email/phone/address等)は
 // snapshot側にそもそも入っていないため、ここではchecked-inフィールドのみを扱う。
 function formatBookingDetail(raw) {
+  const rawHistory = Array.isArray(raw.room_change_history) ? raw.room_change_history : [];
+  const status = raw.room_change_history_status || "unknown";
   return {
     bookingId: raw.booking_id || "",
     checkin: raw.checkin || DASH,
@@ -460,6 +470,28 @@ function formatBookingDetail(raw) {
     revenue: yen(raw.revenue_for_target_month),
     roomName: raw.room_name || null,
     createdAtJst: raw.created_at_jst || null,
+    // --- 予約経路(OTA) ---
+    otaName: raw.ota_name || "Direct",
+    bookingSourceRaw: raw.booking_source_raw || null,
+    // --- 部屋タイプ(予約時/現在。Beds24側に予約時↔現在の区別fieldが無いため
+    //     original_room_typeがnullの間はcurrentと同値表示になる) ---
+    roomType: raw.room_type || raw.current_room_type || "未分類",
+    roomTypeKey: raw.room_type_key || null,
+    currentRoomType: raw.current_room_type || null,
+    currentRoomTypeKey: raw.current_room_type_key || null,
+    originalRoomType: raw.original_room_type || null,
+    originalRoomTypeKey: raw.original_room_type_key || null,
+    // --- 部屋変更履歴(現状Beds24 payloadからは取得不可。将来対応時にhasRoomChangeがtrueになる) ---
+    hasRoomChange: rawHistory.length > 0,
+    roomChangeHistoryStatus: status,
+    roomChangeSummary: roomChangeSummaryText(status, rawHistory.length),
+    roomChangeHistory: rawHistory.map((c) => ({
+      changedAt: c.changed_at || null,
+      fromRoomType: c.from_room_type || null,
+      toRoomType: c.to_room_type || null,
+      changedBy: c.changed_by || null,
+      rawNote: c.raw_note || null,
+    })),
   };
 }
 

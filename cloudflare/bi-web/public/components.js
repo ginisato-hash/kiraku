@@ -26,22 +26,43 @@ export function renderCommandCenter(primaryCards) {
   return primaryCards.map(renderMetricCard).join("");
 }
 
-// 本日新規予約一覧テーブル（チェックイン/チェックアウト/宿泊者名/対象月按分金額のみ。PIIは含めない）。
+// 部屋変更履歴ブロック。0件なら「部屋変更なし」、取得不可なら「変更履歴取得不可」を
+// 小さなmeta textで表示するだけ。1件以上あれば<details>に折り畳んで表示する。
+function renderRoomChangeBlock(d) {
+  if (d.hasRoomChange) {
+    const items = d.roomChangeHistory.map((c) => {
+      const when = c.changedAt ? `${c.changedAt} ` : "";
+      const from = c.fromRoomType || "?";
+      const to = c.toRoomType || "?";
+      const note = c.rawNote ? `（${c.rawNote}）` : "";
+      return `<li>${when}${from} → ${to}${note}</li>`;
+    }).join("");
+    return `<details class="room-change-details">
+      <summary>${d.roomChangeSummary}</summary>
+      <ul class="room-change-list">${items}</ul>
+    </details>`;
+  }
+  return `<div class="daily-booking-detail-room-change">${d.roomChangeSummary}</div>`;
+}
+
+// 本日新規予約一覧。PII(email/phone/address等)は含めない。
+// PCでは1件=カード内2カラム(左:宿泊者/OTA/CI-CO、右:部屋タイプ/金額/部屋変更)で右側スペースを
+// 活用し、モバイルでは縦積みにする(table形式は情報量が増えて窮屈になったため廃止)。
 export function renderDailyNewBookingDetails(summary) {
-  const rows = (summary.details || []).map((d) => `<tr>
-      <td>${d.checkin}</td>
-      <td>${d.checkout}</td>
-      <td>${d.guestName}</td>
-      <td class="amount">${d.revenue}</td>
-    </tr>`).join("");
+  const cards = (summary.details || []).map((d) => `<article class="daily-booking-detail-card">
+      <div class="daily-booking-detail-main">
+        <div class="daily-booking-detail-guest">${d.guestName}<span class="daily-booking-detail-ota"> / ${d.otaName}</span></div>
+        <div class="daily-booking-detail-dates">CI ${d.checkin} → CO ${d.checkout}</div>
+      </div>
+      <div class="daily-booking-detail-sub">
+        <div class="daily-booking-detail-room">部屋: ${d.roomType}</div>
+        <div class="daily-booking-detail-amount">${d.revenue}</div>
+        ${renderRoomChangeBlock(d)}
+      </div>
+    </article>`).join("");
   return `<div class="daily-booking-list">
     <h3>${summary.detailsTitle || "本日新規予約一覧"}</h3>
-    <table class="daily-booking-table">
-      <thead>
-        <tr><th>チェックイン</th><th>チェックアウト</th><th>宿泊者名</th><th>金額</th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
+    <div class="daily-booking-detail-list">${cards}</div>
   </div>`;
 }
 
