@@ -528,6 +528,7 @@ body.is-loading .dashboard {
   grid-template-columns: 1fr 1fr;
   gap: var(--space-3);
 }
+.room-type-section > div { min-width: 0; }
 @media (max-width: 900px) {
   .room-type-section { grid-template-columns: 1fr; }
 }
