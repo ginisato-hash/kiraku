@@ -189,7 +189,8 @@ function buildNotes(s) {
 }
 
 // primaryCards: id/label/value/tone/size/helper/meta を持つ型付きカード。
-// size: "hero"(2列) | "large"(1列・強調) | "normal"(1列・補助)
+// size: "large"(1列・強調) | "normal"(1列・補助)。8枚を2列×4段の均等グリッドに収めるため、
+// どのカードも1列(半幅)のみを占める(以前は予約ペースだけ2列hero表示だったが統一した)。
 function buildPrimaryCards(s, achievement, pace) {
   const gap = s.cash_revenue_gap_to_breakeven;
   const gapAchieved = gap != null && gap <= 0;
@@ -201,9 +202,9 @@ function buildPrimaryCards(s, achievement, pace) {
     ? s.beds24_revenue_net_for_bi : s.beds24_stay_month_revenue_excluding_cancelled;
 
   return [
-    // --- 最重要（hero / large）---
+    // --- 最重要 ---
     {
-      id: "booking-pace", label: "予約ペース", value: pace.label, tone: pace.tone, size: "hero",
+      id: "booking-pace", label: "予約ペース評価", value: pace.label, tone: pace.tone, size: "large",
       helper: pace.reason,
       meta: [
         { label: "月内経過", value: pct(s.month_elapsed_rate) },
@@ -221,6 +222,8 @@ function buildPrimaryCards(s, achievement, pace) {
       tone: "blue", size: "large", helper: "Beds24 / ポイント・現地決済確認 / キャンセル除外",
       note: "確定会計売上ではありません",
     },
+    // ADRは速報売上(単価の元)のすぐ近くに置く
+    buildAdrCard(s),
     // --- 次点 ---
     {
       id: "cash-bep", label: "Cash BEP", value: yen(s.cash_operating_breakeven_revenue),
@@ -239,7 +242,6 @@ function buildPrimaryCards(s, achievement, pace) {
       id: "gop-after-mc", label: "MC後GOP", value: yen(gopValue), tone: gopTone, size: "normal",
       helper: "GOP after MC",
     },
-    buildAdrCard(s),
   ];
 }
 

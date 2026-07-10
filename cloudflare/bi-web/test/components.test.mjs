@@ -1,5 +1,6 @@
 // components.js の軽量テスト（DOM生成の純粋関数）。
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
   renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
@@ -237,6 +238,49 @@ await check("renderRoomTypeRevenueMix shows データなし when hasData is fals
   const html = renderRoomTypeRevenueMix({ title: "部屋タイプ別 売上構成", hasData: false, rows: [] });
   assert.ok(html.includes("データなし"));
   assert.ok(!html.includes("revenue-mix-row"));
+});
+
+// ---------------- 2列コンパクトレイアウト ----------------
+await check("renderCommandCenter renders exactly one metric-card per primary card (8 cards)", async () => {
+  const cards = Array.from({ length: 8 }, (_, i) => (
+    { id: `c${i}`, label: `L${i}`, value: `V${i}`, tone: "gray", size: "normal" }
+  ));
+  const html = renderCommandCenter(cards);
+  const count = (html.match(/class="metric-card/g) || []).length;
+  assert.equal(count, 8);
+  assert.match(html, /ADR|L\d/); // sanity: content renders at all
+});
+
+await check("styles.css defines a 2-column command-center grid with a single-column mobile override", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  assert.match(css, /\.command-center\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.command-center\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  // 過去のroom-type-section overflowの再発防止: grid itemに対するmin-width:0が必須
+  assert.match(css, /\.command-center\s*>\s*\*\s*\{\s*min-width:\s*0/);
+});
+
+// ---------------- 予約ペース評価カード(2列×4段グリッド統一) ----------------
+await check("予約ペース評価 renders wrapped in the same .metric-card frame as other KPI cards", async () => {
+  const html = renderCommandCenter([
+    { id: "booking-pace", label: "予約ペース評価", value: "グリーン", tone: "green", size: "large",
+      helper: "予約ペースはグリーンです。" },
+    { id: "beds24-revenue", label: "速報売上", value: "¥1,200,000", tone: "blue", size: "large" },
+  ]);
+  assert.match(html, /<div class="metric-card[^"]*">\s*<div class="metric-label">予約ペース評価<\/div>/);
+  assert.ok(!html.includes("size-hero"), "no card should use the removed full-width hero size");
+});
+
+await check("all 8 primary cards (including 予約ペース評価) render as span-1 half-width cards", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  assert.ok(!css.includes("size-hero"), "hero (full-width) card size should be fully removed, not just unused");
+  assert.match(css, /\.metric-card\.size-large\s*\{\s*grid-column:\s*span 1/);
+  assert.match(css, /\.metric-card\.size-normal\s*\{\s*grid-column:\s*span 1/);
+});
+
+// ---------------- グラフ系パネルは全幅維持 ----------------
+await check("room-type occupancy chart and revenue mix stay full-width (stacked, not squeezed to half)", async () => {
+  const css = readFileSync(new URL("../public/styles.css", import.meta.url), "utf-8");
+  assert.match(css, /\.room-type-section\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*\}/);
 });
 
 console.log(`\n${passed} components checks passed`);

@@ -81,7 +81,20 @@ a:hover { text-decoration: underline; }
   .page-shell { padding: var(--space-4) var(--space-4) var(--space-6); }
 }
 
-.dashboard { display: flex; flex-direction: column; gap: var(--space-5); }
+.dashboard { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+
+/* 横overflow防止(過去にroom-type-sectionのgrid itemでmin-width未設定により発生した事例の再発防止)。
+   根本原因はgrid item自体のmin-width:auto(content-based)なので、各grid containerの直接の子に
+   min-widthを明示する。body側のoverflow-x: hiddenは保険であり根本対応ではない。 */
+body { overflow-x: hidden; }
+.page-shell,
+.command-center,
+.chart-card,
+.revenue-mix-card,
+#room-type-occupancy-chart,
+#room-type-revenue-mix {
+  min-width: 0;
+}
 
 .section-title {
   font-size: 0.78rem;
@@ -283,30 +296,33 @@ body.is-loading .dashboard {
   }
 }
 
-/* ---------- Command center (Bento grid) ---------- */
+/* ---------- Command center (2列 高密度グリッド) ---------- */
+/* PC/タブレットとも2列に統一(以前は4列/2列で分かれておりカードが横長・右側余白過多だった)。
+   スマホのみ1列。min-width:0はgrid item(直接の子である.metric-card自身)に必須。 */
 .command-center {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
+  align-items: stretch;
 }
-@media (max-width: 959px) and (min-width: 641px) {
-  .command-center { grid-template-columns: repeat(2, 1fr); }
-}
+.command-center > * { min-width: 0; }
 @media (max-width: 640px) {
-  .command-center { grid-template-columns: 1fr; }
+  .command-center { grid-template-columns: minmax(0, 1fr); }
 }
 
 .metric-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-4);
+  padding: 14px 16px;
   position: relative;
   overflow: hidden;
   min-width: 0;
+  min-height: 145px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  justify-content: space-between;
+  gap: 8px;
 }
 .metric-card::before {
   content: "";
@@ -321,37 +337,35 @@ body.is-loading .dashboard {
 .metric-card.tone-red::before { background: var(--red); opacity: 1; }
 .metric-card.tone-blue::before { background: var(--blue); opacity: 1; }
 
-/* サイズ差：最重要3枚(hero/large)を優先度で大きく見せる */
-.metric-card.size-hero { grid-column: span 2; background: var(--surface-2); }
+/* サイズ差：8枚とも半幅(span 1)に統一し、2列×4段のブロックを崩さない(正方形〜縦長寄り) */
 .metric-card.size-large { grid-column: span 1; }
 .metric-card.size-normal { grid-column: span 1; }
-@media (max-width: 640px) {
-  .metric-card.size-hero,
-  .metric-card.size-large,
-  .metric-card.size-normal { grid-column: span 1; }
-}
 
 .metric-card .metric-label {
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   color: var(--text-muted);
   font-weight: 500;
+  line-height: 1.25;
 }
 .metric-card .metric-value {
-  font-size: clamp(1.3rem, 1.1rem + 1vw, 1.9rem);
+  font-size: clamp(22px, 3vw, 30px);
   font-weight: 700;
   color: var(--text);
   overflow-wrap: anywhere;
-  line-height: 1.15;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
-.metric-card.size-hero .metric-value { font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.1rem); }
 .metric-card .metric-helper {
   font-size: 0.72rem;
   color: var(--text-faint);
+  line-height: 1.35;
 }
 .metric-card .metric-note {
   font-size: 0.68rem;
   color: var(--text-faint);
   margin-top: 2px;
+  line-height: 1.35;
 }
 
 .state-badge {
@@ -523,15 +537,13 @@ body.is-loading .dashboard {
 }
 
 /* ---------- 部屋タイプ別KPI（ADR占有グラフ/売上構成）---------- */
+/* 日別稼働率グラフ(横軸=日付)は幅が必要なため、常に全幅で縦積みする(2列KPIグリッドとは別)。 */
 .room-type-section {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
 }
 .room-type-section > div { min-width: 0; }
-@media (max-width: 900px) {
-  .room-type-section { grid-template-columns: 1fr; }
-}
 
 .chart-card, .revenue-mix-card {
   background: var(--surface);

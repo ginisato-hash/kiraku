@@ -87,10 +87,11 @@ await check("buildBiViewModel returns primaryCards", async () => {
   assert.ok(vm.primaryCards.length >= 7);
 });
 
-await check("booking pace card has size=hero", async () => {
+await check("booking pace card is a half-width card like the others (2列×4段グリッドを崩さない)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const paceCard = vm.primaryCards.find((c) => c.id === "booking-pace");
-  assert.equal(paceCard.size, "hero");
+  assert.notEqual(paceCard.size, "hero", "no card should span both columns anymore");
+  assert.equal(paceCard.label, "予約ペース評価");
 });
 
 await check("primaryCards do not surface deprecated field values", async () => {
@@ -628,6 +629,16 @@ await check("primaryCards includes an ADR card with formatted value/helper/note"
   assert.equal(adrCard.value, "¥18,450");
   assert.equal(adrCard.helper, "販売室泊 65 / 提供室泊 114");
   assert.equal(adrCard.note, "稼働率 57.0%");
+});
+
+await check("ADR card sits immediately after the beds24-revenue card (2列レイアウトで隣接表示)", async () => {
+  const vm = buildBiViewModel(baseSnapshot, {});
+  const ids = vm.primaryCards.map((c) => c.id);
+  assert.equal(vm.primaryCards.length, 8);
+  const revIdx = ids.indexOf("beds24-revenue");
+  const adrIdx = ids.indexOf("adr");
+  assert.ok(revIdx >= 0 && adrIdx >= 0);
+  assert.equal(adrIdx, revIdx + 1, "ADR should immediately follow the revenue card");
 });
 
 await check("ADR card shows データなし when sold_room_nights is 0", async () => {
