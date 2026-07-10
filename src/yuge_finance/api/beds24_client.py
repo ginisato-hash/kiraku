@@ -28,6 +28,16 @@ def _first(d: dict, *keys, default=None):
     return default
 
 
+def _charge_line_total(raw: dict) -> float:
+    """invoiceItems の type="charge" 行の lineTotal 合計（price フォールバック用）。"""
+    total = 0.0
+    for item in raw.get("invoiceItems") or []:
+        if item.get("type") != "charge":
+            continue
+        total += float(item.get("lineTotal", item.get("amount", 0)) or 0)
+    return total
+
+
 def normalize_booking(raw: dict, property_name_default: str = "喜らく") -> BookingRecord:
     """Beds24 の生予約JSON を BookingRecord へ正規化（純粋関数）。"""
     arrival = str(_first(raw, "arrival", "checkin_date", "checkIn", default=""))
@@ -49,6 +59,12 @@ def normalize_booking(raw: dict, property_name_default: str = "喜らく") -> Bo
         ).strip()
 
     gross = float(_first(raw, "gross_revenue", "price", "totalPrice", default=0) or 0)
+    if gross == 0:
+        # 実データで確認済み: 「オファー1」等の手動作成予約(apiSource=Direct)は
+        # booking.price が未同期の0のまま室料chargeだけ計上されるケースがある
+        # (2026-07〜08の実データで4件確認)。invoiceItems の type="charge" 合計を
+        # フォールバックとして使う。charge行が無い/0以下ならgrossは0のまま。
+        gross = _charge_line_total(raw)
     commission = float(_first(raw, "ota_commission", "commission", default=0) or 0)
     net = _first(raw, "net_revenue", default=None)
     net = float(net) if net not in (None, "") else gross - commission

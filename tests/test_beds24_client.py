@@ -29,3 +29,49 @@ def test_cancelled_detection():
     rec = beds24_client.normalize_booking(raw)
     assert rec.is_cancelled(["cancelled"]) is True
     assert rec.is_cancelled(["black"]) is False
+
+
+def test_normalize_booking_price_zero_falls_back_to_charge_total():
+    """実データ実証済み: 手動作成予約(apiSource=Direct, rateDescription='オファー1')は
+    booking.price が0のまま室料chargeだけinvoiceItemsに計上されることがある
+    (booking_id 89381508/89362589/89214149/89500049で確認)。price=0でも
+    charge行の合計を売上として拾う必要がある。"""
+    raw = {
+        "id": "89381508", "apiSource": "Direct", "channel": "direct",
+        "arrival": "2026-07-06", "departure": "2026-07-08", "price": 0,
+        "status": "confirmed",
+        "invoiceItems": [
+            {"type": "charge", "description": "", "lineTotal": 11800, "amount": 11800},
+        ],
+    }
+    rec = beds24_client.normalize_booking(raw)
+    assert rec.gross_revenue == 11800
+    assert rec.net_revenue == 11800
+
+
+def test_normalize_booking_price_zero_and_no_charge_stays_zero():
+    """price=0かつcharge行も無い(または0以下)場合はgrossを0のままにする
+    (charge行が本当に無い予約まで誤って加算しないため)。"""
+    raw = {
+        "id": "2", "arrival": "2026-07-01", "departure": "2026-07-02",
+        "price": 0, "status": "confirmed",
+        "invoiceItems": [
+            {"type": "payment", "description": "BankTransfer", "lineTotal": 0},
+        ],
+    }
+    rec = beds24_client.normalize_booking(raw)
+    assert rec.gross_revenue == 0
+
+
+def test_normalize_booking_price_nonzero_ignores_charge_fallback():
+    """price が既に正しく入っている通常予約では、charge合計と一致していれば
+    フォールバックの有無に関わらず結果は変わらない(既存の主要ケースを壊さない)。"""
+    raw = {
+        "id": "3", "arrival": "2026-07-01", "departure": "2026-07-02",
+        "price": 30000, "status": "confirmed",
+        "invoiceItems": [
+            {"type": "charge", "description": "", "lineTotal": 30000},
+        ],
+    }
+    rec = beds24_client.normalize_booking(raw)
+    assert rec.gross_revenue == 30000
