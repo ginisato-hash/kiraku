@@ -16,7 +16,7 @@ from typing import Dict, List
 from . import config, db
 from .accounting import (beds24_revenue_logic, breakeven_model, debt_journal, journal_engine,
                          kpi, labor_model, pace_model, pl_bs_cf, reconciliation,
-                         revenue_recon, trial_balance)
+                         revenue_recon, room_type_metrics, trial_balance)
 from .ingest import opening_balance
 from .normalize import validators
 from .normalize.schema import JournalEntry
@@ -135,6 +135,10 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
         all_bookings, month, effective_today_jst, revenue_exclude)
     today_new_bookings["today_jst"] = effective_today_jst.isoformat()
 
+    # --- 部屋タイプ別KPI（ADR/日別稼働率/売上構成。月またぎ按分のため月フィルタ無し全件を使う）---
+    room_type_kpi = room_type_metrics.calculate_room_type_metrics(
+        all_bookings, month, room_type_metrics.load_room_type_config(), revenue_exclude)
+
     return {
         "month": month,
         "bookings": bookings, "bank_txns": bank, "cash_txns": cash, "manual": manual,
@@ -166,4 +170,5 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
         "image_issues": 0, "workbook_path": workbook_path,
         "bank_actual_bi": bank_actual_bi,
         "today_new_bookings": today_new_bookings,
+        "room_type_metrics": room_type_kpi,
     }

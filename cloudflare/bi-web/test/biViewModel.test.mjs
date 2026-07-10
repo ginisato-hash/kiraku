@@ -144,9 +144,9 @@ await check("debt_service_status 返済仮置き produces a note", async () => {
   assert.ok(hasNote);
 });
 
-await check("top card count does not grow beyond existing 7", async () => {
+await check("top card count does not grow beyond existing 8 (7 + ADR)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 await check("beds24 revenue card uses beds24_revenue_net_for_bi", async () => {
@@ -206,9 +206,9 @@ await check("revenue-logic detail shows onsite payment candidate count", async (
   assert.equal(countRow[1], "2");
 });
 
-await check("onsite payment section does not increase top card count (still 7)", async () => {
+await check("onsite payment section does not increase top card count (still 8)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 await check("today new booking details remain intact alongside onsite payment fields", async () => {
@@ -325,7 +325,7 @@ await check("bank-actuals shows 未取込 for bank_fields_source=not_available w
 
 await check("bank fields source display does not increase top card count", async () => {
   const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "previous_r2_snapshot" }, {});
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 await check("month selector / daily new bookings / booking pace remain intact alongside bank source field", async () => {
@@ -351,9 +351,9 @@ await check("bank-cost-candidates detail section shows fixed/variable candidate 
   assert.ok(section.summary.includes("固定費候補"));
 });
 
-await check("bank sections do not increase primary card count (still 7)", async () => {
+await check("bank sections do not increase primary card count (still 8)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 // ---------------- 月選択ドロップダウン ----------------
@@ -419,9 +419,9 @@ await check("_internal.monthLabel formats YYYY-MM as Japanese year/month", async
   assert.equal(_internal.monthLabel(null), "—");
 });
 
-await check("month selector additions do not change top card count (still 7)", async () => {
+await check("month selector additions do not change top card count (still 8)", async () => {
   const vm = buildBiViewModel(baseSnapshot, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 await check("existing pace/finance/bank sections remain intact with month options present", async () => {
@@ -479,12 +479,12 @@ await check("dailyNewBookings falls back to amber/判定不可 when snapshot has
   assert.equal(vm.dailyNewBookings.tone, "amber");
 });
 
-await check("dailyNewBookings does not affect top card count (still 7)", async () => {
+await check("dailyNewBookings does not affect top card count (still 8)", async () => {
   const vm = buildBiViewModel({
     ...baseSnapshot, today_new_booking_count: 3, today_new_booking_revenue: 84000,
     today_new_booking_logic_status: "ok",
   }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 await check("dailyNewBookings switches value when selectedMonth/snapshot changes", async () => {
@@ -563,12 +563,12 @@ await check("dailyNewBookings.details swap when selectedMonth/snapshot changes",
   assert.equal(vmAugust.dailyNewBookings.details[0].bookingId, "august-1");
 });
 
-await check("dailyNewBookings details drilldown does not change top card count (still 7)", async () => {
+await check("dailyNewBookings details drilldown does not change top card count (still 8)", async () => {
   const vm = buildBiViewModel({
     ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,
     today_new_booking_logic_status: "ok", today_new_booking_details: sampleBookingDetails,
   }, {});
-  assert.equal(vm.primaryCards.length, 7);
+  assert.equal(vm.primaryCards.length, 8);
 });
 
 // ---------------- 2026-08「当日売上カード」回帰テスト ----------------
@@ -614,6 +614,108 @@ await check("switching from 2026-07 to 2026-08 does not carry over the previous 
   assert.equal(vmJuly.dailyNewBookings.revenue, "¥10,189");
   assert.equal(vmAugust.dailyNewBookings.revenue, "¥57,978");
   assert.notEqual(vmJuly.dailyNewBookings.revenue, vmAugust.dailyNewBookings.revenue);
+});
+
+// ---------------- ADRカード ----------------
+await check("primaryCards includes an ADR card with formatted value/helper/note", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, adr_gross: 18450, sold_room_nights: 65, available_room_nights: 114,
+    occupancy_rate_month: 57.0,
+  }, {});
+  const adrCard = vm.primaryCards.find((c) => c.id === "adr");
+  assert.ok(adrCard, "ADR card must exist");
+  assert.equal(adrCard.label, "ADR");
+  assert.equal(adrCard.value, "¥18,450");
+  assert.equal(adrCard.helper, "販売室泊 65 / 提供室泊 114");
+  assert.equal(adrCard.note, "稼働率 57.0%");
+});
+
+await check("ADR card shows データなし when sold_room_nights is 0", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, adr_gross: 0, sold_room_nights: 0 }, {});
+  const adrCard = vm.primaryCards.find((c) => c.id === "adr");
+  assert.equal(adrCard.value, "データなし");
+  assert.equal(adrCard.note, null);
+});
+
+// ---------------- 部屋タイプ別 日別稼働率グラフ(view model) ----------------
+const roomTypeChartSeries2026_08 = [
+  { date: "2026-08-01", "シングル": 50.0, "ツイン": 30.0 },
+  { date: "2026-08-02", "シングル": 0.0, "ツイン": 60.0 },
+];
+
+await check("roomTypeOccupancyChart builds dates/lines from selected snapshot series", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
+    room_type_occupancy_chart_series: roomTypeChartSeries2026_08,
+  }, {}, null, null, { selectedMonth: "2026-08" });
+  const chart = vm.roomTypeOccupancyChart;
+  assert.equal(chart.hasData, true);
+  assert.deepEqual(chart.dates, ["2026-08-01", "2026-08-02"]);
+  const single = chart.lines.find((l) => l.label === "シングル");
+  const twin = chart.lines.find((l) => l.label === "ツイン");
+  assert.deepEqual(single.points, [50.0, 0.0]);
+  assert.deepEqual(twin.points, [30.0, 60.0]);
+  assert.ok(single.color && twin.color && single.color !== twin.color, "legend colors must differ");
+});
+
+await check("roomTypeOccupancyChart is データなし(hasData=false) when series is empty", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, room_type_occupancy_chart_series: [] }, {});
+  assert.equal(vm.roomTypeOccupancyChart.hasData, false);
+  assert.deepEqual(vm.roomTypeOccupancyChart.lines, []);
+});
+
+await check("roomTypeOccupancyChart surfaces room_type_metrics_warnings", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, room_type_occupancy_chart_series: roomTypeChartSeries2026_08,
+    room_type_metrics_warnings: ["2026-08-12 ツインの稼働率が100%を超えています: sold=4 available=3"],
+  }, {});
+  assert.equal(vm.roomTypeOccupancyChart.warnings.length, 1);
+});
+
+// ---------------- 部屋タイプ別 売上構成(view model) ----------------
+const roomTypeRevenueMixSample = [
+  { room_type: "twin_toilet", room_type_label: "ツイン（トイレ）", revenue: 600000, share: 62.5,
+    sold_room_nights: 35, adr: 17143 },
+  { room_type: "single", room_type_label: "シングル", revenue: 120000, share: 12.5,
+    sold_room_nights: 10, adr: 12000 },
+];
+
+await check("roomTypeRevenueMix formats revenue/share/sold nights/ADR per row", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, room_type_revenue_mix: roomTypeRevenueMixSample }, {});
+  const mix = vm.roomTypeRevenueMix;
+  assert.equal(mix.hasData, true);
+  assert.equal(mix.rows.length, 2);
+  const twin = mix.rows.find((r) => r.roomTypeLabel === "ツイン（トイレ）");
+  assert.equal(twin.revenue, "¥600,000");
+  assert.equal(twin.share, "62.5%");
+  assert.equal(twin.soldRoomNights, "35泊");
+  assert.equal(twin.adr, "¥17,143");
+  assert.equal(twin.sharePercent, 62.5);
+});
+
+await check("roomTypeRevenueMix is データなし(hasData=false) when mix is empty", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, room_type_revenue_mix: [] }, {});
+  assert.equal(vm.roomTypeRevenueMix.hasData, false);
+  assert.deepEqual(vm.roomTypeRevenueMix.rows, []);
+});
+
+// ---------------- 月切替でroom metricsもselected snapshotを使う ----------------
+await check("switching month uses that month's own room_type metrics (no cross-month leak)", async () => {
+  const vmJuly = buildBiViewModel({
+    ...baseSnapshot, month: "2026-07", target_month: "2026-07",
+    adr_gross: 11000, sold_room_nights: 40,
+    room_type_revenue_mix: [{ room_type: "single", room_type_label: "シングル",
+      revenue: 100000, share: 100.0, sold_room_nights: 10, adr: 10000 }],
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
+  const vmAugust = buildBiViewModel({
+    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
+    adr_gross: 17581, sold_room_nights: 72,
+    room_type_revenue_mix: roomTypeRevenueMixSample,
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vmJuly.primaryCards.find((c) => c.id === "adr").value, "¥11,000");
+  assert.equal(vmAugust.primaryCards.find((c) => c.id === "adr").value, "¥17,581");
+  assert.equal(vmJuly.roomTypeRevenueMix.rows.length, 1);
+  assert.equal(vmAugust.roomTypeRevenueMix.rows.length, 2);
 });
 
 console.log(`\n${passed} biViewModel checks passed`);

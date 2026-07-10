@@ -1,0 +1,36 @@
+# 喜らく単体 部屋タイプ設定。
+# roomId / room_id はBeds24 v2 `/properties?propertyId=330695&includeAllRooms=true` の
+# roomTypes[].id / qty から実データで確認済み(2026-07-10調査)。room名は予約payload
+# (invoiceItems含む/bookings一覧)には出現せず、roomIdのみが入るため、分類はroom_idで行う。
+# capacity_rooms は同APIのqtyをそのまま使用（推測値ではない）。
+room_types:
+  single_toilet:
+    label: "シングル｜客室トイレ付"
+    capacity_rooms: 2
+    match:
+      room_ids: ["685761"]
+      room_names: ["シングル｜客室トイレ付"]
+  twin_toilet:
+    label: "ツイン｜客室トイレ付"
+    capacity_rooms: 10
+    match:
+      room_ids: ["686762"]
+      room_names: ["ツイン｜客室トイレ付"]
+  twin_bath:
+    label: "ツイン｜客室バストイレ付"
+    capacity_rooms: 4
+    match:
+      room_ids: ["686763"]
+      room_names: ["ツイン｜客室バストイレ付"]
+  family_washitsu:
+    label: "広め和洋室｜最大4名利用可"
+    capacity_rooms: 2
+    match:
+      room_ids: ["686764"]
+      room_names: ["広め和洋室｜最大4名利用可"]
+  unknown:
+    label: "未分類"
+    capacity_rooms: 0
+    match:
+      room_ids: []
+      room_names: []

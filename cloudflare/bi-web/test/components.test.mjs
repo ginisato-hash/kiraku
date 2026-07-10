@@ -3,7 +3,7 @@ import assert from "node:assert";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
   renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
-  renderDailyNewBookingDetails,
+  renderDailyNewBookingDetails, renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix,
 } from "../public/components.js";
 
 let passed = 0;
@@ -160,6 +160,83 @@ await check("renderDailyNewBookings shows unavailable note when details cannot b
   });
   assert.ok(!html.includes("<details"));
   assert.ok(html.includes("予約作成日時を確認できないため、詳細を表示できません"));
+});
+
+// ---------------- 部屋タイプ別 日別稼働率グラフ ----------------
+const sampleChart = {
+  title: "部屋タイプ別 日別稼働率",
+  helper: "選択月の日別推移。キャンセル除外、月跨ぎ按分。",
+  hasData: true,
+  dates: ["2026-08-01", "2026-08-02"],
+  lines: [
+    { label: "シングル", color: "#2f6fed", points: [50.0, 0.0] },
+    { label: "ツイン", color: "#e2725b", points: [30.0, 60.0] },
+  ],
+  warnings: [],
+};
+
+await check("renderRoomTypeOccupancyChart renders an SVG with a polyline per room type series", async () => {
+  const html = renderRoomTypeOccupancyChart(sampleChart);
+  assert.ok(html.includes("<svg"));
+  assert.ok(html.includes("部屋タイプ別 日別稼働率"));
+  const polylineCount = (html.match(/<polyline/g) || []).length;
+  assert.equal(polylineCount, 2);
+  assert.ok(html.includes("#2f6fed"));
+  assert.ok(html.includes("#e2725b"));
+});
+
+await check("renderRoomTypeOccupancyChart legend shows room type labels", async () => {
+  const html = renderRoomTypeOccupancyChart(sampleChart);
+  assert.ok(html.includes("chart-legend"));
+  assert.ok(html.includes("シングル"));
+  assert.ok(html.includes("ツイン"));
+});
+
+await check("renderRoomTypeOccupancyChart shows データなし when hasData is false", async () => {
+  const html = renderRoomTypeOccupancyChart({ title: "部屋タイプ別 日別稼働率", hasData: false, dates: [], lines: [] });
+  assert.ok(html.includes("データなし"));
+  assert.ok(!html.includes("<svg"));
+});
+
+await check("renderRoomTypeOccupancyChart surfaces warnings when present", async () => {
+  const html = renderRoomTypeOccupancyChart({
+    ...sampleChart, warnings: ["2026-08-12 ツインの稼働率が100%を超えています: sold=4 available=3"],
+  });
+  assert.ok(html.includes("稼働率が100%を超えています"));
+});
+
+// ---------------- 部屋タイプ別 売上構成 ----------------
+const sampleMix = {
+  title: "部屋タイプ別 売上構成",
+  hasData: true,
+  rows: [
+    { roomTypeLabel: "ツイン（トイレ）", revenue: "¥600,000", share: "62.5%", sharePercent: 62.5,
+      soldRoomNights: "35泊", adr: "¥17,143" },
+    { roomTypeLabel: "シングル", revenue: "¥120,000", share: "12.5%", sharePercent: 12.5,
+      soldRoomNights: "10泊", adr: "¥12,000" },
+  ],
+};
+
+await check("renderRoomTypeRevenueMix shows revenue/share/sold nights/ADR per room type", async () => {
+  const html = renderRoomTypeRevenueMix(sampleMix);
+  assert.ok(html.includes("部屋タイプ別 売上構成"));
+  assert.ok(html.includes("ツイン（トイレ）"));
+  assert.ok(html.includes("¥600,000"));
+  assert.ok(html.includes("62.5%"));
+  assert.ok(html.includes("35泊"));
+  assert.ok(html.includes("¥17,143"));
+});
+
+await check("renderRoomTypeRevenueMix bar width reflects sharePercent", async () => {
+  const html = renderRoomTypeRevenueMix(sampleMix);
+  assert.ok(html.includes("width:62.5%"));
+  assert.ok(html.includes("width:12.5%"));
+});
+
+await check("renderRoomTypeRevenueMix shows データなし when hasData is false", async () => {
+  const html = renderRoomTypeRevenueMix({ title: "部屋タイプ別 売上構成", hasData: false, rows: [] });
+  assert.ok(html.includes("データなし"));
+  assert.ok(!html.includes("revenue-mix-row"));
 });
 
 console.log(`\n${passed} components checks passed`);

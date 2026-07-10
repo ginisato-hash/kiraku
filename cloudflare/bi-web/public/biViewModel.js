@@ -239,7 +239,24 @@ function buildPrimaryCards(s, achievement, pace) {
       id: "gop-after-mc", label: "MC後GOP", value: yen(gopValue), tone: gopTone, size: "normal",
       helper: "GOP after MC",
     },
+    buildAdrCard(s),
   ];
+}
+
+// ADRカード（対象月の宿泊室料ベース平均単価。beds24_revenue_gross_stay/販売室泊）。
+// point/coupon/onsite/cancelled調整後のnet売上カード（速報売上）とは別管理。
+function buildAdrCard(s) {
+  const soldNights = s.sold_room_nights;
+  const hasData = !isNil(soldNights) && Number(soldNights) > 0;
+  const occRate = s.occupancy_rate_month;
+  return {
+    id: "adr", label: "ADR", value: hasData ? yen(s.adr_gross) : "データなし",
+    tone: "gray", size: "normal",
+    helper: hasData
+      ? `販売室泊 ${num(soldNights)} / 提供室泊 ${num(s.available_room_nights)}`
+      : "対象月の販売室泊がありません",
+    note: hasData ? `稼働率 ${isNil(occRate) ? DASH : Number(occRate).toFixed(1) + "%"}` : null,
+  };
 }
 
 // detailSections: id/title/summary(先頭代表値)/rows の構造化配列。
@@ -486,6 +503,46 @@ function buildDailyNewBookings(s, selectedMonth) {
   };
 }
 
+// 部屋タイプ別 日別稼働率グラフ用の系列データ（SVG描画はcomponents.js側の責務）。
+// room_type_occupancy_chart_series は選択月のsnapshotのみを参照するため、月切替で自動更新される。
+const ROOM_TYPE_CHART_COLORS = ["#2f6fed", "#e2725b", "#3fae6a", "#c48f2b", "#8a63d2", "#4fb0c6"];
+
+function buildRoomTypeOccupancyChart(s) {
+  const title = "部屋タイプ別 日別稼働率";
+  const helper = "選択月の日別推移。キャンセル除外、月跨ぎ按分。";
+  const series = Array.isArray(s.room_type_occupancy_chart_series) ? s.room_type_occupancy_chart_series : [];
+  const warnings = Array.isArray(s.room_type_metrics_warnings) ? s.room_type_metrics_warnings : [];
+  if (!series.length) {
+    return { title, helper, hasData: false, dates: [], lines: [], warnings };
+  }
+  const labels = Object.keys(series[0]).filter((k) => k !== "date");
+  const dates = series.map((row) => row.date);
+  const lines = labels.map((label, i) => ({
+    label,
+    color: ROOM_TYPE_CHART_COLORS[i % ROOM_TYPE_CHART_COLORS.length],
+    points: series.map((row) => Number(row[label] ?? 0)),
+  }));
+  return { title, helper, hasData: true, dates, lines, warnings };
+}
+
+// 部屋タイプ別 売上構成カード。横棒/progress bar表示用に0-100のsharePercentも渡す。
+function buildRoomTypeRevenueMix(s) {
+  const title = "部屋タイプ別 売上構成";
+  const rawRows = Array.isArray(s.room_type_revenue_mix) ? s.room_type_revenue_mix : [];
+  if (!rawRows.length) {
+    return { title, hasData: false, rows: [] };
+  }
+  const rows = rawRows.map((r) => ({
+    roomTypeLabel: r.room_type_label || r.room_type || DASH,
+    revenue: yen(r.revenue),
+    share: isNil(r.share) ? DASH : `${Number(r.share).toFixed(1)}%`,
+    sharePercent: isNil(r.share) ? 0 : Number(r.share),
+    soldRoomNights: isNil(r.sold_room_nights) ? DASH : `${num(r.sold_room_nights)}泊`,
+    adr: yen(r.adr),
+  }));
+  return { title, hasData: true, rows };
+}
+
 export function buildBiViewModel(snapshot, manifest, validation, exception, options) {
   const s = snapshot || {};
   const opts = options || {};
@@ -520,6 +577,8 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
     },
     primaryCards: buildPrimaryCards(s, achievement, pace),
     dailyNewBookings: buildDailyNewBookings(s, selectedMonth),
+    roomTypeOccupancyChart: buildRoomTypeOccupancyChart(s),
+    roomTypeRevenueMix: buildRoomTypeRevenueMix(s),
     paceComment: buildPaceComment(achievement, pace),
     statusChips: buildStatusChips(s),
     notes,

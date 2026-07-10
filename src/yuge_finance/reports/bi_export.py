@@ -337,6 +337,8 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         **ctx.get("bank_actual_bi", {}),
         # === 本日の新規予約（BI専用サマリ。仕訳・PL/BS/CFには一切反映しない）===
         **ctx.get("today_new_bookings", {}),
+        # === 部屋タイプ別KPI（ADR/日別稼働率/売上構成。BI専用。仕訳・PL/BS/CFには反映しない）===
+        **ctx.get("room_type_metrics", {}),
     }
     (bi_dir / "bi_snapshot.json").write_text(
         json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

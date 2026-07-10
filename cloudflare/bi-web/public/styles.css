@@ -521,3 +521,99 @@ body.is-loading .dashboard {
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
 }
+
+/* ---------- 部屋タイプ別KPI（ADR占有グラフ/売上構成）---------- */
+.room-type-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+@media (max-width: 900px) {
+  .room-type-section { grid-template-columns: 1fr; }
+}
+
+.chart-card, .revenue-mix-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  min-width: 0;
+}
+.chart-card h3, .revenue-mix-card h3 {
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 0 0 var(--space-1);
+  font-weight: 600;
+}
+.chart-helper {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-3);
+}
+.chart-empty {
+  font-size: 0.82rem;
+  color: var(--text-faint);
+  padding: var(--space-4) 0;
+  text-align: center;
+}
+
+.chart-scroll { overflow-x: auto; }
+.occupancy-chart {
+  width: 100%;
+  min-width: 480px;
+  height: auto;
+  display: block;
+}
+.chart-grid-line { stroke: var(--border); stroke-width: 1; }
+.chart-axis-label { fill: var(--text-faint); font-size: 9px; }
+.chart-line { opacity: 0.9; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.chart-legend-item {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-legend-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.chart-warnings {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.1em;
+  font-size: 0.72rem;
+  color: var(--amber);
+}
+.chart-warnings li { margin-bottom: 2px; }
+
+.revenue-mix-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.revenue-mix-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+}
+.revenue-mix-label { color: var(--text); font-weight: 500; }
+.revenue-mix-value { color: var(--text-muted); }
+.revenue-mix-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+  margin: 6px 0;
+}
+.revenue-mix-bar-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 999px;
+}
+.revenue-mix-row-foot {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}

@@ -73,6 +73,97 @@ export function renderDailyNewBookings(summary) {
   </details>`;
 }
 
+// 部屋タイプ別 日別稼働率（軽量SVG折れ線グラフ。chart libraryは使わない）。
+// x軸=日付、y軸=稼働率%。selectedMonthのsnapshotのみ参照するため月切替で自動更新される。
+const OCCUPANCY_CHART_WIDTH = 720;
+const OCCUPANCY_CHART_HEIGHT = 220;
+const OCCUPANCY_CHART_PAD = { top: 10, right: 12, bottom: 26, left: 40 };
+
+export function renderRoomTypeOccupancyChart(chart) {
+  const title = chart ? chart.title : "部屋タイプ別 日別稼働率";
+  if (!chart || !chart.hasData) {
+    return `<div class="chart-card">
+      <h3>${title}</h3>
+      <p class="chart-empty">データなし</p>
+    </div>`;
+  }
+  const w = OCCUPANCY_CHART_WIDTH, h = OCCUPANCY_CHART_HEIGHT, pad = OCCUPANCY_CHART_PAD;
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+  const n = chart.dates.length;
+  const allValues = chart.lines.flatMap((l) => l.points);
+  const yMax = Math.ceil(Math.max(100, ...allValues, 0) / 10) * 10;
+
+  const px = (i) => pad.left + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const py = (v) => pad.top + plotH - (v / yMax) * plotH;
+
+  const gridSteps = [0, 25, 50, 75, 100].filter((v) => v <= yMax);
+  const gridLines = gridSteps.map((v) => {
+    const yy = py(v);
+    return `<line x1="${pad.left}" y1="${yy}" x2="${w - pad.right}" y2="${yy}" class="chart-grid-line" />` +
+      `<text x="${pad.left - 6}" y="${yy + 4}" class="chart-axis-label" text-anchor="end">${v}%</text>`;
+  }).join("");
+
+  const labelStep = n > 10 ? Math.ceil(n / 10) : 1;
+  const dateLabels = chart.dates.map((d, i) => {
+    if (i % labelStep !== 0) return "";
+    return `<text x="${px(i)}" y="${h - 6}" class="chart-axis-label" text-anchor="middle">${d.slice(8, 10)}</text>`;
+  }).join("");
+
+  const lines = chart.lines.map((line) => {
+    const points = line.points.map((v, i) => `${px(i)},${py(v)}`).join(" ");
+    return `<polyline points="${points}" fill="none" stroke="${line.color}" stroke-width="2" class="chart-line">
+      <title>${line.label}</title>
+    </polyline>`;
+  }).join("");
+
+  const legend = chart.lines.map((line) =>
+    `<span class="chart-legend-item"><span class="chart-legend-dot" style="background:${line.color}"></span>${line.label}</span>`
+  ).join("");
+
+  const warningItems = (chart.warnings || []).slice(0, 3).map((w2) => `<li>${w2}</li>`).join("");
+  const warningsHtml = warningItems ? `<ul class="chart-warnings">${warningItems}</ul>` : "";
+
+  return `<div class="chart-card">
+    <h3>${chart.title}</h3>
+    <p class="chart-helper">${chart.helper}</p>
+    <div class="chart-scroll">
+      <svg viewBox="0 0 ${w} ${h}" class="occupancy-chart" role="img" aria-label="${chart.title}">
+        ${gridLines}
+        ${lines}
+        ${dateLabels}
+      </svg>
+    </div>
+    <div class="chart-legend">${legend}</div>
+    ${warningsHtml}
+  </div>`;
+}
+
+// 部屋タイプ別 売上構成（横棒/progress bar + 数値行）。
+export function renderRoomTypeRevenueMix(mix) {
+  const title = mix ? mix.title : "部屋タイプ別 売上構成";
+  if (!mix || !mix.hasData) {
+    return `<div class="revenue-mix-card">
+      <h3>${title}</h3>
+      <p class="chart-empty">データなし</p>
+    </div>`;
+  }
+  const rows = mix.rows.map((r) => `<div class="revenue-mix-row">
+      <div class="revenue-mix-row-head">
+        <span class="revenue-mix-label">${r.roomTypeLabel}</span>
+        <span class="revenue-mix-value">${r.revenue} / ${r.share}</span>
+      </div>
+      <div class="revenue-mix-bar-track">
+        <div class="revenue-mix-bar-fill" style="width:${Math.max(0, Math.min(r.sharePercent, 100))}%"></div>
+      </div>
+      <div class="revenue-mix-row-foot">${r.soldRoomNights} ｜ ADR ${r.adr}</div>
+    </div>`).join("");
+  return `<div class="revenue-mix-card">
+    <h3>${mix.title}</h3>
+    <div class="revenue-mix-list">${rows}</div>
+  </div>`;
+}
+
 export function renderInsightBanner(paceComment) {
   return `<div class="insight-banner tone-${paceComment.tone}">
     <span class="status-dot"></span>
