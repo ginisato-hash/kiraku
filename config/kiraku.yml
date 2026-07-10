@@ -3,7 +3,9 @@
 
 property:
   name: 喜らく            # 全仕訳の property 値に必ず入る
-  rooms: 19              # 客室数（テンプレ 01_入力ページ と一致）
+  # 客室数。Beds24 `/properties?includeAllRooms=true` のroomTypes実データで確認済み
+  # (シングル2 + ツイン10 + バストイレ付きツイン4 + 広め和洋室2 = 18室。2026-07-10確認)。
+  rooms: 18
 
 # --- 売上の役割分担（重要）---
 # Beds24 = 速報・管理会計（KPI/ADR/RevPAR/稼働率/予約済売上/損益分岐速報/BI先行指標）。

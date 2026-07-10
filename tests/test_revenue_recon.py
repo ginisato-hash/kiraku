@@ -49,4 +49,4 @@ def test_kpi_fields_present():
     for k in ["adr", "revpar", "occupancy", "available_room_nights",
               "ota_settlement_lag_note", "settlement_reconciliation_status"]:
         assert k in rr
-    assert rr["available_room_nights"] == 19 * 30   # 19室 × 6月30日
+    assert rr["available_room_nights"] == 18 * 30   # 18室(Beds24実データ確認済み) × 6月30日

@@ -3,7 +3,8 @@
 # 給与確定仕訳ではない。実給与は銀行/現金/会計士確定値で処理する（journal_engine/kiraku.ymlのpayrollとは別系統）。
 
 property:
-  room_count: 19
+  # Beds24実データ確認済み(config/kiraku.yml property.rooms参照): 18室。
+  room_count: 18
 
 fixed_staff:
   matsumoto:

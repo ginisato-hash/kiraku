@@ -9,8 +9,8 @@ def _uniform_occupancy(month, rooms, start="2026-06-01", end="2026-07-01"):
 
 
 def test_60pct_occupancy_golden_values():
-    """19室x30日x60%稼働、均等稼働、70%超日0日。"""
-    bookings = _uniform_occupancy("2026-06", rooms=11)  # 19*0.6≈11.4→11室で近似
+    """18室x30日x60%稼働、均等稼働、70%超日0日。"""
+    bookings = _uniform_occupancy("2026-06", rooms=11)  # 18*0.6≈10.8→11室で近似
     res = labor_model.build("2026-06", bookings)
     assert res["labor_occupied_days"] == 30
     assert res["labor_high_occupancy_days"] == 0
@@ -29,9 +29,9 @@ def test_zero_occupancy_no_extra_costs_but_fixed_salary_remains():
 
 
 def test_high_occupancy_day_doubles_cleaning_cost():
-    # 19室全室稼働(100%>70%)の1日だけ作る
+    # 18室全室稼働(100%>70%)の1日だけ作る
     bookings = [BookingRecord(booking_id="B1", checkin_date="2026-06-10",
-                              checkout_date="2026-06-11", rooms=19,
+                              checkout_date="2026-06-11", rooms=18,
                               status="confirmed", gross_revenue=100000).finalize()]
     daily = labor_model.daily_occupancy("2026-06", bookings)
     day10 = next(d for d in daily if d["date"] == "2026-06-10")
@@ -43,5 +43,5 @@ def test_high_occupancy_day_doubles_cleaning_cost():
 
 def test_matsumoto_fixed_salary_not_proportional_to_occupancy():
     low = labor_model.build("2026-06", [])
-    high = labor_model.build("2026-06", _uniform_occupancy("2026-06", rooms=19))
+    high = labor_model.build("2026-06", _uniform_occupancy("2026-06", rooms=18))
     assert low["labor_fixed_salary_cost"] == high["labor_fixed_salary_cost"] == 334000
