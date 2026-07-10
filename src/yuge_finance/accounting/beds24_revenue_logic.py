@@ -478,12 +478,13 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
 
         # 一覧表示用の予約単位詳細。PII(email/phone/address/message等)は含めない。
         # guest_nameは既存BookingRecord.guest_name(氏名のみ。BedsClient側で既に住所等を除外済み)を使う。
+        detail_revenue = round(prorated_gross + prorated_point + prorated_onsite)
         details.append({
             "booking_id": b.booking_id,
             "checkin": b.checkin_date,
             "checkout": b.checkout_date,
             "guest_name": b.guest_name or "氏名未取得",
-            "revenue_for_target_month": round(prorated_gross + prorated_point + prorated_onsite),
+            "revenue_for_target_month": detail_revenue,
             "onsite_payment_revenue_for_target_month": round(prorated_onsite),
             "total_booking_revenue": round(b.gross_revenue),
             "target_month_nights": _nights_in_month(b.checkin_date, b.checkout_date, target_month),
@@ -493,7 +494,11 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
             "created_at_jst": created_dt.isoformat(timespec="seconds"),
         })
 
-    revenue = gross_stay_revenue + point_revenue + onsite_payment_revenue - cancelled_revenue_excluded
+    # today_new_booking_revenue は details の合計と必ず一致させる(丸め誤差防止のため
+    # detailsの丸め済み値をそのまま合計する。gross/point/onsiteから再計算しない)。
+    # cancelled_revenue_excluded は表示専用の除外額。cancelled分はcontinueで既に
+    # gross_stay_revenueへ未加算のため、ここで再度引くと二重控除になる（引かない）。
+    revenue = sum(d["revenue_for_target_month"] for d in details)
 
     if not any_created_at_present:
         logic_status = "created_at_field_missing"

@@ -90,7 +90,31 @@ def test_same_day_created_and_cancelled_goes_to_cancelled_excluded():
     assert result["today_new_booking_count"] == 0
     assert result["today_new_booking_cancelled_count"] == 1
     assert result["today_new_booking_cancelled_revenue_excluded"] == 15000
-    assert result["today_new_booking_revenue"] == -15000  # gross(0) + point(0) - excluded(15000)
+    # cancelled分はそもそもrevenueへ加算されていない(continueで未加算)ため、
+    # ここで再度引いてはいけない。非キャンセル予約が無いのでrevenueは0。
+    assert result["today_new_booking_revenue"] == 0
+
+
+def test_same_day_cancelled_does_not_reduce_revenue_from_other_bookings():
+    """2026-08の実データで発見されたバグの再現: 同日作成の非キャンセル予約(合計57,978円)と
+    別の同日作成・同日キャンセル予約(50,000円)が同じ対象月に混在する場合、
+    キャンセル分は非キャンセル予約の売上を減らしてはいけない
+    (修正前は 57,978 - 50,000 = 7,978 という誤った値になっていた)。"""
+    bookings = [
+        _booking("1", "2026-08-04", "2026-08-06", gross=21978,
+                 created_at_raw="2026-07-10T04:10:14Z"),
+        _booking("2", "2026-08-14", "2026-08-15", gross=36000,
+                 created_at_raw="2026-07-09T20:40:14Z"),
+        _booking("3", "2026-08-01", "2026-08-02", gross=50000, status="cancelled",
+                 created_at_raw="2026-07-10T01:00:00Z"),
+    ]
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-08", date(2026, 7, 10), EXCLUDE)
+    assert result["today_new_booking_count"] == 2
+    assert result["today_new_booking_cancelled_revenue_excluded"] == 50000
+    assert result["today_new_booking_revenue"] == 57978
+    assert result["today_new_booking_revenue"] == sum(
+        d["revenue_for_target_month"] for d in result["today_new_booking_details"])
 
 
 # ---------------- month allocation ----------------
@@ -443,3 +467,37 @@ def test_today_new_booking_revenue_zero_onsite_when_payment_method_only(tmp_path
     assert result["today_new_booking_onsite_payment_revenue"] == 0
     assert result["today_new_booking_revenue"] == 13000
     conn.close()
+
+
+# ---------------- price=0 fallback(手動作成予約)のtoday new booking反映 ----------------
+def test_today_new_booking_counts_price_zero_charge_fallback_once():
+    """price=0・charge行11800円の手動予約(実データbooking_id 89381508相当)が
+    本日の新規予約に一度だけ計上され、二重計上されないこと。"""
+    raw = {
+        "id": "89381508", "apiSource": "Direct", "status": "confirmed", "price": 0,
+        "arrival": "2026-07-06", "departure": "2026-07-08",
+        "bookingTime": "2026-07-06T01:43:27Z",
+        "invoiceItems": [{"type": "charge", "description": "", "lineTotal": 11800}],
+    }
+    rec = normalize_booking(raw)
+    result = brl.calculate_today_new_bookings_for_month(
+        [rec], "2026-07", date(2026, 7, 6), EXCLUDE)
+    assert result["today_new_booking_count"] == 1
+    assert result["today_new_booking_revenue"] == 11800
+    assert result["today_new_booking_details"][0]["revenue_for_target_month"] == 11800
+
+
+def test_today_new_booking_price_zero_fallback_prorates_across_months():
+    """price=0・charge合計30,000円、8/30〜9/2(3泊: 8月2泊/9月1泊)の月跨ぎ予約が
+    fallback適用後も按分ロジックで正しく分割されること。"""
+    raw = {
+        "id": "1", "status": "confirmed", "price": 0,
+        "arrival": "2026-08-30", "departure": "2026-09-02",
+        "bookingTime": "2026-07-08T01:00:00Z",
+        "invoiceItems": [{"type": "charge", "description": "", "lineTotal": 30000}],
+    }
+    rec = normalize_booking(raw)
+    aug = brl.calculate_today_new_bookings_for_month([rec], "2026-08", date(2026, 7, 8), EXCLUDE)
+    sep = brl.calculate_today_new_bookings_for_month([rec], "2026-09", date(2026, 7, 8), EXCLUDE)
+    assert aug["today_new_booking_revenue"] == 20000
+    assert sep["today_new_booking_revenue"] == 10000

@@ -571,4 +571,49 @@ await check("dailyNewBookings details drilldown does not change top card count (
   assert.equal(vm.primaryCards.length, 7);
 });
 
+// ---------------- 2026-08「当日売上カード」回帰テスト ----------------
+// backend側(calculate_today_new_bookings_for_month)が同日キャンセル(50,000円)を
+// 二重控除していた実バグの再現データ(修正後の正しい値: 57,978円)。
+// このカードはsnapshotの値をそのまま表示するだけなので、backendが正しい値を返す限り
+// カードも正しく表示される。逆に言えばbackendが壊れると気づかずそのまま表示するため、
+// backend側のテスト(test_today_new_bookings.py)と対にして固定する。
+const augustDetails2026 = [
+  { booking_id: "89595831", checkin: "2026-08-04", checkout: "2026-08-06", guest_name: "FENG ZHU",
+    revenue_for_target_month: 21978, total_booking_revenue: 21978, target_month_nights: 2,
+    total_nights: 2, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T13:10:14+09:00" },
+  { booking_id: "89585384", checkin: "2026-08-14", checkout: "2026-08-15", guest_name: "伊東 昌宏",
+    revenue_for_target_month: 36000, total_booking_revenue: 36000, target_month_nights: 1,
+    total_nights: 1, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T05:40:14+09:00" },
+];
+
+await check("dailyNewBookings.revenue matches sum of details for 2026-08 (regression: was 7978, must be 57978)", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
+    today_new_booking_count: 2, today_new_booking_revenue: 57978,
+    today_new_booking_logic_status: "ok", today_new_booking_details: augustDetails2026,
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  const detailSum = augustDetails2026.reduce((acc, d) => acc + d.revenue_for_target_month, 0);
+  assert.equal(detailSum, 57978);
+  assert.equal(vm.dailyNewBookings.revenue, "¥57,978");
+  assert.equal(vm.dailyNewBookings.count, "2件");
+  assert.equal(vm.dailyNewBookings.details.length, 2);
+});
+
+await check("switching from 2026-07 to 2026-08 does not carry over the previous month's today revenue", async () => {
+  const vmJuly = buildBiViewModel({
+    ...baseSnapshot, month: "2026-07", target_month: "2026-07",
+    today_new_booking_count: 1, today_new_booking_revenue: 10189,
+    today_new_booking_logic_status: "ok",
+    today_new_booking_details: [{ ...sampleBookingDetails[0], booking_id: "89582827", revenue_for_target_month: 10189 }],
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
+  const vmAugust = buildBiViewModel({
+    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
+    today_new_booking_count: 2, today_new_booking_revenue: 57978,
+    today_new_booking_logic_status: "ok", today_new_booking_details: augustDetails2026,
+  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.equal(vmJuly.dailyNewBookings.revenue, "¥10,189");
+  assert.equal(vmAugust.dailyNewBookings.revenue, "¥57,978");
+  assert.notEqual(vmJuly.dailyNewBookings.revenue, vmAugust.dailyNewBookings.revenue);
+});
+
 console.log(`\n${passed} biViewModel checks passed`);
