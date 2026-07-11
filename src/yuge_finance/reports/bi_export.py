@@ -143,13 +143,14 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "beds24_stay_month_revenue_excluding_cancelled":
             rr["beds24_stay_month_revenue_excluding_cancelled"],
         "beds24_stay_month_cancelled_revenue": rr["beds24_stay_month_cancelled_revenue"],
-        # --- 売上速報ロジック v4（クーポン控除・point加算の明確化）---
+        # --- 売上速報ロジック v5（総額ベース。couponはBI参考表示のみで売上非控除）---
         "beds24_revenue_gross_stay": rr["beds24_revenue_gross_stay"],
         "beds24_revenue_basis": rr["beds24_revenue_basis"],
         "beds24_point_revenue_included": rr["beds24_point_revenue_included"],
         "beds24_point_booking_count": rr["beds24_point_booking_count"],
         "beds24_coupon_discount_detected": rr["beds24_coupon_discount_detected"],
         "beds24_coupon_discount_amount": rr["beds24_coupon_discount_amount"],
+        "beds24_coupon_reference_amount": rr["beds24_coupon_reference_amount"],
         "beds24_coupon_discount_booking_count": rr["beds24_coupon_discount_booking_count"],
         "beds24_onsite_payment_revenue_included": rr["beds24_onsite_payment_revenue_included"],
         "beds24_onsite_payment_booking_count": rr["beds24_onsite_payment_booking_count"],

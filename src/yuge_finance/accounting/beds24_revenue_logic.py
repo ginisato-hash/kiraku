@@ -36,10 +36,13 @@ from typing import Dict, List, Optional
 
 from ..normalize.schema import BookingRecord
 
-REVENUE_LOGIC_VERSION = "beds24_revenue_v4_coupon_deducted"
-# 売上算定基準: price(price=0はcharge fallback済み) - クーポン利用額。pointは加算しない
-# (2026-07-11、ユーザー確認済みの実際の入金構造に基づく。詳細はcalculate_recognized_booking_revenue参照)。
-REVENUE_BASIS = "price_minus_coupon"
+REVENUE_LOGIC_VERSION = "beds24_revenue_v5_gross_price_coupon_reference"
+# 売上算定基準: price(price=0はcharge fallback済み)そのまま。coupon/point/banktransfer/
+# 事前決済/現地決済はすべてpriceの決済チャネル内訳に過ぎず、売上へ別途加算も控除もしない。
+# 【2026-07-11 再訂正】v4でcouponを売上控除する仕様にしたが、ユーザーの最終判断により
+# 「couponは売上から控除しない。総額(price)をそのまま売上として扱い、couponは月次参考額として
+# 別表示するのみ」に戻す。詳細はcalculate_recognized_booking_revenue参照。
+REVENUE_BASIS = "price_gross_including_coupon_point_payments"
 JST = timezone(timedelta(hours=9))
 
 CANCEL_TOKENS = ("cancelled", "canceled", "キャンセル")
@@ -212,14 +215,12 @@ def extract_beds24_coupon_discount(raw: dict) -> float:
 
     invoiceItems の type="payment" に coupon/クーポン/割引 等の説明を持つ行の金額（絶対値）を返す。
 
-    【2026-07-11 訂正】以前は「price(室料charge)が既にcoupon精算後の金額を反映しているため
-    売上に加算しない直割引」としていたが、これは誤りだった。実データ調査(予約89646497)で
-    ユーザーに確認済みの事実: このクーポンはOTA等からの補填が無く施設側が実質負担するため、
-    その分だけ実収入が減る。よって本関数の戻り値は呼び出し側で売上から減算すること
-    （calculate_recognized_booking_revenue() 参照）。
-    一方、invoiceItems上のpoint(ポイント利用)はOTA/ポイント発行元から施設へ別途入金される
-    決済チャネルの一つに過ぎず、price(=charge合計)に既に含まれているため加算しない
-    （extract_beds24_point_revenue()のtype=charge限定ロジックと二重計上しないよう据え置き）。
+    【2026-07-11 再訂正・確定】一時的に「クーポンは施設実質負担のため売上から減算する」仕様
+    (v4)にしたが、ユーザーの最終判断によりv5で撤回。price(=室料charge合計)をそのまま総額として
+    売上に計上し、couponはBI上の参考情報(月次合計)としてのみ表示する。売上からは控除しない
+    （calculate_recognized_booking_revenue() は現在このamountを使わず、priceをそのまま返す）。
+    point/banktransfer/事前決済/現地決済も同様に、priceの決済チャネル内訳に過ぎないため
+    売上へ別途加算・控除しない。
     """
     if not raw:
         return 0.0
@@ -235,16 +236,19 @@ def extract_beds24_coupon_discount(raw: dict) -> float:
 
 
 def calculate_recognized_booking_revenue(booking: "BookingRecord", raw_index: Dict[str, dict]) -> float:
-    """予約1件の施設側認識売上額 = price(price=0はcharge fallback済み) - クーポン利用額。
+    """予約1件の施設側認識売上額 = price(price=0はcharge fallback済み)そのまま。
 
     実データ調査(2026-07-11、予約89646497およびpoint/coupon signalのある181予約中178件)の結論:
-    invoiceItems の type="charge"(室料) と type="payment"(point/coupon/事前払い等)の合計は
-    常に相殺する。つまりpriceは決済チャネルを問わない室料全額。ただしクーポンはOTA補填が無く
-    施設が実質負担するため、その額だけ実収入から減算する（ユーザー確認済み）。pointはOTA/
-    ポイント発行元からの別チャネル入金に過ぎずpriceに既に含まれるため加算しない。
+    invoiceItems の type="charge"(室料) と type="payment"(point/coupon/事前決済/現地決済等)の
+    合計は常に相殺する。つまりpriceは決済チャネル(coupon/point/banktransfer/事前決済/現地決済)を
+    問わない室料総額。
+
+    【2026-07-11 v5・ユーザー最終判断で確定】couponを含め、どの決済チャネルも売上へ別途
+    加算・控除しない。売上 = price(総額)のみ。couponの月次合計額はBI上の参考情報として
+    別途表示する(extract_beds24_coupon_discount)が、この関数の戻り値には反映しない。
+    raw_indexは将来の拡張(現状未使用)のために引数として残す。
     """
-    coupon = extract_beds24_coupon_discount(raw_index.get(booking.booking_id))
-    return max(booking.gross_revenue - coupon, 0.0)
+    return max(booking.gross_revenue, 0.0)
 
 
 def extract_beds24_coupon_revenue(raw: dict) -> float:
@@ -422,14 +426,14 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
         status_flags.append("cancel_status_field_missing")
     logic_status = ",".join(status_flags)
 
-    note = ("クーポン利用額はOTA等からの補填が無く施設が実質負担するため、売上から控除します"
-            "（2026-07-11、予約89646497の実データ検証でユーザー確認済み。"
-            "beds24_coupon_discount_amountがそのまま控除額）。pointは施設収入として扱えるため"
-            "売上加算対象ですが、現状の実データではpointもinvoiceItems type=payment"
-            "（決済手段）としてのみ出現し、室料charge(price)に既に全額含まれているため、"
-            "二重計上防止のため加算額は0円としています"
-            "（type=chargeにpoint起因の行が見つかった場合のみ自動加算）。"
-            "キャンセル済み予約はstatusフィールドで判定し、速報売上・point・couponともに除外しています。")
+    note = ("クーポン利用額は売上からは控除せず、月次合計をBI上の参考情報として表示のみします"
+            "（2026-07-11、ユーザー最終判断で確定。beds24_coupon_discount_amount/"
+            "beds24_coupon_reference_amountが参考額）。pointも同様にpriceの決済チャネル内訳の"
+            "一つに過ぎず、売上へは加算しません（現状の実データではpointもinvoiceItems "
+            "type=payment（決済手段）としてのみ出現し、室料charge(price)に既に全額含まれています。"
+            "type=chargeにpoint起因の行が見つかった場合のみ従来通り自動加算）。"
+            "キャンセル済み予約はstatusフィールドで判定し、速報売上からは除外しています"
+            "（point/couponの参考額もキャンセル分は含めません）。")
 
     onsite_priority = ["added_from_separate_charge", "payment_method_only_not_revenue",
                       "already_included_in_price", "candidate_not_selected", "field_missing"]
@@ -452,9 +456,10 @@ def compute(month: str, bookings: List[BookingRecord], exclude_statuses: List[st
         # --- point（売上加算対象）---
         "beds24_point_revenue_included": round(point_revenue),
         "beds24_point_booking_count": point_count,
-        # --- coupon（直割引。売上には加算しない。情報表示専用）---
+        # --- coupon（売上には加算も控除もしない。月次合計をBI参考情報として表示のみ）---
         "beds24_coupon_discount_detected": coupon_count > 0,
         "beds24_coupon_discount_amount": round(coupon_discount),
+        "beds24_coupon_reference_amount": round(coupon_discount),  # 同値。売上非控除であることを明示する別名
         "beds24_coupon_discount_booking_count": coupon_count,
         # --- 現地決済/現地払い（原則priceに含まれているため既定は0。実データで別建てcharge
         #     が見つかった場合のみ加算候補となる）---
@@ -617,8 +622,9 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
     else:
         logic_status = "ok"
         note = ("JST今日(bookingTime基準)に作成され、対象月に1泊以上かかる非キャンセル予約を集計。"
-               "金額は(price - クーポン利用額)を宿泊月按分ロジックで対象月に按分したうえで"
-               "point加算(現状0) + 現地決済加算（クーポンは施設負担のため売上から控除）。"
+               "金額はprice(総額。coupon/point/banktransfer/事前決済/現地決済いずれも別途"
+               "加算・控除しない)を宿泊月按分ロジックで対象月に按分したうえで現地決済加算(現状0)。"
+               "couponの月次合計はBI上の参考情報として別途表示する。"
                "同日作成・同日キャンセルは除外件数/除外額に計上。")
 
     return {

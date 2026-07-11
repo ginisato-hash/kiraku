@@ -6,12 +6,12 @@
 分類は room_id で行う(room_name は将来payloadに出現した場合の予備として設定に残す)。
 
 revenueは beds24_revenue_logic.calculate_recognized_booking_revenue() で算出する
-「price(price=0の手動予約はcharge合計フォールバック済み) - クーポン利用額」を使う
-(2026-07-11、予約89646497の実データ検証でクーポンは施設実質負担と確認済みのため控除。
-pointはOTA別チャネル入金でpriceに既に含まれるため加算しない)。onsite payment加算(現状0)は
-ここでは扱わない(既存のbeds24_revenue_gross_stay等と混同しないため)。キャンセルは除外。
-月跨ぎ予約は対象月に属する泊数分だけ按分する(_prorate_to_month/_nights_in_month を
-beds24_revenue_logic と共有)。
+「price(price=0の手動予約はcharge合計フォールバック済み)そのまま(総額)」を使う
+(2026-07-11 v5、ユーザー最終判断で確定: coupon/point/banktransfer/事前決済/現地決済は
+すべてpriceの決済チャネル内訳に過ぎず、売上へ別途加算・控除しない)。onsite payment加算
+(現状0)はここでは扱わない(既存のbeds24_revenue_gross_stay等と混同しないため)。
+キャンセルは除外。月跨ぎ予約は対象月に属する泊数分だけ按分する(_prorate_to_month/
+_nights_in_month を beds24_revenue_logic と共有)。
 
 注意: 既存の月次 `adr`/`occupancy`(revenue_recon.py)は checkin月バケット・非按分・
 config.kiraku.yml の property.rooms(19室)基準。本モジュールの adr_gross/occupancy_rate_month は

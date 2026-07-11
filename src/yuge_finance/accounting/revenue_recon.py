@@ -46,8 +46,11 @@ def compute(month: str,
     rooms = int(config.kiraku().get("property", {}).get("rooms", 19))
 
     # ---- A. 宿泊月ベース速報（Beds24）----
-    # 予約単位の認識売上 = price(price=0はcharge fallback済み) - クーポン利用額(施設実質負担のため
-    # 控除。2026-07-11ユーザー確認済み)。pointは別チャネル入金に過ぎずpriceに含まれるため加算しない。
+    # 予約単位の認識売上 = price(price=0はcharge fallback済み)そのまま(総額)。
+    # coupon/point/banktransfer/事前決済/現地決済はすべてpriceの決済チャネル内訳に過ぎず、
+    # 売上へ別途加算・控除しない(2026-07-11 v5、ユーザー最終判断で確定)。
+    # couponの月次合計はbeds24_coupon_discount_amount/beds24_coupon_reference_amountとして
+    # 参考表示のみ行う。
     in_month = [b for b in bookings if (b.checkin_date or "")[:7] == month]
     active = [b for b in in_month if not b.is_cancelled(exclude)]
     raw_json_path = next((b.raw_json_path for b in in_month if b.raw_json_path), None)
@@ -104,13 +107,14 @@ def compute(month: str,
         # 互換field: 新ロジック(point加算込み)の値と同値にする。point=0の間は従来値と一致。
         "beds24_stay_month_revenue_excluding_cancelled": net_for_bi,
         "beds24_stay_month_cancelled_revenue": round(cancelled),
-        # --- 売上速報ロジック v4（クーポン控除・point加算の明確化）---
-        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・クーポン控除後・point加算前
+        # --- 売上速報ロジック v5（総額ベース。couponはBI参考表示のみで売上非控除）---
+        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後の総額(coupon等控除前)
         "beds24_revenue_basis": beds24_revenue_logic.REVENUE_BASIS,
         "beds24_point_revenue_included": point_revenue,
         "beds24_point_booking_count": revenue_logic_info["beds24_point_booking_count"],
         "beds24_coupon_discount_detected": revenue_logic_info["beds24_coupon_discount_detected"],
         "beds24_coupon_discount_amount": revenue_logic_info["beds24_coupon_discount_amount"],
+        "beds24_coupon_reference_amount": revenue_logic_info["beds24_coupon_reference_amount"],
         "beds24_coupon_discount_booking_count":
             revenue_logic_info["beds24_coupon_discount_booking_count"],
         "beds24_onsite_payment_revenue_included": onsite_payment_revenue,

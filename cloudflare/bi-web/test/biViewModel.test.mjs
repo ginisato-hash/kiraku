@@ -156,12 +156,14 @@ await check("beds24 revenue card uses beds24_revenue_net_for_bi", async () => {
   assert.equal(revCard.value, "¥500,000"); // beds24_revenue_net_for_bi
 });
 
-await check("beds24 revenue card shows クーポン控除・ポイント加算後 wording (not ポイント控除)", async () => {
+await check("beds24 revenue card shows 総額ベース wording (not クーポン控除後/ポイント加算後)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const revCard = vm.primaryCards.find((c) => c.id === "beds24-revenue");
-  assert.ok(revCard.helper.includes("クーポン控除・ポイント加算後"));
+  assert.ok(revCard.helper.includes("総額ベース"));
   assert.ok(revCard.helper.includes("キャンセル除外"));
   assert.ok(!revCard.helper.includes("ポイント控除"), "禁止文言「ポイント控除」が残っている");
+  assert.ok(!revCard.helper.includes("クーポン控除"), "禁止文言「クーポン控除」が残っている");
+  assert.ok(!revCard.helper.includes("ポイント加算後"), "誤解を招く「ポイント加算後」が残っている");
   assert.ok(!revCard.helper.includes("クーポン加算"), "クーポン加算という誤表記が残っている");
 });
 
@@ -223,16 +225,20 @@ await check("today new booking details remain intact alongside onsite payment fi
   assert.equal(vm.dailyNewBookings.details[0].guestName, "Tanaka Ichiro");
 });
 
-await check("revenue-logic detail shows coupon as a deduction (クーポン控除), not addition", async () => {
+await check("revenue-logic detail shows coupon as a reference amount (参考), not a deduction", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const section = vm.details.find((d) => d.id === "revenue-logic");
-  assert.ok(section.rows.some(([k]) => k === "クーポン控除額"));
-  assert.ok(section.rows.some(([k]) => k === "クーポン控除検出"));
-  const discountRow = section.rows.find(([k]) => k === "クーポン控除額");
+  const discountRow = section.rows.find(([k]) => k.startsWith("クーポン割引額"));
+  assert.ok(discountRow, "クーポン割引額の行が無い");
+  assert.ok(discountRow[0].includes("参考"), "参考値であることが分かる表記になっていない");
   assert.equal(discountRow[1], "¥15,000");
-  const detectedRow = section.rows.find(([k]) => k === "クーポン控除検出");
+  const detectedRow = section.rows.find(([k]) => k === "クーポン利用検出");
+  assert.ok(detectedRow, "クーポン利用検出の行が無い");
   assert.equal(detectedRow[1], "あり");
-  assert.ok(!section.rows.some(([k]) => k.includes("ポイント控除")), "禁止文言「ポイント控除」が残っている");
+  const rowText = JSON.stringify(section.rows);
+  assert.ok(!rowText.includes("ポイント控除"), "禁止文言「ポイント控除」が残っている");
+  assert.ok(!rowText.includes("クーポン控除"), "禁止文言「クーポン控除」が残っている");
+  assert.ok(!rowText.includes("ポイント加算後"), "誤解を招く「ポイント加算後」が残っている");
 });
 
 await check("finance detail shows bank 400k and takamiya 700k placeholders", async () => {
