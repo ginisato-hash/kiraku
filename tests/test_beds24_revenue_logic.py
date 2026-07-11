@@ -145,8 +145,10 @@ def test_point_prorated_to_stay_month(tmp_path):
     assert result["beds24_point_revenue_included"] == 5000  # 10000 * 2/4
 
 
-# ---------------- compute (integration): coupon非加算テスト ----------------
-def test_coupon_does_not_affect_point_revenue(tmp_path):
+# ---------------- compute (integration): coupon額の集計(加算はしない。控除はrevenue_recon側) ----------------
+def test_coupon_amount_aggregated_but_not_added_to_point_revenue(tmp_path):
+    """brl.compute()自体はcoupon額を集計するだけで、point_revenueには混ぜない
+    (実際の売上控除はrevenue_recon.compute()側でcalculate_recognized_booking_revenue経由)。"""
     raw_path = tmp_path / "2026-06.json"
     raw_path.write_text(
         '[{"id": "1", "status": "confirmed", "invoiceItems": '
@@ -173,7 +175,10 @@ def test_raw_payload_unavailable_does_not_crash():
 
 # ---------------- revenue_recon integration ----------------
 def test_net_revenue_formula_uses_point_not_coupon():
-    """net = gross_stay_revenue + point_revenue - cancelled（couponは含まない）。"""
+    """net = gross_stay_revenue + point_revenue（クーポンが無い予約では単純にこの式で一致する。
+    クーポンがある予約ではgross_stay_revenue自体に既に控除後の値が入るため、
+    このformulaはクーポン有無に関わらず常に成立する。実際の控除挙動は
+    test_recognized_booking_revenue.py 側でraw payload込みで検証する）。"""
     from yuge_finance.accounting import revenue_recon
     bookings = [_booking("1", "2026-06-10", gross=30000)]
     rec = revenue_recon.compute("2026-06", bookings, [], [], [])

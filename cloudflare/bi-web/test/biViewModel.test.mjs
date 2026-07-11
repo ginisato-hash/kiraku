@@ -156,12 +156,12 @@ await check("beds24 revenue card uses beds24_revenue_net_for_bi", async () => {
   assert.equal(revCard.value, "¥500,000"); // beds24_revenue_net_for_bi
 });
 
-await check("beds24 revenue card shows point/onsite/cancel wording (not coupon加算)", async () => {
+await check("beds24 revenue card shows クーポン控除・ポイント加算後 wording (not ポイント控除)", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const revCard = vm.primaryCards.find((c) => c.id === "beds24-revenue");
-  assert.ok(revCard.helper.includes("ポイント・現地決済確認"),
-    "現地決済加算0の実態を「確認」と表現し、誤って加算している印象を避ける");
+  assert.ok(revCard.helper.includes("クーポン控除・ポイント加算後"));
   assert.ok(revCard.helper.includes("キャンセル除外"));
+  assert.ok(!revCard.helper.includes("ポイント控除"), "禁止文言「ポイント控除」が残っている");
   assert.ok(!revCard.helper.includes("クーポン加算"), "クーポン加算という誤表記が残っている");
 });
 
@@ -223,15 +223,16 @@ await check("today new booking details remain intact alongside onsite payment fi
   assert.equal(vm.dailyNewBookings.details[0].guestName, "Tanaka Ichiro");
 });
 
-await check("revenue-logic detail shows coupon as discount, not addition", async () => {
+await check("revenue-logic detail shows coupon as a deduction (クーポン控除), not addition", async () => {
   const vm = buildBiViewModel(baseSnapshot, {});
   const section = vm.details.find((d) => d.id === "revenue-logic");
-  assert.ok(section.rows.some(([k]) => k === "クーポン割引額"));
-  assert.ok(section.rows.some(([k]) => k === "クーポン割引検出"));
-  const discountRow = section.rows.find(([k]) => k === "クーポン割引額");
+  assert.ok(section.rows.some(([k]) => k === "クーポン控除額"));
+  assert.ok(section.rows.some(([k]) => k === "クーポン控除検出"));
+  const discountRow = section.rows.find(([k]) => k === "クーポン控除額");
   assert.equal(discountRow[1], "¥15,000");
-  const detectedRow = section.rows.find(([k]) => k === "クーポン割引検出");
+  const detectedRow = section.rows.find(([k]) => k === "クーポン控除検出");
   assert.equal(detectedRow[1], "あり");
+  assert.ok(!section.rows.some(([k]) => k.includes("ポイント控除")), "禁止文言「ポイント控除」が残っている");
 });
 
 await check("finance detail shows bank 400k and takamiya 700k placeholders", async () => {

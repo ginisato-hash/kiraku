@@ -5,11 +5,13 @@
 予約payload(bookings一覧・invoiceItems)には roomName は出現せず roomId のみが入るため、
 分類は room_id で行う(room_name は将来payloadに出現した場合の予備として設定に残す)。
 
-revenueは既存の修正済みnormalized price(BookingRecord.gross_revenue。price=0の手動予約は
-charge合計フォールバック済み)をそのまま使う。onsite payment加算(現状0)はここでは扱わない
-(既存のbeds24_revenue_gross_stay等と混同しないため)。キャンセルは除外。月跨ぎ予約は
-対象月に属する泊数分だけ按分する(_prorate_to_month/_nights_in_month を beds24_revenue_logic
-と共有)。
+revenueは beds24_revenue_logic.calculate_recognized_booking_revenue() で算出する
+「price(price=0の手動予約はcharge合計フォールバック済み) - クーポン利用額」を使う
+(2026-07-11、予約89646497の実データ検証でクーポンは施設実質負担と確認済みのため控除。
+pointはOTA別チャネル入金でpriceに既に含まれるため加算しない)。onsite payment加算(現状0)は
+ここでは扱わない(既存のbeds24_revenue_gross_stay等と混同しないため)。キャンセルは除外。
+月跨ぎ予約は対象月に属する泊数分だけ按分する(_prorate_to_month/_nights_in_month を
+beds24_revenue_logic と共有)。
 
 注意: 既存の月次 `adr`/`occupancy`(revenue_recon.py)は checkin月バケット・非按分・
 config.kiraku.yml の property.rooms(19室)基準。本モジュールの adr_gross/occupancy_rate_month は
@@ -24,8 +26,9 @@ from typing import Dict, List
 
 from .. import config
 from ..normalize.schema import BookingRecord
-from .beds24_revenue_logic import (_booking_overlaps_month, _nights_in_month,
-                                   _prorate_to_month)
+from .beds24_revenue_logic import (REVENUE_BASIS, _booking_overlaps_month, _load_raw_index_multi,
+                                   _nights_in_month, _prorate_to_month,
+                                   calculate_recognized_booking_revenue)
 
 
 def load_room_type_config() -> Dict:
@@ -60,6 +63,10 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
     relevant = [b for b in bookings
                if _booking_overlaps_month(b.checkin_date, b.checkout_date, target_month)]
     active = [b for b in relevant if not b.is_cancelled(exclude_statuses)]
+    # 月跨ぎ予約はraw_json_pathが月ごとに別ファイルになるため、単一ファイル決め打ちだと
+    # その月にしかデータの無い予約でcoupon抽出が漏れる(2026-07-11発覚。詳細は
+    # beds24_revenue_logic._load_raw_index_multi のdocstring参照)。全ファイルをマージする。
+    raw_index = _load_raw_index_multi(relevant)
 
     warnings: List[str] = []
     room_type_of: Dict[str, str] = {}
@@ -76,7 +83,8 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
         rt = room_type_of[b.booking_id]
         qty = max(b.rooms, 1)
         tm_nights = _nights_in_month(b.checkin_date, b.checkout_date, target_month)
-        prorated = _prorate_to_month(b.gross_revenue, b.checkin_date, b.checkout_date, target_month)
+        recognized_revenue = calculate_recognized_booking_revenue(b, raw_index)
+        prorated = _prorate_to_month(recognized_revenue, b.checkin_date, b.checkout_date, target_month)
         revenue_by_type[rt] = revenue_by_type.get(rt, 0.0) + prorated
         nights_by_type[rt] = nights_by_type.get(rt, 0) + tm_nights * qty
 
@@ -149,6 +157,8 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
 
     return {
         "adr_gross": adr_gross,
+        "adr_basis": REVENUE_BASIS,
+        "revpar_basis": REVENUE_BASIS,
         "sold_room_nights": sold_room_nights,
         "available_room_nights": available_room_nights,
         "occupancy_rate_month": occupancy_rate_month,

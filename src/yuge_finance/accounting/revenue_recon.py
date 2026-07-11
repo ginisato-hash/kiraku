@@ -46,11 +46,19 @@ def compute(month: str,
     rooms = int(config.kiraku().get("property", {}).get("rooms", 19))
 
     # ---- A. 宿泊月ベース速報（Beds24）----
+    # 予約単位の認識売上 = price(price=0はcharge fallback済み) - クーポン利用額(施設実質負担のため
+    # 控除。2026-07-11ユーザー確認済み)。pointは別チャネル入金に過ぎずpriceに含まれるため加算しない。
     in_month = [b for b in bookings if (b.checkin_date or "")[:7] == month]
     active = [b for b in in_month if not b.is_cancelled(exclude)]
-    gross = sum(b.gross_revenue for b in in_month)
-    recognized = sum(b.gross_revenue for b in active)
-    cancelled = sum(b.gross_revenue for b in in_month if b.is_cancelled(exclude))
+    raw_json_path = next((b.raw_json_path for b in in_month if b.raw_json_path), None)
+    raw_index = beds24_revenue_logic._load_raw_index(raw_json_path)
+
+    def _recognized(b: BookingRecord) -> float:
+        return beds24_revenue_logic.calculate_recognized_booking_revenue(b, raw_index)
+
+    gross = sum(_recognized(b) for b in in_month)
+    recognized = sum(_recognized(b) for b in active)
+    cancelled = sum(_recognized(b) for b in in_month if b.is_cancelled(exclude))
     room_nights = sum(max(1, b.stay_nights) * max(1, b.rooms) for b in active)
     available = rooms * _days_in_month(month)
     adr = round(recognized / room_nights) if room_nights else 0
@@ -96,8 +104,9 @@ def compute(month: str,
         # 互換field: 新ロジック(point加算込み)の値と同値にする。point=0の間は従来値と一致。
         "beds24_stay_month_revenue_excluding_cancelled": net_for_bi,
         "beds24_stay_month_cancelled_revenue": round(cancelled),
-        # --- 売上速報ロジック v3（point加算・coupon直割引の明確化）---
-        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・point加算前
+        # --- 売上速報ロジック v4（クーポン控除・point加算の明確化）---
+        "beds24_revenue_gross_stay": round(recognized),  # キャンセル除外後・クーポン控除後・point加算前
+        "beds24_revenue_basis": beds24_revenue_logic.REVENUE_BASIS,
         "beds24_point_revenue_included": point_revenue,
         "beds24_point_booking_count": revenue_logic_info["beds24_point_booking_count"],
         "beds24_coupon_discount_detected": revenue_logic_info["beds24_coupon_discount_detected"],

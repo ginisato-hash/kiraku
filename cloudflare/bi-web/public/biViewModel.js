@@ -196,8 +196,8 @@ function buildPrimaryCards(s, achievement, pace) {
   const gapAchieved = gap != null && gap <= 0;
   const gopValue = s.gop_after_mc;
   const gopTone = isNil(gopValue) ? "gray" : Number(gopValue) >= 0 ? "green" : "red";
-  // 速報売上: 新ロジック(ポイント加算・キャンセル除外)を主参照。旧fieldはfallback。
-  // coupon は直割引扱いのため加算しない（詳細accordionに「クーポン割引額」として表示するのみ）。
+  // 速報売上: 新ロジック(クーポン控除・キャンセル除外。point加算は現状0)を主参照。旧fieldはfallback。
+  // 2026-07-11訂正: クーポンは施設実質負担のため売上から控除する(以前は誤って非控除だった)。
   const beds24Revenue = !isNil(s.beds24_revenue_net_for_bi)
     ? s.beds24_revenue_net_for_bi : s.beds24_stay_month_revenue_excluding_cancelled;
 
@@ -219,7 +219,7 @@ function buildPrimaryCards(s, achievement, pace) {
     },
     {
       id: "beds24-revenue", label: "速報売上", value: yen(beds24Revenue),
-      tone: "blue", size: "large", helper: "Beds24 / ポイント・現地決済確認 / キャンセル除外",
+      tone: "blue", size: "large", helper: "Beds24 / クーポン控除・ポイント加算後 / キャンセル除外",
       note: "確定会計売上ではありません",
     },
     // ADRは速報売上(単価の元)のすぐ近くに置く
@@ -270,16 +270,16 @@ function buildDetailSections(s) {
       title: "売上速報ロジック",
       summary: `速報売上net ${yen(s.beds24_revenue_net_for_bi)}`,
       rows: [
-        ["Beds24速報売上 本体", yen(s.beds24_revenue_gross_stay)],
+        ["Beds24速報売上 本体(クーポン控除後)", yen(s.beds24_revenue_gross_stay)],
+        ["クーポン控除額", yen(s.beds24_coupon_discount_amount)],
         ["ポイント加算額", yen(s.beds24_point_revenue_included)],
         ["現地決済加算額", yen(s.beds24_onsite_payment_revenue_included)],
         ["キャンセル除外額", yen(s.beds24_cancelled_revenue_excluded)],
-        ["速報売上 net", yen(s.beds24_revenue_net_for_bi)],
+        ["認識売上(速報売上 net)", yen(s.beds24_revenue_net_for_bi)],
         ["キャンセル除外件数", num(s.beds24_cancelled_booking_count)],
         ["ポイント対象件数", num(s.beds24_point_booking_count)],
-        ["クーポン割引検出", s.beds24_coupon_discount_detected ? "あり" : "なし"],
-        ["クーポン割引額", yen(s.beds24_coupon_discount_amount)],
-        ["クーポン割引件数", num(s.beds24_coupon_discount_booking_count)],
+        ["クーポン控除検出", s.beds24_coupon_discount_detected ? "あり" : "なし"],
+        ["クーポン控除件数", num(s.beds24_coupon_discount_booking_count)],
         ["現地決済候補額", yen(s.beds24_onsite_payment_candidate_amount)],
         ["現地決済対象件数", num(s.beds24_onsite_payment_candidate_count)],
         ["現地決済ロジック状態", onsitePaymentStatusLabel(s.beds24_onsite_payment_logic_status)],

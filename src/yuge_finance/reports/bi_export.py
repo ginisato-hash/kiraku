@@ -143,8 +143,9 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         "beds24_stay_month_revenue_excluding_cancelled":
             rr["beds24_stay_month_revenue_excluding_cancelled"],
         "beds24_stay_month_cancelled_revenue": rr["beds24_stay_month_cancelled_revenue"],
-        # --- 売上速報ロジック v3（point加算・coupon直割引の明確化）---
+        # --- 売上速報ロジック v4（クーポン控除・point加算の明確化）---
         "beds24_revenue_gross_stay": rr["beds24_revenue_gross_stay"],
+        "beds24_revenue_basis": rr["beds24_revenue_basis"],
         "beds24_point_revenue_included": rr["beds24_point_revenue_included"],
         "beds24_point_booking_count": rr["beds24_point_booking_count"],
         "beds24_coupon_discount_detected": rr["beds24_coupon_discount_detected"],
