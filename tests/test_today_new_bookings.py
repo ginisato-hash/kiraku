@@ -42,6 +42,36 @@ def test_created_date_jst_returns_none_when_missing_or_unparseable():
     assert brl._created_date_jst("not-a-date") is None
 
 
+# ---------------- 9時台予約が出ない不具合の調査で確認したJST/UTC境界ケース ----------------
+# 実データ調査(2026-07-11)の結論: Beds24 bookingTimeはUTC ISO8601("...Z")固定で、
+# 変換ロジック自体(_created_date_jst/_created_datetime_jst)は正しくJSTへ変換できている。
+# 不具合の実態はGitHub Actionsのschedule triggerが15分間隔通りに発火していなかったこと
+# (実行履歴: workflow更新後の全24回中、15分間隔を維持できた形跡なし)であり、
+# バックエンドのJST変換ロジックには問題が無かった。回帰防止のため境界値を明示的に固定する。
+def test_utc_early_morning_converts_to_jst_same_day_9am():
+    """UTC 00:30 => JST 09:30。9時台作成予約が同日today扱いになることを固定する。"""
+    assert brl._created_date_jst("2026-07-11T00:30:00Z") == date(2026, 7, 11)
+    assert brl._created_datetime_jst("2026-07-11T00:30:00Z").isoformat() == "2026-07-11T09:30:00+09:00"
+
+
+def test_utc_previous_day_late_night_rolls_over_to_next_day_jst():
+    """UTC前日23:30 => JST翌日08:30。日付繰り上がりを固定する。"""
+    assert brl._created_date_jst("2026-07-10T23:30:00Z") == date(2026, 7, 11)
+    assert brl._created_datetime_jst("2026-07-10T23:30:00Z").isoformat() == "2026-07-11T08:30:00+09:00"
+
+
+def test_9am_jst_booking_is_counted_as_todays_new_booking():
+    """9時台JST作成の予約が本日の新規予約detailsに正しく入ることをend-to-endで固定する
+    (実データのbooking_id 89646497、2026-07-11T09:43:51+09:00作成のケースを再現)。"""
+    bookings = [_booking("89646497", "2026-07-25", "2026-07-26", gross=31212,
+                        created_at_raw="2026-07-11T00:43:51Z")]  # UTC 00:43 = JST 09:43
+    result = brl.calculate_today_new_bookings_for_month(
+        bookings, "2026-07", date(2026, 7, 11), EXCLUDE)
+    assert result["today_new_booking_count"] == 1
+    assert result["today_new_booking_details"][0]["booking_id"] == "89646497"
+    assert result["today_new_booking_details"][0]["created_at_jst"] == "2026-07-11T09:43:51+09:00"
+
+
 def test_logic_status_is_field_missing_when_no_booking_has_created_at():
     bookings = [_booking("1", "2026-07-10", "2026-07-11", created_at_raw="")]
     result = brl.calculate_today_new_bookings_for_month(

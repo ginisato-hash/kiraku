@@ -5,6 +5,7 @@ import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
   renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
   renderDailyNewBookingDetails, renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix,
+  renderRefreshButton,
 } from "../public/components.js";
 
 let passed = 0;
@@ -357,6 +358,40 @@ await check("daily-booking-detail-card uses a PC 2-column grid that collapses to
   assert.match(css, /@media \(max-width: 640px\)\s*\{\s*\.daily-booking-detail-card\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   // 旧table形式は完全撤去済み(横スクロールのdisplay:block+overflow-x:auto実装は残らない)
   assert.ok(!css.includes(".daily-booking-table"));
+});
+
+// ---------------- 最新情報に更新ボタン ----------------
+await check("renderRefreshButton shows the default label when idle", async () => {
+  const html = renderRefreshButton("idle");
+  assert.ok(html.includes("最新情報に更新"));
+  assert.ok(!html.includes("disabled"));
+  assert.ok(!html.includes("refresh-message"));
+});
+
+await check("renderRefreshButton is disabled and shows 更新中 while loading", async () => {
+  const html = renderRefreshButton("loading");
+  assert.ok(html.includes("更新中..."));
+  assert.ok(html.includes("disabled"));
+});
+
+await check("renderRefreshButton shows a success message and re-enables the button", async () => {
+  const html = renderRefreshButton("success");
+  assert.ok(html.includes("最新情報を取得しました"));
+  assert.ok(html.includes("tone-green"));
+  assert.ok(!html.includes("disabled"));
+  assert.ok(html.includes("最新情報に更新")); // ボタン自体のラベルはidleへ戻っている
+});
+
+await check("renderRefreshButton shows an error message on failure", async () => {
+  const html = renderRefreshButton("error");
+  assert.ok(html.includes("更新に失敗しました"));
+  assert.ok(html.includes("tone-red"));
+});
+
+await check("renderRefreshButton renders as its own targetable wrap element", async () => {
+  const html = renderRefreshButton("idle");
+  assert.ok(html.includes('id="refresh-button-wrap"'));
+  assert.ok(html.includes('id="refresh-button"'));
 });
 
 console.log(`\n${passed} components checks passed`);

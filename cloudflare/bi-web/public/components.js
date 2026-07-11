@@ -249,6 +249,32 @@ export function renderMonthSelector(header) {
   </div>`;
 }
 
+const REFRESH_BUTTON_LABELS = {
+  idle: "最新情報に更新",
+  loading: "更新中...",
+  success: "最新情報を取得しました",
+  error: "更新に失敗しました",
+};
+
+// 「最新情報に更新」ボタン。WorkerはBeds24 APIを叩かないため、これはR2に公開済みの
+// 最新snapshotをbrowser/中間キャッシュを回避して再取得するだけ(Beds24 fetch自体は行わない)。
+// render()の他の部分(月選択・カード等)とは独立したDOM(#refresh-button-wrap)として
+// 管理し、状態変化のためだけに全体を再描画して開いているdetailsを閉じないようにする。
+export function renderRefreshButton(state) {
+  const s = state || "idle";
+  const label = REFRESH_BUTTON_LABELS[s] || REFRESH_BUTTON_LABELS.idle;
+  const disabled = s === "loading" ? " disabled" : "";
+  const messageClass = s === "success" ? "tone-green" : s === "error" ? "tone-red" : "";
+  const message = (s === "success" || s === "error")
+    ? `<span class="refresh-message ${messageClass}">${label}</span>` : "";
+  return `<span class="refresh-button-wrap" id="refresh-button-wrap">
+    <button type="button" class="refresh-button" id="refresh-button"${disabled}>
+      ${s === "loading" ? label : REFRESH_BUTTON_LABELS.idle}
+    </button>
+    ${message}
+  </span>`;
+}
+
 export function renderHeader(header) {
   return {
     title: header.title,

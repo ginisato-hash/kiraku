@@ -5,7 +5,7 @@ import { buildBiViewModel } from "./biViewModel.js";
 import {
   renderCommandCenter, renderInsightBanner, renderStatusChips, renderNotes,
   renderDetails, renderHeader, renderErrorState, renderSkeleton, renderDailyNewBookings,
-  renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix,
+  renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix, renderRefreshButton,
 } from "./components.js";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -13,11 +13,16 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 let manifestCache = null;
 let lastGoodVm = null;
 let currentSelectedMonth = null;
+let refreshState = "idle"; // "idle" | "loading" | "success" | "error"
+let refreshResetTimer = null;
 
 // 日付跨ぎ後もブラウザ/中間キャッシュに古いBIデータを見せない（重大不具合対応）。
-async function getJSON(url) {
+// bust=true の場合のみ ?_=Date.now() を付与する（手動更新ボタン専用。通常のfetchは
+// cache:"no-store" だけで十分なため付けない。付けすぎるとURLが汚れるだけで意味がない）。
+async function getJSON(url, { bust } = {}) {
+  const finalUrl = bust ? `${url}${url.includes("?") ? "&" : "?"}_=${Date.now()}` : url;
   try {
-    const r = await fetch(url, { cache: "no-store" });
+    const r = await fetch(finalUrl, { cache: "no-store" });
     if (!r.ok) return null;
     return await r.json();
   } catch (e) {
@@ -25,27 +30,27 @@ async function getJSON(url) {
   }
 }
 
-async function fetchManifest() {
-  return getJSON("/api/manifest");
+async function fetchManifest(bust) {
+  return getJSON("/api/manifest", { bust });
 }
 
-async function fetchSnapshot(month) {
+async function fetchSnapshot(month, bust) {
   const url = month ? `/api/snapshot?month=${encodeURIComponent(month)}` : "/api/snapshot";
-  return getJSON(url);
+  return getJSON(url, { bust });
 }
 
-async function fetchValidation(month) {
+async function fetchValidation(month, bust) {
   const url = month
     ? `/data/months/${encodeURIComponent(month)}/bi_validation_status.json`
     : "/data/bi_validation_status.json";
-  return getJSON(url);
+  return getJSON(url, { bust });
 }
 
-async function fetchException(month) {
+async function fetchException(month, bust) {
   const url = month
     ? `/data/months/${encodeURIComponent(month)}/bi_exception_summary.json`
     : "/data/bi_exception_summary.json";
-  return getJSON(url);
+  return getJSON(url, { bust });
 }
 
 function getMonthFromUrl() {
@@ -97,6 +102,35 @@ function attachMonthSelectListener() {
   }
 }
 
+// 「最新情報に更新」ボタンは他のcard/月選択とは別のDOM(#refresh-button-wrap)として
+// 独立更新する。全体render()を呼ばずに済むため、開いているdetails(本日新規予約一覧等)を
+// 閉じずに状態(loading/success/error)だけ反映できる。
+function renderRefreshButtonUi() {
+  const wrap = document.getElementById("refresh-button-wrap");
+  if (!wrap) return;
+  wrap.outerHTML = renderRefreshButton(refreshState);
+  attachRefreshButtonListener();
+}
+
+function attachRefreshButtonListener() {
+  const btn = document.getElementById("refresh-button");
+  if (btn) {
+    btn.addEventListener("click", handleManualRefresh);
+  }
+}
+
+function setRefreshState(state) {
+  refreshState = state;
+  renderRefreshButtonUi();
+  if (refreshResetTimer) {
+    clearTimeout(refreshResetTimer);
+    refreshResetTimer = null;
+  }
+  if (state === "success" || state === "error") {
+    refreshResetTimer = setTimeout(() => setRefreshState("idle"), 4000);
+  }
+}
+
 function setLoading(loading) {
   document.body.classList.toggle("is-loading", loading);
   const sel = document.getElementById("month-select");
@@ -107,8 +141,10 @@ function render(vm) {
   lastGoodVm = vm;
   const header = renderHeader(vm.header);
   document.getElementById("header-meta").textContent = header.metaLine;
-  document.getElementById("header-right").innerHTML = header.monthSelectorHtml + header.pillHtml;
+  document.getElementById("header-right").innerHTML =
+    header.monthSelectorHtml + header.pillHtml + renderRefreshButton(refreshState);
   attachMonthSelectListener();
+  attachRefreshButtonListener();
 
   document.getElementById("daily-summary-section").innerHTML = renderDailyNewBookings(vm.dailyNewBookings);
   document.getElementById("command-center").innerHTML = renderCommandCenter(vm.primaryCards);
@@ -123,24 +159,36 @@ function render(vm) {
     renderDetails(vm.details, vm.validationSummary, vm.exceptionCount);
 }
 
-async function loadAndRender(month) {
+async function loadAndRender(month, opts) {
+  const bust = !!(opts && opts.bust);
   currentSelectedMonth = month || null;
   setLoading(true);
   const [snapshot, validation, exception] = await Promise.all([
-    fetchSnapshot(month), fetchValidation(month), fetchException(month),
+    fetchSnapshot(month, bust), fetchValidation(month, bust), fetchException(month, bust),
   ]);
   setLoading(false);
   if (!snapshot) {
     showError();
-    return;
+    return false;
   }
   const vm = buildBiViewModel(snapshot, manifestCache, validation, exception, { selectedMonth: month });
   render(vm);
+  return true;
 }
 
 async function handleMonthChange(month) {
   updateUrlMonth(month);
   await loadAndRender(month);
+}
+
+// 「最新情報に更新」クリック時のハンドラ。WorkerはBeds24 APIを叩かないため、これは
+// R2に公開済みの最新snapshotをcache bypassで再取得するだけ(Beds24再取得の意味ではない)。
+async function handleManualRefresh() {
+  if (refreshState === "loading") return;
+  setRefreshState("loading");
+  manifestCache = await fetchManifest(true);
+  const ok = await loadAndRender(currentSelectedMonth, { bust: true });
+  setRefreshState(ok ? "success" : "error");
 }
 
 async function main() {

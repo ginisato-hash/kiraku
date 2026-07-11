@@ -213,4 +213,21 @@ await check("/data/months/2026-07/bi_snapshot.json has no-store cache headers", 
   assertNoStore(r);
 });
 
+// ---------------- 手動更新ボタンのcache-busting query(`_`)を無視して正常応答する ----------------
+await check("/api/snapshot?month=2026-08&_=123 (manual refresh cache-busting) still resolves correctly", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/snapshot?month=2026-08&_=123"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).target_month, "2026-08");
+  assertNoStore(r);
+});
+
+await check("/api/manifest?_=123 (manual refresh cache-busting) still resolves correctly", async () => {
+  const env = makeMonthEnv();
+  const r = await worker.fetch(new Request("https://x/api/manifest?_=123"), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).default_month, "2026-07");
+  assertNoStore(r);
+});
+
 console.log(`\n${passed} worker checks passed`);

@@ -186,6 +186,39 @@ body.is-loading .dashboard {
 .status-pill.tone-red .dot { background: var(--red); }
 .status-pill.tone-blue .dot { background: var(--blue); }
 
+/* ---------- 最新情報に更新ボタン ---------- */
+/* R2に公開済みの最新snapshotをcache bypassで再取得するだけ(WorkerはBeds24 APIを叩かない)。 */
+.refresh-button-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.refresh-button {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.refresh-button:hover:not(:disabled) { border-color: var(--blue); }
+.refresh-button:disabled { opacity: 0.6; cursor: wait; }
+.refresh-message {
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.refresh-message.tone-green { color: var(--green); }
+.refresh-message.tone-red { color: var(--red); }
+@media (max-width: 640px) {
+  .refresh-button-wrap { flex-wrap: wrap; width: 100%; }
+  .refresh-button { width: 100%; }
+}
+
 /* ---------- 本日の新規予約（トップカードより上のsummary strip） ---------- */
 .daily-summary-strip {
   border: 1px solid var(--border);
