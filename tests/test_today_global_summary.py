@@ -240,6 +240,30 @@ def test_daily_global_summary_nested_schema_matches_flat_fields(tmp_path):
     assert dgs["today_checkins"]["count"] == result["today_checkin_count_global"]
 
 
+def test_details_are_sorted_by_booking_id_regardless_of_input_order(tmp_path):
+    """DB(SQLite)のSELECT * はORDER BY無しのため、月ごとのupsertタイミング次第で
+    行順序が変わり得る。details配列がbooking_id順に安定ソートされていれば、入力の
+    bookings順序が変わっても出力配列の順序は変わらない(daily_global_summaryが
+    月snapshot間で完全一致するための前提条件)。"""
+    raws = [
+        _raw_booking("300", 10000, "2026-07-25", "2026-07-26"),
+        _raw_booking("100", 20000, "2026-07-25", "2026-07-26"),
+        _raw_booking("200", 30000, "2026-07-25", "2026-07-26"),
+    ]
+    raw_path = _write_raw(tmp_path, "raw.json", raws)
+    recs_forward = [_rec(r, raw_path, "2026-07-11T00:00:00Z") for r in raws]
+    recs_reversed = list(reversed(recs_forward))
+
+    result_forward = brl.calculate_today_global_summary(recs_forward, TODAY, EXCLUDE)
+    result_reversed = brl.calculate_today_global_summary(recs_reversed, TODAY, EXCLUDE)
+
+    ids_forward = [d["booking_id"] for d in result_forward["today_new_booking_details_global"]]
+    ids_reversed = [d["booking_id"] for d in result_reversed["today_new_booking_details_global"]]
+    assert ids_forward == ["100", "200", "300"]
+    assert ids_forward == ids_reversed
+    assert result_forward["daily_global_summary"] == result_reversed["daily_global_summary"]
+
+
 def test_daily_global_summary_normal_zero_is_ok_not_created_at_field_missing(tmp_path):
     """作成日時fieldが正常に存在する予約群の中で、たまたま今日/前日該当0件でも
     statusは"ok"のまま("判定不可"にはしない)。"""

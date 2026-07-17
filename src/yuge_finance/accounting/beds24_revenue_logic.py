@@ -753,6 +753,15 @@ def calculate_today_global_summary(bookings: List[BookingRecord], today_jst: dat
             checkin_revenue += recognized
             checkin_details.append(_global_booking_detail(b, recognized, created_dt))
 
+    # DB(SQLite)の SELECT * FROM beds24_bookings はORDER BY無しのため、月ごとの
+    # upsertタイミング次第でrowid順が変わり、同一refresh run内でも月別snapshot間で
+    # details配列の順序がズレることがある(件数・売上・中身の集合は同じでも配列順序だけ
+    # 異なる = daily_global_summaryが月間で完全一致しなくなる)。booking_idで安定ソート
+    # することでDB行順序への依存を断ち、真にグローバル(月に依らず同一)にする。
+    new_details.sort(key=lambda d: d["booking_id"])
+    yesterday_details.sort(key=lambda d: d["booking_id"])
+    checkin_details.sort(key=lambda d: d["booking_id"])
+
     new_logic_status = "ok" if any_created_at_present else "created_at_field_missing"
     new_logic_note = (_NEW_BOOKING_NOTE_OK.format(label="今日") if new_logic_status == "ok"
                       else _NEW_BOOKING_NOTE_MISSING.format(label="本日"))
