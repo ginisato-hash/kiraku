@@ -460,9 +460,9 @@ function roomChangeSummaryText(status, historyLen) {
   return "部屋変更なし";
 }
 
-// 本日新規予約1件分の詳細行を表示用に整形する。PII(email/phone/address等)は
-// snapshot側にそもそも入っていないため、ここではchecked-inフィールドのみを扱う。
-function formatBookingDetail(raw) {
+// 本日サマリー(新規予約/チェックイン)1件分の詳細行を表示用に整形する。PII(email/phone/
+// address等)はsnapshot側にそもそも入っていないため、ここではchecked-inフィールドのみを扱う。
+function formatGlobalBookingDetail(raw) {
   const rawHistory = Array.isArray(raw.room_change_history) ? raw.room_change_history : [];
   const status = raw.room_change_history_status || "unknown";
   return {
@@ -470,20 +470,15 @@ function formatBookingDetail(raw) {
     checkin: raw.checkin || DASH,
     checkout: raw.checkout || DASH,
     guestName: raw.guest_name || "氏名未取得",
-    revenue: yen(raw.revenue_for_target_month),
+    revenue: yen(raw.revenue),
     roomName: raw.room_name || null,
     createdAtJst: raw.created_at_jst || null,
     // --- 予約経路(OTA) ---
     otaName: raw.ota_name || "Direct",
     bookingSourceRaw: raw.booking_source_raw || null,
-    // --- 部屋タイプ(予約時/現在。Beds24側に予約時↔現在の区別fieldが無いため
-    //     original_room_typeがnullの間はcurrentと同値表示になる) ---
-    roomType: raw.room_type || raw.current_room_type || "未分類",
+    // --- 部屋タイプ ---
+    roomType: raw.room_type || "未分類",
     roomTypeKey: raw.room_type_key || null,
-    currentRoomType: raw.current_room_type || null,
-    currentRoomTypeKey: raw.current_room_type_key || null,
-    originalRoomType: raw.original_room_type || null,
-    originalRoomTypeKey: raw.original_room_type_key || null,
     // --- 部屋変更履歴(現状Beds24 payloadからは取得不可。将来対応時にhasRoomChangeがtrueになる) ---
     hasRoomChange: rawHistory.length > 0,
     roomChangeHistoryStatus: status,
@@ -498,46 +493,102 @@ function formatBookingDetail(raw) {
   };
 }
 
-// トップカード群より上のsummary strip。「本日の新規予約」件数・金額（選択中対象月・宿泊日ベース）。
-// クリックで対象予約一覧(details)を展開できる。
-function buildDailyNewBookings(s, selectedMonth) {
-  const label = "本日の新規予約";
-  const targetMonthLabel = selectedMonth ? `${monthLabel(selectedMonth)}宿泊分` : DASH;
-  const status = s.today_new_booking_logic_status;
-  const detailsTitle = "本日新規予約一覧";
+// 日次サマリー3カード（本日の新規予約・前日の新規予約・本日のチェックイン）。
+// いずれも月選択に依らないグローバル集計。
+//
+// single source of truthは snapshot.daily_global_summary（backend:
+// calculate_today_global_summary が生成）。flat fields(today_new_booking_count_global等)は
+// backend内の他消費者(manifest等)向けの互換fieldであり、フロントはここを直接参照しない
+// ("複数schemaを場当たり的に推測する構造"を避けるため、daily_global_summaryのみを見る)。
+function formatDateJstLabel(dateIso) {
+  if (typeof dateIso !== "string") return DASH;
+  const m = dateIso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return DASH;
+  return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日`;
+}
+
+const DAILY_CARD_DEFS = [
+  {
+    key: "today_new_bookings", label: "本日の新規予約", subLabel: "今日入った予約",
+    detailsTitle: "本日新規予約一覧",
+    emptyHelper: "本日の新規予約はまだありません",
+    okHelper: "予約総額・キャンセル除外（チェックイン月は問わない）",
+    missingHelper: "Beds24の予約作成日時fieldを確認できません",
+  },
+  {
+    key: "yesterday_new_bookings", label: "前日の新規予約", subLabel: "昨日入った予約",
+    detailsTitle: "前日新規予約一覧",
+    emptyHelper: "前日の新規予約はありませんでした",
+    okHelper: "予約総額・キャンセル除外（チェックイン月は問わない）",
+    missingHelper: "Beds24の予約作成日時fieldを確認できません",
+  },
+  {
+    key: "today_checkins", label: "本日のチェックイン", subLabel: "今日到着する予約",
+    detailsTitle: "本日チェックイン予約一覧",
+    emptyHelper: "本日チェックインの予約はありません",
+    okHelper: "予約総額・キャンセル除外（予約作成日は問わない）",
+    missingHelper: "Beds24のチェックイン日fieldを確認できません",
+  },
+];
+
+// 正常に計算できた0件はtone=neutralの「0件」表示にする（"判定不可"にはしない）。
+// "判定不可"はstatusがそもそも欠損/created_at_field_missingの場合のみ。
+function buildDailySummaryCard(bucket, def) {
   const detailsCta = "詳細を見る";
+  const b = (bucket && typeof bucket === "object") ? bucket : {};
+  const status = b.status;
+  const dateLabel = formatDateJstLabel(b.date_jst);
 
   if (!status || status === "created_at_field_missing") {
     return {
-      label, count: "判定不可", revenue: "",
-      helper: "Beds24の予約作成日時fieldを確認できません",
-      tone: "amber", targetMonthLabel, status: status || "created_at_field_missing",
-      details: [], hasDetails: false, detailsTitle, detailsCta,
+      label: def.label, subLabel: def.subLabel, dateLabel,
+      count: "判定不可", revenue: "",
+      helper: def.missingHelper,
+      tone: "amber", status: status || "created_at_field_missing",
+      details: [], hasDetails: false, detailsTitle: def.detailsTitle, detailsCta,
       detailsUnavailableNote: "予約作成日時を確認できないため、詳細を表示できません",
     };
   }
 
-  const count = s.today_new_booking_count;
+  const count = b.count;
   const countText = isNil(count) ? DASH : `${Number(count).toLocaleString("ja-JP")}件`;
-  const revenueText = yen(s.today_new_booking_revenue);
-  const rawDetails = Array.isArray(s.today_new_booking_details) ? s.today_new_booking_details : [];
-  const details = rawDetails.map(formatBookingDetail);
-
-  if (!count) {
-    return {
-      label, count: countText, revenue: revenueText,
-      helper: "本日、選択月の新規予約はまだありません",
-      tone: "neutral", targetMonthLabel, status,
-      details: [], hasDetails: false, detailsTitle, detailsCta,
-    };
-  }
+  const revenueText = yen(b.revenue);
+  const rawDetails = Array.isArray(b.details) ? b.details : [];
+  const details = rawDetails.map(formatGlobalBookingDetail);
 
   return {
-    label, count: countText, revenue: revenueText,
-    helper: "JST今日作成された予約のみ",
-    tone: "green", targetMonthLabel, status,
-    details, hasDetails: details.length > 0, detailsTitle, detailsCta,
+    label: def.label, subLabel: def.subLabel, dateLabel,
+    count: countText, revenue: revenueText,
+    helper: count ? def.okHelper : def.emptyHelper,
+    tone: count ? "green" : "neutral", status,
+    details, hasDetails: details.length > 0, detailsTitle: def.detailsTitle, detailsCta,
   };
+}
+
+function buildDailySummaryCards(s) {
+  const summary = (s && typeof s.daily_global_summary === "object" && s.daily_global_summary) || {};
+  return DAILY_CARD_DEFS.map((def) => buildDailySummaryCard(summary[def.key], def));
+}
+
+// データ鮮度表示（ヘッダー付近）。nowMsは呼び出し側(app.js)がDate.now()を渡す
+// (biViewModel自体は現在時刻に依存しない純関数に保つため、ここでは受け取るだけ)。
+const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30分
+
+export function formatFreshness(generatedAtJstIso, nowMs) {
+  if (!generatedAtJstIso) return { text: "", stale: false };
+  const generated = new Date(generatedAtJstIso);
+  if (Number.isNaN(generated.getTime())) return { text: "", stale: false };
+  const ageMs = nowMs - generated.getTime();
+  const ageMin = Math.max(0, Math.round(ageMs / 60000));
+  const stale = ageMs > STALE_THRESHOLD_MS;
+  const agoText = ageMin <= 0 ? "1分未満前" : `${ageMin}分前`;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dateLabel = `${generated.getFullYear()}/${pad2(generated.getMonth() + 1)}/${pad2(generated.getDate())} `
+    + `${pad2(generated.getHours())}:${pad2(generated.getMinutes())}`;
+  const text = stale
+    ? `最終更新: ${dateLabel}（${agoText}・更新が遅れています）`
+    : `最終更新: ${dateLabel}（${agoText}・15分ごとに自動更新）`;
+  return { text, stale, ageMin };
 }
 
 // 部屋タイプ別 日別稼働率グラフ用の系列データ（SVG描画はcomponents.js側の責務）。
@@ -613,7 +664,7 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
                    tone: s.revenue_data_status === "会計確定" ? "green" : "blue" },
     },
     primaryCards: buildPrimaryCards(s, achievement, pace),
-    dailyNewBookings: buildDailyNewBookings(s, selectedMonth),
+    dailySummaryCards: buildDailySummaryCards(s),
     roomTypeOccupancyChart: buildRoomTypeOccupancyChart(s),
     roomTypeRevenueMix: buildRoomTypeRevenueMix(s),
     paceComment: buildPaceComment(achievement, pace),
@@ -628,5 +679,5 @@ export function buildBiViewModel(snapshot, manifest, validation, exception, opti
 export const _internal = {
   DEPRECATED_FIELDS, yen, pct, ratio, num, achievementStatus, paceInfo, buildPaceComment,
   monthLabel, buildMonthOptions, buildMonthContextNote, bankFieldsSourceLabel,
-  onsitePaymentStatusLabel,
+  onsitePaymentStatusLabel, formatFreshness, formatDateJstLabel,
 };

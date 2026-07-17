@@ -129,6 +129,10 @@ html, body { max-width: 100%; overflow-x: hidden; }
   font-size: 0.72rem;
   color: var(--text-faint);
 }
+.hero-header .meta-line.is-stale {
+  color: var(--amber);
+  font-weight: 600;
+}
 .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); }
 @media (max-width: 640px) {
   .hero-header { flex-direction: column; align-items: flex-start; }
@@ -219,7 +223,20 @@ body.is-loading .dashboard {
   .refresh-button { width: 100%; }
 }
 
-/* ---------- 本日の新規予約（トップカードより上のsummary strip） ---------- */
+/* ---------- 日次サマリー（トップカードより上、対象月に依らない3枚組） ---------- */
+.daily-summary-heading { margin: 0 0 10px; }
+.daily-summary-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.daily-summary-heading-note {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
 .daily-summary-strip {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -236,9 +253,19 @@ body.is-loading .dashboard {
   color: var(--text-muted);
   letter-spacing: 0.02em;
 }
+.daily-summary-sublabel {
+  margin: 0 0 2px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.daily-summary-date {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
 .daily-summary-value {
   margin: 0 0 4px;
-  font-size: clamp(24px, 4vw, 40px);
+  font-size: clamp(22px, 3.4vw, 36px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text);
@@ -256,6 +283,24 @@ body.is-loading .dashboard {
 .daily-summary-strip.tone-amber .daily-summary-value { color: var(--amber); }
 @media (max-width: 640px) {
   .daily-summary-strip { flex-direction: column; }
+}
+
+/* 「本日の新規予約」「前日の新規予約」「本日のチェックイン」を並べる3枚組
+   (いずれも月選択に依らないグローバル集計)。desktop 3列 / tablet 2列 / mobile 1列。
+   grid item自体にmin-width:0が無いとcontentの自然幅でoverflowするため明示する
+   (このリポジトリで過去に発生した横overflowバグの再発防止パターンを踏襲)。 */
+.daily-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.daily-summary-grid > * { min-width: 0; }
+@media (max-width: 900px) {
+  .daily-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .daily-summary-grid { grid-template-columns: 1fr; }
 }
 
 /* 本日新規予約 詳細drilldown（<details>/<summary>で展開。JS状態管理を増やさない） */

@@ -216,13 +216,17 @@ await check("onsite payment section does not increase top card count (still 8)",
 
 await check("today new booking details remain intact alongside onsite payment fields", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
-    today_new_booking_logic_status: "ok",
-    today_new_booking_details: [{ booking_id: "1", checkin: "2026-07-10", checkout: "2026-07-11",
-      guest_name: "Tanaka Ichiro", revenue_for_target_month: 12000 }],
+    ...baseSnapshot,
+    daily_global_summary: {
+      today_new_bookings: { date_jst: "2026-07-18", status: "ok", count: 1, revenue: 12000,
+        details: [{ booking_id: "1", checkin: "2026-07-10", checkout: "2026-07-11",
+          guest_name: "Tanaka Ichiro", revenue: 12000 }] },
+      yesterday_new_bookings: { date_jst: "2026-07-17", status: "ok", count: 0, revenue: 0, details: [] },
+      today_checkins: { date_jst: "2026-07-18", status: "ok", count: 0, revenue: 0, details: [] },
+    },
   }, {});
-  assert.equal(vm.dailyNewBookings.hasDetails, true);
-  assert.equal(vm.dailyNewBookings.details[0].guestName, "Tanaka Ichiro");
+  assert.equal(vm.dailySummaryCards[0].hasDetails, true);
+  assert.equal(vm.dailySummaryCards[0].details[0].guestName, "Tanaka Ichiro");
 });
 
 await check("revenue-logic detail shows coupon as a reference amount (参考), not a deduction", async () => {
@@ -344,7 +348,7 @@ await check("month selector / daily new bookings / booking pace remain intact al
   const vm = buildBiViewModel({ ...baseSnapshot, bank_fields_source: "previous_r2_snapshot" },
     manifestForBankSourceCheck, null, null, { selectedMonth: "2026-08" });
   assert.ok(vm.header.monthOptions.length > 0);
-  assert.ok(vm.dailyNewBookings.label === "本日の新規予約");
+  assert.ok(vm.dailySummaryCards[0].label === "本日の新規予約");
   const paceCard = vm.primaryCards.find((c) => c.id === "booking-pace");
   assert.equal(paceCard.value, "グリーン");
 });
@@ -442,138 +446,191 @@ await check("existing pace/finance/bank sections remain intact with month option
   assert.ok(JSON.stringify(bankSection.rows).includes("¥3,052,421"));
 });
 
-// ---------------- 本日の新規予約 summary strip ----------------
-await check("dailyNewBookings is built with count/revenue formatted", async () => {
+// ---------------- 日次サマリー3カード（本日の新規予約/前日の新規予約/本日のチェックイン、
+//                   いずれも月選択に依らないグローバル集計。single source of truth =
+//                   snapshot.daily_global_summary） ----------------
+const EMPTY_BUCKET = { date_jst: null, status: "ok", count: 0, revenue: 0, details: [] };
+
+// daily_global_summaryのfixtureを組み立てるヘルパー。個別bucketだけ上書きできる。
+function dgs({ todayNew, yesterdayNew, checkin } = {}) {
+  return {
+    daily_global_summary: {
+      today_new_bookings: { ...EMPTY_BUCKET, date_jst: "2026-07-18", ...todayNew },
+      yesterday_new_bookings: { ...EMPTY_BUCKET, date_jst: "2026-07-17", ...yesterdayNew },
+      today_checkins: { ...EMPTY_BUCKET, date_jst: "2026-07-18", ...checkin },
+    },
+  };
+}
+
+await check("dailySummaryCards has 3 cards in order: today new / yesterday new / today checkin", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs() }, manifestWithMonths, null, null,
+    { selectedMonth: "2026-08" });
+  assert.equal(vm.dailySummaryCards.length, 3);
+  assert.equal(vm.dailySummaryCards[0].label, "本日の新規予約");
+  assert.equal(vm.dailySummaryCards[1].label, "前日の新規予約");
+  assert.equal(vm.dailySummaryCards[2].label, "本日のチェックイン");
+});
+
+await check("today-new-bookings card is built with count/revenue formatted and dateLabel", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot,
-    today_new_booking_count: 3,
-    today_new_booking_revenue: 84000,
-    today_new_booking_logic_status: "ok",
+    ...baseSnapshot, ...dgs({ todayNew: { count: 3, revenue: 84000,
+      details: [{}, {}, {}].map((_, i) => ({ booking_id: String(i) })) } }),
   }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vm.dailyNewBookings.label, "本日の新規予約");
-  assert.equal(vm.dailyNewBookings.count, "3件");
-  assert.equal(vm.dailyNewBookings.revenue, "¥84,000");
-  assert.equal(vm.dailyNewBookings.targetMonthLabel, "2026年8月宿泊分");
+  const card = vm.dailySummaryCards[0];
+  assert.equal(card.count, "3件");
+  assert.equal(card.revenue, "¥84,000");
+  assert.equal(card.dateLabel, "2026年7月18日");
 });
 
-await check("dailyNewBookings tone is green when count > 0", async () => {
+await check("today-new-bookings card tone is green when count > 0", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 12000 } }) },
+    manifestWithMonths);
+  assert.equal(vm.dailySummaryCards[0].tone, "green");
+});
+
+await check("today-new-bookings card tone is neutral (not 判定不可) when a normal zero", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ todayNew: { count: 0, revenue: 0 } }) },
+    manifestWithMonths);
+  assert.equal(vm.dailySummaryCards[0].tone, "neutral");
+  assert.equal(vm.dailySummaryCards[0].count, "0件");
+  assert.notEqual(vm.dailySummaryCards[0].count, "判定不可");
+  assert.ok(vm.dailySummaryCards[0].helper.includes("まだありません"));
+});
+
+await check("today-new-bookings card is amber/判定不可 only when status is created_at_field_missing", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
-    today_new_booking_logic_status: "ok",
+    ...baseSnapshot, ...dgs({ todayNew: { status: "created_at_field_missing", count: 0, revenue: 0 } }),
   }, manifestWithMonths);
-  assert.equal(vm.dailyNewBookings.tone, "green");
+  assert.equal(vm.dailySummaryCards[0].tone, "amber");
+  assert.equal(vm.dailySummaryCards[0].count, "判定不可");
+  assert.ok(vm.dailySummaryCards[0].helper.includes("作成日時"));
 });
 
-await check("dailyNewBookings tone is neutral when count = 0", async () => {
-  const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 0, today_new_booking_revenue: 0,
-    today_new_booking_logic_status: "ok",
-  }, manifestWithMonths);
-  assert.equal(vm.dailyNewBookings.tone, "neutral");
-  assert.ok(vm.dailyNewBookings.helper.includes("まだありません"));
-});
-
-await check("dailyNewBookings tone is amber and shows 判定不可 when logic status is field-missing", async () => {
-  const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_logic_status: "created_at_field_missing",
-  }, manifestWithMonths);
-  assert.equal(vm.dailyNewBookings.tone, "amber");
-  assert.equal(vm.dailyNewBookings.count, "判定不可");
-  assert.ok(vm.dailyNewBookings.helper.includes("作成日時"));
-});
-
-await check("dailyNewBookings falls back to amber/判定不可 when snapshot has no logic status at all", async () => {
+await check("daily summary falls back to amber/判定不可 when snapshot has no daily_global_summary at all", async () => {
   const vm = buildBiViewModel(baseSnapshot, manifestWithMonths);
-  assert.equal(vm.dailyNewBookings.tone, "amber");
+  assert.equal(vm.dailySummaryCards[0].tone, "amber");
+  assert.equal(vm.dailySummaryCards[1].tone, "amber");
+  assert.equal(vm.dailySummaryCards[2].tone, "amber");
 });
 
-await check("dailyNewBookings does not affect top card count (still 8)", async () => {
-  const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 3, today_new_booking_revenue: 84000,
-    today_new_booking_logic_status: "ok",
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+await check("daily summary cards do not affect top card count (still 8)", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ todayNew: { count: 3, revenue: 84000 } }) },
+    manifestWithMonths, null, null, { selectedMonth: "2026-08" });
   assert.equal(vm.primaryCards.length, 8);
 });
 
-await check("dailyNewBookings switches value when selectedMonth/snapshot changes", async () => {
-  const vmJuly = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
-    today_new_booking_logic_status: "ok",
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
-  const vmAugust = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 3, today_new_booking_revenue: 84000,
-    today_new_booking_logic_status: "ok",
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vmJuly.dailyNewBookings.count, "1件");
-  assert.equal(vmAugust.dailyNewBookings.count, "3件");
-  assert.notEqual(vmJuly.dailyNewBookings.targetMonthLabel, vmAugust.dailyNewBookings.targetMonthLabel);
+await check("daily summary cards stay identical across different selectedMonth values (global, not month-scoped)", async () => {
+  const snapshot = { ...baseSnapshot, ...dgs({
+    todayNew: { count: 3, revenue: 84000 }, checkin: { count: 2, revenue: 40000 },
+  }) };
+  const vmJuly = buildBiViewModel(snapshot, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
+  const vmAugust = buildBiViewModel(snapshot, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
+  assert.deepEqual(vmJuly.dailySummaryCards, vmAugust.dailySummaryCards);
 });
 
-// ---------------- 本日新規予約 詳細drilldown ----------------
-const sampleBookingDetails = [
+await check("yesterday-new-bookings card is built with count/revenue formatted", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ yesterdayNew: { count: 2, revenue: 20000 } }) }, {});
+  const card = vm.dailySummaryCards[1];
+  assert.equal(card.label, "前日の新規予約");
+  assert.equal(card.count, "2件");
+  assert.equal(card.revenue, "¥20,000");
+  assert.equal(card.dateLabel, "2026年7月17日");
+});
+
+await check("today-checkins card is built with count/revenue formatted", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ checkin: { count: 4, revenue: 65000 } }) }, {});
+  const card = vm.dailySummaryCards[2];
+  assert.equal(card.label, "本日のチェックイン");
+  assert.equal(card.count, "4件");
+  assert.equal(card.revenue, "¥65,000");
+});
+
+await check("today-checkins card tone is neutral (not 判定不可) when a normal zero", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ checkin: { count: 0, revenue: 0 } }) }, {});
+  assert.equal(vm.dailySummaryCards[2].tone, "neutral");
+  assert.equal(vm.dailySummaryCards[2].count, "0件");
+  assert.ok(vm.dailySummaryCards[2].helper.includes("ありません"));
+});
+
+await check("daily-checkins card does not affect top card count (still 8)", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ checkin: { count: 4, revenue: 65000 } }) }, {});
+  assert.equal(vm.primaryCards.length, 8);
+});
+
+// ---------------- 詳細drilldown（3カード共通のformatGlobalBookingDetail） ----------------
+const sampleGlobalDetails = [
   { booking_id: "1", checkin: "2026-08-10", checkout: "2026-08-12", guest_name: "Yamada Taro",
-    revenue_for_target_month: 24000, total_booking_revenue: 24000, target_month_nights: 2,
-    total_nights: 2, room_name: "201", status: "confirmed", created_at_jst: "2026-08-10T09:00:00+09:00" },
+    revenue: 24000, room_name: "201", status: "confirmed", created_at_jst: "2026-08-10T09:00:00+09:00" },
 ];
 
-await check("dailyNewBookings.details is built from snapshot.today_new_booking_details", async () => {
+await check("today-new-bookings.details is built from daily_global_summary.today_new_bookings.details", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: sampleBookingDetails,
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 24000, details: sampleGlobalDetails } }),
   }, {});
-  assert.equal(vm.dailyNewBookings.details.length, 1);
-  const d = vm.dailyNewBookings.details[0];
+  const card = vm.dailySummaryCards[0];
+  assert.equal(card.details.length, 1);
+  const d = card.details[0];
   assert.equal(d.checkin, "2026-08-10");
   assert.equal(d.checkout, "2026-08-12");
   assert.equal(d.guestName, "Yamada Taro");
   assert.equal(d.revenue, "¥24,000");
-  assert.equal(vm.dailyNewBookings.hasDetails, true);
+  assert.equal(card.hasDetails, true);
+});
+
+await check("today-checkins.details is built from daily_global_summary.today_checkins.details", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, ...dgs({ checkin: { count: 1, revenue: 24000, details: sampleGlobalDetails } }),
+  }, {});
+  const card = vm.dailySummaryCards[2];
+  assert.equal(card.details.length, 1);
+  assert.equal(card.details[0].guestName, "Yamada Taro");
+});
+
+await check("yesterday-new-bookings.details is built from daily_global_summary.yesterday_new_bookings.details", async () => {
+  const vm = buildBiViewModel({
+    ...baseSnapshot, ...dgs({ yesterdayNew: { count: 1, revenue: 20000, details: sampleGlobalDetails } }),
+  }, {});
+  const card = vm.dailySummaryCards[1];
+  assert.equal(card.details.length, 1);
+  assert.equal(card.details[0].guestName, "Yamada Taro");
 });
 
 // ---------------- OTA名・部屋タイプ・部屋変更履歴 ----------------
 const sampleDetailWithRoomInfo = {
   booking_id: "2", checkin: "2026-08-14", checkout: "2026-08-15", guest_name: "伊東 昌宏",
-  revenue_for_target_month: 36000, total_booking_revenue: 36000, target_month_nights: 1,
-  total_nights: 1, status: "confirmed", created_at_jst: "2026-08-14T09:00:00+09:00",
+  revenue: 36000, status: "confirmed", created_at_jst: "2026-08-14T09:00:00+09:00",
   ota_name: "じゃらん", booking_source_raw: "じゃらんnet",
   room_id: "685761", room_type: "シングル｜客室トイレ付", room_type_key: "single_toilet",
-  current_room_type: "シングル｜客室トイレ付", current_room_type_key: "single_toilet",
-  current_room_id: "685761", original_room_type: null, original_room_type_key: null,
   room_change_history_status: "not_available", room_change_history: [],
 };
 
-await check("dailyNewBookings.details exposes ota_name/booking_source_raw", async () => {
+await check("details expose ota_name/booking_source_raw", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [sampleDetailWithRoomInfo] } }),
   }, {});
-  const d = vm.dailyNewBookings.details[0];
+  const d = vm.dailySummaryCards[0].details[0];
   assert.equal(d.otaName, "じゃらん");
   assert.equal(d.bookingSourceRaw, "じゃらんnet");
 });
 
-await check("dailyNewBookings.details exposes room_type/current_room_type/original_room_type", async () => {
+await check("details expose room_type", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [sampleDetailWithRoomInfo] } }),
   }, {});
-  const d = vm.dailyNewBookings.details[0];
+  const d = vm.dailySummaryCards[0].details[0];
   assert.equal(d.roomType, "シングル｜客室トイレ付");
-  assert.equal(d.currentRoomType, "シングル｜客室トイレ付");
-  assert.equal(d.originalRoomType, null);
 });
 
-await check("dailyNewBookings.details omits the room-change summary entirely when status is not_available", async () => {
+await check("details omit the room-change summary entirely when status is not_available", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [sampleDetailWithRoomInfo] } }),
   }, {});
-  const d = vm.dailyNewBookings.details[0];
+  const d = vm.dailySummaryCards[0].details[0];
   assert.equal(d.hasRoomChange, false);
   assert.equal(d.roomChangeSummary, null, "no summary text should be shown when history cannot be retrieved");
 });
 
-await check("dailyNewBookings.details reports room change count in summary when history exists", async () => {
+await check("details report room change count in summary when history exists", async () => {
   const detailWithChange = {
     ...sampleDetailWithRoomInfo, booking_id: "3",
     room_change_history_status: "available",
@@ -584,10 +641,9 @@ await check("dailyNewBookings.details reports room change count in summary when 
     }],
   };
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [detailWithChange],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [detailWithChange] } }),
   }, {});
-  const d = vm.dailyNewBookings.details[0];
+  const d = vm.dailySummaryCards[0].details[0];
   assert.equal(d.hasRoomChange, true);
   assert.equal(d.roomChangeSummary, "部屋変更 1件");
   assert.equal(d.roomChangeHistory.length, 1);
@@ -595,109 +651,88 @@ await check("dailyNewBookings.details reports room change count in summary when 
   assert.equal(d.roomChangeHistory[0].rawNote, "満室のため変更");
 });
 
-await check("dailyNewBookings.details does not leak PII fields for the new OTA/room-type additions", async () => {
+await check("details do not leak PII fields for the OTA/room-type additions", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 36000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [sampleDetailWithRoomInfo],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [sampleDetailWithRoomInfo] } }),
   }, {});
-  const json = JSON.stringify(vm.dailyNewBookings.details[0]);
+  const json = JSON.stringify(vm.dailySummaryCards[0].details[0]);
   for (const forbidden of ["email", "phone", "address", "firstName", "lastName", "passport"]) {
     assert.ok(!json.toLowerCase().includes(forbidden.toLowerCase()), `must not leak ${forbidden}`);
   }
 });
 
-await check("dailyNewBookings.guestName defaults to 氏名未取得 when missing", async () => {
+await check("guestName defaults to 氏名未取得 when missing", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,
-    today_new_booking_logic_status: "ok",
-    today_new_booking_details: [{ ...sampleBookingDetails[0], guest_name: "" }],
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 24000,
+      details: [{ ...sampleGlobalDetails[0], guest_name: "" }] } }),
   }, {});
-  assert.equal(vm.dailyNewBookings.details[0].guestName, "氏名未取得");
+  assert.equal(vm.dailySummaryCards[0].details[0].guestName, "氏名未取得");
 });
 
-await check("dailyNewBookings.hasDetails is false and details empty when count is 0", async () => {
+await check("hasDetails is false and details empty when count is 0", async () => {
+  const vm = buildBiViewModel({ ...baseSnapshot, ...dgs({ todayNew: { count: 0, revenue: 0, details: [] } }) }, {});
+  assert.equal(vm.dailySummaryCards[0].hasDetails, false);
+  assert.deepEqual(vm.dailySummaryCards[0].details, []);
+});
+
+await check("has detailsUnavailableNote when status is created_at_field_missing", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 0, today_new_booking_revenue: 0,
-    today_new_booking_logic_status: "ok", today_new_booking_details: [],
+    ...baseSnapshot, ...dgs({ todayNew: { status: "created_at_field_missing", count: 0, revenue: 0 } }),
   }, {});
-  assert.equal(vm.dailyNewBookings.hasDetails, false);
-  assert.deepEqual(vm.dailyNewBookings.details, []);
+  assert.equal(vm.dailySummaryCards[0].hasDetails, false);
+  assert.ok(vm.dailySummaryCards[0].detailsUnavailableNote.includes("予約作成日時を確認できない"));
 });
 
-await check("dailyNewBookings has detailsUnavailableNote when logic status is field-missing", async () => {
+await check("details drilldown does not change top card count (still 8)", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_logic_status: "created_at_field_missing",
-  }, {});
-  assert.equal(vm.dailyNewBookings.hasDetails, false);
-  assert.ok(vm.dailyNewBookings.detailsUnavailableNote.includes("予約作成日時を確認できない"));
-});
-
-await check("dailyNewBookings.details swap when selectedMonth/snapshot changes", async () => {
-  const vmJuly = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 12000,
-    today_new_booking_logic_status: "ok",
-    today_new_booking_details: [{ ...sampleBookingDetails[0], booking_id: "july-1" }],
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
-  const vmAugust = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,
-    today_new_booking_logic_status: "ok",
-    today_new_booking_details: [{ ...sampleBookingDetails[0], booking_id: "august-1" }],
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vmJuly.dailyNewBookings.details[0].bookingId, "july-1");
-  assert.equal(vmAugust.dailyNewBookings.details[0].bookingId, "august-1");
-});
-
-await check("dailyNewBookings details drilldown does not change top card count (still 8)", async () => {
-  const vm = buildBiViewModel({
-    ...baseSnapshot, today_new_booking_count: 1, today_new_booking_revenue: 24000,
-    today_new_booking_logic_status: "ok", today_new_booking_details: sampleBookingDetails,
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 24000, details: sampleGlobalDetails } }),
   }, {});
   assert.equal(vm.primaryCards.length, 8);
 });
 
-// ---------------- 2026-08「当日売上カード」回帰テスト ----------------
-// backend側(calculate_today_new_bookings_for_month)が同日キャンセル(50,000円)を
-// 二重控除していた実バグの再現データ(修正後の正しい値: 57,978円)。
-// このカードはsnapshotの値をそのまま表示するだけなので、backendが正しい値を返す限り
-// カードも正しく表示される。逆に言えばbackendが壊れると気づかずそのまま表示するため、
-// backend側のテスト(test_today_new_bookings.py)と対にして固定する。
-const augustDetails2026 = [
+// ---------------- 同日キャンセル二重控除の回帰チェック(バックエンド側で修正済み) ----------------
+// backend側(calculate_today_global_summary/calculate_recognized_booking_revenue)が同日
+// キャンセル分を二重控除していないことの回帰チェック。このカードはsnapshotの値をそのまま
+// 表示するだけなので、backend側のテスト(test_recognized_booking_revenue.py等)と対にして固定する。
+const augustGlobalDetails = [
   { booking_id: "89595831", checkin: "2026-08-04", checkout: "2026-08-06", guest_name: "FENG ZHU",
-    revenue_for_target_month: 21978, total_booking_revenue: 21978, target_month_nights: 2,
-    total_nights: 2, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T13:10:14+09:00" },
+    revenue: 21978, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T13:10:14+09:00" },
   { booking_id: "89585384", checkin: "2026-08-14", checkout: "2026-08-15", guest_name: "伊東 昌宏",
-    revenue_for_target_month: 36000, total_booking_revenue: 36000, target_month_nights: 1,
-    total_nights: 1, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T05:40:14+09:00" },
+    revenue: 36000, room_name: null, status: "confirmed", created_at_jst: "2026-07-10T05:40:14+09:00" },
 ];
 
-await check("dailyNewBookings.revenue matches sum of details for 2026-08 (regression: was 7978, must be 57978)", async () => {
+await check("today-new-bookings revenue matches sum of details (regression: was 7978, must be 57978)", async () => {
   const vm = buildBiViewModel({
-    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
-    today_new_booking_count: 2, today_new_booking_revenue: 57978,
-    today_new_booking_logic_status: "ok", today_new_booking_details: augustDetails2026,
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  const detailSum = augustDetails2026.reduce((acc, d) => acc + d.revenue_for_target_month, 0);
+    ...baseSnapshot,
+    ...dgs({ todayNew: { count: 2, revenue: 57978, details: augustGlobalDetails } }),
+  }, {});
+  const detailSum = augustGlobalDetails.reduce((acc, d) => acc + d.revenue, 0);
   assert.equal(detailSum, 57978);
-  assert.equal(vm.dailyNewBookings.revenue, "¥57,978");
-  assert.equal(vm.dailyNewBookings.count, "2件");
-  assert.equal(vm.dailyNewBookings.details.length, 2);
+  assert.equal(vm.dailySummaryCards[0].revenue, "¥57,978");
+  assert.equal(vm.dailySummaryCards[0].count, "2件");
+  assert.equal(vm.dailySummaryCards[0].details.length, 2);
 });
 
-await check("switching from 2026-07 to 2026-08 does not carry over the previous month's today revenue", async () => {
-  const vmJuly = buildBiViewModel({
-    ...baseSnapshot, month: "2026-07", target_month: "2026-07",
-    today_new_booking_count: 1, today_new_booking_revenue: 10189,
-    today_new_booking_logic_status: "ok",
-    today_new_booking_details: [{ ...sampleBookingDetails[0], booking_id: "89582827", revenue_for_target_month: 10189 }],
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-07" });
-  const vmAugust = buildBiViewModel({
-    ...baseSnapshot, month: "2026-08", target_month: "2026-08",
-    today_new_booking_count: 2, today_new_booking_revenue: 57978,
-    today_new_booking_logic_status: "ok", today_new_booking_details: augustDetails2026,
-  }, manifestWithMonths, null, null, { selectedMonth: "2026-08" });
-  assert.equal(vmJuly.dailyNewBookings.revenue, "¥10,189");
-  assert.equal(vmAugust.dailyNewBookings.revenue, "¥57,978");
-  assert.notEqual(vmJuly.dailyNewBookings.revenue, vmAugust.dailyNewBookings.revenue);
+// ---------------- データ鮮度表示 ----------------
+await check("formatFreshness shows minutes-ago and normal message within 30 minutes", async () => {
+  const now = Date.parse("2026-07-18T12:07:00+09:00");
+  const r = _internal.formatFreshness("2026-07-18T12:00:00+09:00", now);
+  assert.ok(r.text.includes("7分前"));
+  assert.ok(r.text.includes("15分ごとに自動更新"));
+  assert.equal(r.stale, false);
+});
+
+await check("formatFreshness warns when older than 30 minutes", async () => {
+  const now = Date.parse("2026-07-18T12:35:00+09:00");
+  const r = _internal.formatFreshness("2026-07-18T12:00:00+09:00", now);
+  assert.ok(r.text.includes("更新が遅れています"));
+  assert.equal(r.stale, true);
+});
+
+await check("formatFreshness returns empty/non-stale when generatedAtJst is missing", async () => {
+  const r = _internal.formatFreshness(null, Date.now());
+  assert.equal(r.text, "");
+  assert.equal(r.stale, false);
 });
 
 // ---------------- ADRカード ----------------

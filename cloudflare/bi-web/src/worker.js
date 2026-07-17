@@ -74,7 +74,7 @@ async function handleApiMonths(env) {
     available_months: manifest.available_months || [],
     months_with_any_booking: manifest.months_with_any_booking || [],
     months_with_active_booking: manifest.months_with_active_booking || [],
-    today_new_booking_summary: manifest.today_new_booking_summary ?? null,
+    today_global_summary: manifest.today_global_summary ?? null,
   });
 }
 

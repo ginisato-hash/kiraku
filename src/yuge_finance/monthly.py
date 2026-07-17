@@ -124,37 +124,36 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
     # --- 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）---
     bank_actual_bi = bank_cashflow_report.compute_bi_fields(conn)
 
-    # --- 本日の新規予約（BI専用。月またぎ予約を按分するため月フィルタ無しで全件読む）---
+    # --- 本日のグローバルサマリー（BI専用。月選択に依らず全予約対象。月またぎ予約を
+    #     按分するため月フィルタ無しで全件読む）---
     all_bookings = db.load_objects(conn, "beds24_bookings")
     for r in all_bookings:
         r.finalize()
     revenue_exclude = config.kiraku().get("revenue", {}).get(
         "exclude_statuses", ["cancelled", "canceled", "black"])
     effective_today_jst = today_jst if today_jst is not None else beds24_revenue_logic.jst_today()
-    today_new_bookings = beds24_revenue_logic.calculate_today_new_bookings_for_month(
-        all_bookings, month, effective_today_jst, revenue_exclude)
-    today_new_bookings["today_jst"] = effective_today_jst.isoformat()
+    today_global_summary = beds24_revenue_logic.calculate_today_global_summary(
+        all_bookings, effective_today_jst, revenue_exclude)
+    today_global_summary["today_jst"] = effective_today_jst.isoformat()
 
     # --- 部屋タイプ別KPI（ADR/日別稼働率/売上構成。月またぎ按分のため月フィルタ無し全件を使う）---
     room_type_config = room_type_metrics.load_room_type_config()
     room_type_kpi = room_type_metrics.calculate_room_type_metrics(
         all_bookings, month, room_type_config, revenue_exclude)
 
-    # --- 本日の新規予約detailsに部屋タイプを付与（既存のroom_type_metrics分類ロジックを再利用。
-    #     Beds24 payloadには予約時/現在で別々の部屋IDが無いため、両方とも現在のroom_idで揃える）---
+    # --- 本日のグローバルサマリーdetailsに部屋タイプを付与（既存のroom_type_metrics分類
+    #     ロジックを再利用。daily_global_summary側のdetailsは同じlistオブジェクトを
+    #     参照しているため、ここで1回書き換えれば両方に反映される）---
     bookings_by_id = {b.booking_id: b for b in all_bookings}
-    for detail in today_new_bookings.get("today_new_booking_details", []):
-        booking = bookings_by_id.get(detail["booking_id"])
-        room_type_key = (room_type_metrics.classify_room_type(booking, room_type_config)
-                         if booking else "unknown")
-        room_type_label = room_type_config.get(room_type_key, {}).get("label", room_type_key)
-        detail["room_type"] = room_type_label
-        detail["room_type_key"] = room_type_key
-        detail["original_room_type"] = None
-        detail["original_room_type_key"] = None
-        detail["current_room_type"] = room_type_label
-        detail["current_room_type_key"] = room_type_key
-        detail["current_room_id"] = detail["room_id"]
+    for details_key in ("today_new_booking_details_global", "yesterday_new_booking_details_global",
+                        "today_checkin_details_global"):
+        for detail in today_global_summary.get(details_key, []):
+            booking = bookings_by_id.get(detail["booking_id"])
+            room_type_key = (room_type_metrics.classify_room_type(booking, room_type_config)
+                             if booking else "unknown")
+            room_type_label = room_type_config.get(room_type_key, {}).get("label", room_type_key)
+            detail["room_type"] = room_type_label
+            detail["room_type_key"] = room_type_key
 
     return {
         "month": month,
@@ -186,6 +185,6 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
         "debit_total": jd, "credit_total": jc,
         "image_issues": 0, "workbook_path": workbook_path,
         "bank_actual_bi": bank_actual_bi,
-        "today_new_bookings": today_new_bookings,
+        "today_global_summary": today_global_summary,
         "room_type_metrics": room_type_kpi,
     }

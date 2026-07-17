@@ -188,7 +188,7 @@ def test_room_type_metrics_fields_present_in_bi_snapshot(tmp_path):
         assert key in snap, f"missing field: {key}"
     assert snap["sold_room_nights"] == 1
     # 既存fieldも壊れていないこと
-    assert "today_new_booking_count" in snap
+    assert "today_new_booking_count_global" in snap
     assert "beds24_revenue_gross_stay" in snap
     conn.close()
 

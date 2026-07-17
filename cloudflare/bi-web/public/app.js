@@ -1,10 +1,10 @@
 // 喜らく 速報BI - 画面描画（薄いレンダラ）。
 // 責務: fetch / buildBiViewModel呼び出し / render / accordion open-close / error state / 月選択のみ。
 // DOM生成は components.js の関数に委譲する。生のbi_snapshotフィールドは直接参照しない。
-import { buildBiViewModel } from "./biViewModel.js";
+import { buildBiViewModel, formatFreshness } from "./biViewModel.js";
 import {
   renderCommandCenter, renderInsightBanner, renderStatusChips, renderNotes,
-  renderDetails, renderHeader, renderErrorState, renderSkeleton, renderDailyNewBookings,
+  renderDetails, renderHeader, renderErrorState, renderSkeleton, renderDailySummarySection,
   renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix, renderRefreshButton,
 } from "./components.js";
 
@@ -15,6 +15,9 @@ let lastGoodVm = null;
 let currentSelectedMonth = null;
 let refreshState = "idle"; // "idle" | "loading" | "success" | "error"
 let refreshResetTimer = null;
+// 月切替の連打や5分ごとの自動再取得が重なった際、後発リクエストより先に古いリクエストが
+// resolveして画面を上書きする race conditionを防ぐためのsequence番号。
+let requestSeq = 0;
 
 // 日付跨ぎ後もブラウザ/中間キャッシュに古いBIデータを見せない（重大不具合対応）。
 // bust=true の場合のみ ?_=Date.now() を付与する（手動更新ボタン専用。通常のfetchは
@@ -137,16 +140,31 @@ function setLoading(loading) {
   if (sel) sel.disabled = loading;
 }
 
+// 明細drilldownの<details>toggleに合わせてaria-expandedを更新する（1回だけ委譲登録）。
+function attachDailySummaryToggleListener() {
+  document.querySelectorAll("#daily-summary-section details.daily-summary-details").forEach((el) => {
+    el.addEventListener("toggle", () => {
+      const summary = el.querySelector("summary");
+      if (summary) summary.setAttribute("aria-expanded", el.open ? "true" : "false");
+    });
+  });
+}
+
 function render(vm) {
   lastGoodVm = vm;
   const header = renderHeader(vm.header);
-  document.getElementById("header-meta").textContent = header.metaLine;
+  const freshness = formatFreshness(vm.header.generatedAtJst, Date.now());
+  document.getElementById("header-meta").textContent =
+    freshness.text ? `${header.metaLine} ｜ ${freshness.text}` : header.metaLine;
+  document.getElementById("header-meta").classList.toggle("is-stale", freshness.stale);
   document.getElementById("header-right").innerHTML =
     header.monthSelectorHtml + header.pillHtml + renderRefreshButton(refreshState);
   attachMonthSelectListener();
   attachRefreshButtonListener();
 
-  document.getElementById("daily-summary-section").innerHTML = renderDailyNewBookings(vm.dailyNewBookings);
+  document.getElementById("daily-summary-section").innerHTML =
+    renderDailySummarySection(vm.dailySummaryCards);
+  attachDailySummaryToggleListener();
   document.getElementById("command-center").innerHTML = renderCommandCenter(vm.primaryCards);
   document.getElementById("room-type-occupancy-chart").innerHTML =
     renderRoomTypeOccupancyChart(vm.roomTypeOccupancyChart);
@@ -162,10 +180,15 @@ function render(vm) {
 async function loadAndRender(month, opts) {
   const bust = !!(opts && opts.bust);
   currentSelectedMonth = month || null;
+  const seq = ++requestSeq;
   setLoading(true);
   const [snapshot, validation, exception] = await Promise.all([
     fetchSnapshot(month, bust), fetchValidation(month, bust), fetchException(month, bust),
   ]);
+  if (seq !== requestSeq) {
+    // より新しいリクエストが既に発行済み。このレスポンスは古いので画面には反映しない。
+    return false;
+  }
   setLoading(false);
   if (!snapshot) {
     showError();

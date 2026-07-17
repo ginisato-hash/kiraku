@@ -202,14 +202,15 @@ def test_today_new_booking_fields_present_in_bi_snapshot(tmp_path, monkeypatch):
     sev = {"all_ok": True, "critical": [], "warnings": []}
     bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    assert snap["today_new_booking_count"] == 1
-    assert snap["today_new_booking_revenue"] == 20000
-    assert snap["today_new_booking_logic_status"] == "ok"
+    assert snap["today_new_booking_count_global"] == 1
+    assert snap["today_new_booking_revenue_global"] == 20000
+    assert snap["today_new_booking_logic_status_global"] == "ok"
     conn.close()
 
 
-def test_today_new_booking_prorates_across_months_in_snapshot(tmp_path, monkeypatch):
-    """月をまたぐ予約が両方の月別snapshotに按分計上される。"""
+def test_today_new_booking_revenue_not_prorated_across_month_snapshots(tmp_path, monkeypatch):
+    """グローバルサマリーは月選択に依らないため、月をまたぐ予約でも按分せず同じ満額が
+    どちらの月別snapshotにも表示される(月別ダッシュボード側の按分ロジックとは無関係)。"""
     monkeypatch.setattr(brl, "jst_today", lambda: date(2026, 7, 8))
     conn = db.connect(tmp_path / "t.sqlite")
     db.upsert(conn, "beds24_bookings", [
@@ -222,13 +223,40 @@ def test_today_new_booking_prorates_across_months_in_snapshot(tmp_path, monkeypa
     bi_export.write_all("2026-08", ctx_aug, checks=[], wb_checks=[], severity=sev,
                         out_dir=tmp_path / "aug")
     snap_aug = json.loads((tmp_path / "aug" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    assert snap_aug["today_new_booking_revenue"] == 60000
+    assert snap_aug["today_new_booking_revenue_global"] == 90000
 
     ctx_sep = monthly.assemble("2026-09", conn)
     bi_export.write_all("2026-09", ctx_sep, checks=[], wb_checks=[], severity=sev,
                         out_dir=tmp_path / "sep")
     snap_sep = json.loads((tmp_path / "sep" / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    assert snap_sep["today_new_booking_revenue"] == 30000
+    assert snap_sep["today_new_booking_revenue_global"] == 90000
+    conn.close()
+
+
+def test_daily_global_summary_identical_across_at_least_three_month_snapshots(tmp_path, monkeypatch):
+    """daily_global_summary(single source of truth)は月選択に依らないため、
+    同一refresh run内では3か月分すべてのsnapshotで完全に同じ値を持つ。"""
+    monkeypatch.setattr(brl, "jst_today", lambda: date(2026, 7, 8))
+    conn = db.connect(tmp_path / "t.sqlite")
+    db.upsert(conn, "beds24_bookings", [
+        _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z"),
+        _booking("2", "2026-08-15", "2026-08-16", gross=20000, created_at_raw="2026-07-07T01:00:00Z"),
+    ])
+    sev = {"all_ok": True, "critical": [], "warnings": []}
+
+    summaries = {}
+    for month in ("2026-07", "2026-08", "2026-09"):
+        ctx = monthly.assemble(month, conn)
+        bi_export.write_all(month, ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path / month)
+        snap = json.loads((tmp_path / month / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
+        assert "daily_global_summary" in snap
+        summaries[month] = snap["daily_global_summary"]
+
+    base = summaries["2026-07"]
+    for month in ("2026-08", "2026-09"):
+        assert summaries[month] == base, f"daily_global_summary differs: 2026-07 vs {month}"
+    for key in ("today_new_bookings", "yesterday_new_bookings", "today_checkins"):
+        assert base[key]["status"] == "ok"
     conn.close()
 
 
@@ -257,14 +285,14 @@ def test_snapshot_has_generated_at_jst_field(tmp_path):
 def test_today_jst_override_via_monthly_assemble_2026_07_08(tmp_path):
     conn = db.connect(tmp_path / "t.sqlite")
     ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 8))
-    assert ctx["today_new_bookings"]["today_jst"] == "2026-07-08"
+    assert ctx["today_global_summary"]["today_jst"] == "2026-07-08"
     conn.close()
 
 
 def test_today_jst_override_via_monthly_assemble_2026_07_09(tmp_path):
     conn = db.connect(tmp_path / "t.sqlite")
     ctx = monthly.assemble("2026-07", conn, today_jst=date(2026, 7, 9))
-    assert ctx["today_new_bookings"]["today_jst"] == "2026-07-09"
+    assert ctx["today_global_summary"]["today_jst"] == "2026-07-09"
     conn.close()
 
 
@@ -491,14 +519,14 @@ def test_snapshot_includes_today_new_booking_details(tmp_path):
     sev = {"all_ok": True, "critical": [], "warnings": []}
     bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    assert "today_new_booking_details" in snap
-    assert snap["today_new_booking_details"][0]["guest_name"] == "Suzuki Hanako"
+    assert "today_new_booking_details_global" in snap
+    assert snap["today_new_booking_details_global"][0]["guest_name"] == "Suzuki Hanako"
     conn.close()
 
 
 def test_snapshot_details_include_room_type_via_monthly_assemble(tmp_path):
     """monthly.assemble()側でroom_type_metrics.classify_room_type()を再利用して
-    room_type/current_room_typeが付与されること(room_idは実configの実データroom_id)。"""
+    room_typeが付与されること(room_idは実configの実データroom_id)。"""
     conn = db.connect(tmp_path / "t.sqlite")
     db.upsert(conn, "beds24_bookings", [
         _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
@@ -508,14 +536,11 @@ def test_snapshot_details_include_room_type_via_monthly_assemble(tmp_path):
     sev = {"all_ok": True, "critical": [], "warnings": []}
     bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    detail = snap["today_new_booking_details"][0]
+    detail = snap["today_new_booking_details_global"][0]
     assert detail["ota_name"] == "じゃらん"
     assert detail["room_id"] == "685761"
     assert detail["room_type_key"] == "single_toilet"
     assert detail["room_type"] == "シングル｜客室トイレ付"
-    assert detail["current_room_type_key"] == "single_toilet"
-    assert detail["current_room_id"] == "685761"
-    assert detail["original_room_type"] is None
     assert detail["room_change_history_status"] == "not_available"
     assert detail["room_change_history"] == []
     conn.close()
@@ -531,12 +556,12 @@ def test_snapshot_details_unknown_room_id_classified_as_unknown(tmp_path):
     sev = {"all_ok": True, "critical": [], "warnings": []}
     bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    detail = snap["today_new_booking_details"][0]
+    detail = snap["today_new_booking_details_global"][0]
     assert detail["room_type_key"] == "unknown"
 
 
 def test_revenue_equals_details_sum_still_holds_with_new_fields(tmp_path):
-    """今回のOTA/部屋タイプ拡張後もtoday_new_booking_revenue == sum(details)の不変条件を維持する。"""
+    """今回のOTA/部屋タイプ拡張後もtoday_new_booking_revenue_global == sum(details)の不変条件を維持する。"""
     conn = db.connect(tmp_path / "t.sqlite")
     db.upsert(conn, "beds24_bookings", [
         _booking("1", "2026-07-10", "2026-07-11", gross=10000, created_at_raw="2026-07-08T01:00:00Z",
@@ -548,9 +573,9 @@ def test_revenue_equals_details_sum_still_holds_with_new_fields(tmp_path):
     sev = {"all_ok": True, "critical": [], "warnings": []}
     bi_export.write_all("2026-07", ctx, checks=[], wb_checks=[], severity=sev, out_dir=tmp_path)
     snap = json.loads((tmp_path / "bi" / "bi_snapshot.json").read_text(encoding="utf-8"))
-    details = snap["today_new_booking_details"]
-    assert snap["today_new_booking_count"] == len(details) == 2
-    assert snap["today_new_booking_revenue"] == sum(d["revenue_for_target_month"] for d in details)
+    details = snap["today_new_booking_details_global"]
+    assert snap["today_new_booking_count_global"] == len(details) == 2
+    assert snap["today_new_booking_revenue_global"] == sum(d["revenue"] for d in details)
     conn.close()
 
 

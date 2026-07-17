@@ -273,17 +273,18 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
                        month_ctxs[0] if month_ctxs else {})
         rr_cur = cur_ctx.get("revenue_recon", {})
         month_snapshots = {m: _month_snapshot_paths(m) for m in available_months}
-        today_new_by_month = {
-            c["month"]: {
-                "count": c.get("today_new_bookings", {}).get("today_new_booking_count"),
-                "revenue": c.get("today_new_bookings", {}).get("today_new_booking_revenue"),
-            }
-            for c in month_ctxs if c["month"] in available_months
-        }
-        today_new_summary = {
+        # 本日のグローバルサマリーは月選択に依らず全月で同値のため、月別内訳は持たず
+        # 表示対象月(cur)のctxから1件だけ拾う。
+        today_global = cur_ctx.get("today_global_summary", {})
+        today_global_summary_manifest = {
             "calculated_at_jst": jst_str(),
             "date_jst": jst_now().date().isoformat(),
-            "by_month": today_new_by_month,
+            "new_booking_count": today_global.get("today_new_booking_count_global"),
+            "new_booking_revenue": today_global.get("today_new_booking_revenue_global"),
+            "yesterday_new_booking_count": today_global.get("yesterday_new_booking_count_global"),
+            "yesterday_new_booking_revenue": today_global.get("yesterday_new_booking_revenue_global"),
+            "checkin_count": today_global.get("today_checkin_count_global"),
+            "checkin_revenue": today_global.get("today_checkin_revenue_global"),
         }
         for name in ("current", "latest"):
             _atomic_write_json(_bi_dir(name) / "bi_refresh_status.json", status)
@@ -302,7 +303,7 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
                 "months_with_any_booking": booking_months["months_with_any_booking"],
                 "months_with_active_booking": booking_months["months_with_active_booking"],
                 "month_snapshots": month_snapshots,
-                "today_new_booking_summary": today_new_summary,
+                "today_global_summary": today_global_summary_manifest,
             })
 
     if own:

@@ -642,3 +642,156 @@ def calculate_today_new_bookings_for_month(bookings: List[BookingRecord], target
         "today_new_booking_calculated_at_jst": datetime.now(timezone.utc).astimezone(JST).isoformat(
             timespec="seconds"),
     }
+
+
+def _global_booking_detail(b: BookingRecord, recognized_revenue: float,
+                           created_dt: Optional[datetime]) -> Dict:
+    """月選択に依らないグローバルサマリー用の予約単位詳細（PII非含有）。"""
+    ota_name, booking_source_raw = normalize_booking_source(b.channel)
+    room_change = extract_room_change_history(b)
+    return {
+        "booking_id": b.booking_id,
+        "checkin": b.checkin_date,
+        "checkout": b.checkout_date,
+        "guest_name": b.guest_name or "氏名未取得",
+        "revenue": round(recognized_revenue),
+        "room_name": b.room_name or None,
+        "room_id": b.room_id or None,
+        "status": b.status,
+        "created_at_jst": created_dt.isoformat(timespec="seconds") if created_dt else None,
+        "ota_name": ota_name,
+        "booking_source_raw": booking_source_raw,
+        "room_change_history_status": room_change["status"],
+        "room_change_history": room_change["changes"],
+    }
+
+
+_NEW_BOOKING_NOTE_OK = (
+    "JST{label}(bookingTime基準)に作成された非キャンセル予約を、チェックイン月を問わず"
+    "予約単位の総売上額(price)で合算。月按分は行わない。")
+_NEW_BOOKING_NOTE_MISSING = (
+    "Beds24予約に作成日時field(bookingTime)が見つからないため、{label}の新規予約を判定できません。")
+_CHECKIN_NOTE_OK = (
+    "チェックイン日がJST{label}の非キャンセル予約を、作成日を問わず予約単位の総売上額(price)で"
+    "合算。月按分は行わない。")
+
+
+def _daily_bucket(count: int, revenue: float, details: List[Dict], date_iso: str,
+                  status: str, note: str) -> Dict:
+    """1カード分の正規化済み集計結果（single source of truthのdaily_global_summary用）。
+
+    正常に計算できた0件は status="ok" とする（"判定不可"はschema欠損・作成日時field自体が
+    見つからない等、本当に判定不能な場合のみ）。count/revenue/detailsの整合性
+    (count == len(details), revenue == sum(details[].revenue)) は呼び出し元で保証済み。
+    """
+    return {"date_jst": date_iso, "status": status, "count": count,
+            "revenue": round(revenue), "details": details, "note": note}
+
+
+def calculate_today_global_summary(bookings: List[BookingRecord], today_jst: date,
+                                   exclude_statuses: List[str]) -> Dict:
+    """月選択に依らない、グローバルな「日次」サマリー（BI画面上段の共通表示用）。
+
+    月別ダッシュボード(calculate_today_new_bookings_for_month)とは異なり、対象月による
+    フィルタ・按分を一切行わない。3つの独立した集計を返す:
+      - 本日の新規予約: JST今日Beds24上で作成された全予約（チェックイン月を問わない）。
+      - 前日の新規予約: JST前日に作成された全予約（チェックイン月を問わない）。
+      - 本日チェックイン: チェックイン日がJST今日の全予約（作成日を問わない）。
+    いずれも金額は予約単位の総売上額(calculate_recognized_booking_revenue、price総額)を
+    月按分せずそのまま合算し、非キャンセルのみを対象とする（is_cancelled(exclude_statuses)）。
+    created_at_raw が無い/解析できない予約は新規予約側の判定から除外し、全予約で
+    判定不可の場合のみ status="created_at_field_missing" にする（推測で当日扱いにしない）。
+    正常に該当0件の場合はstatus="ok"のまま(count=0/revenue=0/details=[])とし、
+    「判定不可」とは区別する。
+
+    戻り値には新設の `daily_global_summary`(single source of truth) と、既存フロント
+    互換のためのflat fields(`*_global`)の両方を含む。
+    """
+    raw_index = _load_raw_index_multi(bookings)
+    yesterday_jst = today_jst - timedelta(days=1)
+    today_iso = today_jst.isoformat()
+    yesterday_iso = yesterday_jst.isoformat()
+
+    new_count = 0
+    new_revenue = 0.0
+    new_details: List[Dict] = []
+    yesterday_count = 0
+    yesterday_revenue = 0.0
+    yesterday_details: List[Dict] = []
+    any_created_at_present = False
+
+    checkin_count = 0
+    checkin_revenue = 0.0
+    checkin_details: List[Dict] = []
+
+    seen_booking_ids = set()
+
+    for b in bookings:
+        # 同一booking_idが複数raw_json_pathにまたがって重複読込されるケースの排除。
+        if b.booking_id in seen_booking_ids:
+            continue
+        seen_booking_ids.add(b.booking_id)
+
+        if b.is_cancelled(exclude_statuses):
+            continue
+        recognized = calculate_recognized_booking_revenue(b, raw_index)
+        created_dt = _created_datetime_jst(b.created_at_raw)
+        if created_dt is not None:
+            any_created_at_present = True
+            created_date = created_dt.date()
+            if created_date == today_jst:
+                new_count += 1
+                new_revenue += recognized
+                new_details.append(_global_booking_detail(b, recognized, created_dt))
+            elif created_date == yesterday_jst:
+                yesterday_count += 1
+                yesterday_revenue += recognized
+                yesterday_details.append(_global_booking_detail(b, recognized, created_dt))
+
+        if (b.checkin_date or "")[:10] == today_iso:
+            checkin_count += 1
+            checkin_revenue += recognized
+            checkin_details.append(_global_booking_detail(b, recognized, created_dt))
+
+    new_logic_status = "ok" if any_created_at_present else "created_at_field_missing"
+    new_logic_note = (_NEW_BOOKING_NOTE_OK.format(label="今日") if new_logic_status == "ok"
+                      else _NEW_BOOKING_NOTE_MISSING.format(label="本日"))
+    yesterday_logic_status = new_logic_status
+    yesterday_logic_note = (_NEW_BOOKING_NOTE_OK.format(label="前日") if yesterday_logic_status == "ok"
+                            else _NEW_BOOKING_NOTE_MISSING.format(label="前日"))
+    checkin_logic_status = "ok"
+    checkin_logic_note = _CHECKIN_NOTE_OK.format(label="今日")
+
+    now_jst = datetime.now(timezone.utc).astimezone(JST).isoformat(timespec="seconds")
+
+    daily_global_summary = {
+        "today_new_bookings": _daily_bucket(
+            new_count, new_revenue, new_details, today_iso, new_logic_status, new_logic_note),
+        "yesterday_new_bookings": _daily_bucket(
+            yesterday_count, yesterday_revenue, yesterday_details, yesterday_iso,
+            yesterday_logic_status, yesterday_logic_note),
+        "today_checkins": _daily_bucket(
+            checkin_count, checkin_revenue, checkin_details, today_iso,
+            checkin_logic_status, checkin_logic_note),
+    }
+
+    return {
+        "daily_global_summary": daily_global_summary,
+        # --- 既存フロント互換のためのflat fields ---
+        "today_new_booking_count_global": new_count,
+        "today_new_booking_revenue_global": round(new_revenue),
+        "today_new_booking_details_global": new_details,
+        "today_new_booking_logic_status_global": new_logic_status,
+        "today_new_booking_logic_note_global": new_logic_note,
+        "yesterday_new_booking_count_global": yesterday_count,
+        "yesterday_new_booking_revenue_global": round(yesterday_revenue),
+        "yesterday_new_booking_details_global": yesterday_details,
+        "yesterday_new_booking_logic_status_global": yesterday_logic_status,
+        "yesterday_new_booking_logic_note_global": yesterday_logic_note,
+        "today_checkin_count_global": checkin_count,
+        "today_checkin_revenue_global": round(checkin_revenue),
+        "today_checkin_details_global": checkin_details,
+        "today_global_jst": today_iso,
+        "yesterday_global_jst": yesterday_iso,
+        "today_global_calculated_at_jst": now_jst,
+    }

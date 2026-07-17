@@ -52,4 +52,23 @@ await check("refresh button state auto-resets to idle after success/error", asyn
   assert.ok(fnBody.includes("\"idle\""));
 });
 
+// 月切替連打や5分ごとの自動再取得が重なった際、古いリクエストのレスポンスが後から
+// resolveして新しい表示を上書きするrace conditionを防ぐガード。
+await check("stale fetch responses do not overwrite newer results (request sequencing guard)", async () => {
+  const fnBody = text.slice(text.indexOf("async function loadAndRender"),
+    text.indexOf("async function handleMonthChange"));
+  assert.ok(fnBody.includes("++requestSeq"),
+    "loadAndRenderは呼び出しごとにsequence番号を発行すること");
+  assert.ok(fnBody.includes("seq !== requestSeq"),
+    "古いレスポンスはseq不一致で早期returnし画面を上書きしないこと");
+});
+
+await check("daily summary details toggle updates aria-expanded on the summary element", async () => {
+  assert.ok(text.includes("attachDailySummaryToggleListener"));
+  const fnBody = text.slice(text.indexOf("function attachDailySummaryToggleListener"),
+    text.indexOf("function render(vm)"));
+  assert.ok(fnBody.includes('addEventListener("toggle"'));
+  assert.ok(fnBody.includes("aria-expanded"));
+});
+
 console.log(`\n${passed} app.js checks passed`);

@@ -46,11 +46,11 @@ function renderRoomChangeBlock(d) {
   return `<div class="daily-booking-detail-room-change">${d.roomChangeSummary}</div>`;
 }
 
-// 本日新規予約一覧。PII(email/phone/address等)は含めない。
+// 日次サマリーカード1枚分の予約明細一覧。PII(email/phone/address等)は含めない。
 // PCでは1件=カード内2カラム(左:宿泊者/OTA/CI-CO、右:部屋タイプ/金額/部屋変更)で右側スペースを
 // 活用し、モバイルでは縦積みにする(table形式は情報量が増えて窮屈になったため廃止)。
-export function renderDailyNewBookingDetails(summary) {
-  const cards = (summary.details || []).map((d) => `<article class="daily-booking-detail-card">
+export function renderDailySummaryDetails(card) {
+  const cards = (card.details || []).map((d) => `<article class="daily-booking-detail-card">
       <div class="daily-booking-detail-main">
         <div class="daily-booking-detail-guest">${d.guestName}<span class="daily-booking-detail-ota"> / ${d.otaName}</span></div>
         <div class="daily-booking-detail-dates">CI ${d.checkin} → CO ${d.checkout}</div>
@@ -62,37 +62,56 @@ export function renderDailyNewBookingDetails(summary) {
       </div>
     </article>`).join("");
   return `<div class="daily-booking-list">
-    <h3>${summary.detailsTitle || "本日新規予約一覧"}</h3>
+    <h3>${card.detailsTitle || "予約一覧"}</h3>
     <div class="daily-booking-detail-list">${cards}</div>
   </div>`;
 }
 
-// トップカード群より上のsummary strip。「本日の新規予約」件数・金額。
-// hasDetails=trueの場合はクリックで対象予約一覧を展開できる(<details>/<summary>。JS状態管理は増やさない)。
-export function renderDailyNewBookings(summary) {
-  const valueText = summary.revenue ? `${summary.count} / ${summary.revenue}` : summary.count;
-  const helperLine = summary.helper ? `${summary.targetMonthLabel} / ${summary.helper}` : summary.targetMonthLabel;
-  const clickableClass = summary.hasDetails ? " is-clickable" : "";
-  const cta = summary.hasDetails
-    ? `<span class="daily-summary-cta">${summary.detailsCta || "詳細を見る"}</span>` : "";
+// 日次サマリーの1カード（本日の新規予約／前日の新規予約／本日のチェックイン、いずれも
+// 月選択に依らないグローバル集計）。hasDetails=trueの場合はクリックで対象予約一覧を
+// 展開できる(ネイティブ<details>/<summary>でキーボード操作・スクリーンリーダー対応を
+// 確保しつつ、明示的にaria-expandedも付与する。app.js側でtoggleイベントに合わせて更新)。
+export function renderDailySummaryCard(card) {
+  const valueText = card.revenue ? `${card.count} / ${card.revenue}` : card.count;
+  const subLabelHtml = card.subLabel ? `<p class="daily-summary-sublabel">${card.subLabel}</p>` : "";
+  const dateHtml = (card.dateLabel && card.dateLabel !== "—")
+    ? `<p class="daily-summary-date">対象日: ${card.dateLabel}</p>` : "";
+  const helperLine = card.helper || "";
+  const clickableClass = card.hasDetails ? " is-clickable" : "";
+  const cta = card.hasDetails
+    ? `<span class="daily-summary-cta">${card.detailsCta || "詳細を見る"}</span>` : "";
 
   const stripInner = `<div>
-      <p class="eyebrow">${summary.label}</p>
+      <p class="eyebrow">${card.label}</p>
+      ${subLabelHtml}
+      ${dateHtml}
       <p class="daily-summary-value">${valueText}</p>
       <p class="daily-summary-helper">${helperLine}</p>
     </div>
     ${cta}`;
 
-  if (!summary.hasDetails) {
-    const unavailable = summary.detailsUnavailableNote
-      ? `<p class="daily-summary-unavailable">${summary.detailsUnavailableNote}</p>` : "";
-    return `<section class="daily-summary-strip tone-${summary.tone}">${stripInner}</section>${unavailable}`;
+  if (!card.hasDetails) {
+    const unavailable = card.detailsUnavailableNote
+      ? `<p class="daily-summary-unavailable">${card.detailsUnavailableNote}</p>` : "";
+    return `<section class="daily-summary-strip tone-${card.tone}">${stripInner}</section>${unavailable}`;
   }
 
   return `<details class="daily-summary-details">
-    <summary class="daily-summary-strip tone-${summary.tone}${clickableClass}">${stripInner}</summary>
-    ${renderDailyNewBookingDetails(summary)}
+    <summary class="daily-summary-strip tone-${card.tone}${clickableClass}" aria-expanded="false">${stripInner}</summary>
+    ${renderDailySummaryDetails(card)}
   </details>`;
+}
+
+// 「本日の新規予約」「前日の新規予約」「本日のチェックイン」の3枚を並べて表示する
+// (いずれも月選択に依らないグローバル集計)。desktop 3列/tablet 2列/mobile 1列
+// (.daily-summary-grid、styles.cssで定義)。
+export function renderDailySummarySection(cards) {
+  const heading = `<div class="daily-summary-heading">
+    <h2>日次サマリー</h2>
+    <p class="daily-summary-heading-note">対象月に関係なく、当日・前日の予約状況を表示</p>
+  </div>`;
+  const grid = `<div class="daily-summary-grid">${(cards || []).map(renderDailySummaryCard).join("")}</div>`;
+  return heading + grid;
 }
 
 // 部屋タイプ別 日別稼働率（軽量SVG折れ線グラフ。chart libraryは使わない）。

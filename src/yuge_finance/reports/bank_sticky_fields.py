@@ -10,9 +10,10 @@ bank_*フィールドは未取込/空になる。これをそのまま公開す�
 推測で作ることは一切しない（そもそも引き継ぎ対象はbank_*フィールドの数値/ステータスのみ
 であり、raw取引明細ではない）。
 
-generated_at_jst / today_jst / target_month / today_new_booking_* / beds24_* /
-booking_pace_status / 各種BEP等は "bank_" prefix を持たないため、本モジュールの
-処理では一切変更されない（コピー対象をbank_* prefixのみに限定しているため構造的に安全）。
+generated_at_jst / today_jst / target_month / today_new_booking_*_global /
+today_checkin_*_global / beds24_* / booking_pace_status / 各種BEP等は "bank_" prefix
+を持たないため、本モジュールの処理では一切変更されない（コピー対象をbank_* prefixのみに
+限定しているため構造的に安全）。
 """
 from __future__ import annotations
 

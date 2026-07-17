@@ -3,9 +3,9 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
   renderMetricCard, renderCommandCenter, renderInsightBanner, renderStatusChips,
-  renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailyNewBookings,
-  renderDailyNewBookingDetails, renderRoomTypeOccupancyChart, renderRoomTypeRevenueMix,
-  renderRefreshButton,
+  renderDetails, renderErrorState, renderMonthSelector, renderHeader, renderDailySummaryCard,
+  renderDailySummaryDetails, renderDailySummarySection, renderRoomTypeOccupancyChart,
+  renderRoomTypeRevenueMix, renderRefreshButton,
 } from "../public/components.js";
 
 let passed = 0;
@@ -90,36 +90,36 @@ await check("renderHeader includes monthSelectorHtml alongside pillHtml", async 
   assert.ok(header.pillHtml.includes("速報"));
 });
 
-await check("renderDailyNewBookings returns HTML with count/revenue and tone class", async () => {
-  const html = renderDailyNewBookings({
-    label: "本日の新規予約", count: "3件", revenue: "¥84,000",
-    helper: "JST今日作成された予約のみ", tone: "green", targetMonthLabel: "2026年8月宿泊分",
+await check("renderDailySummaryCard returns HTML with count/revenue, subLabel, dateLabel and tone class", async () => {
+  const html = renderDailySummaryCard({
+    label: "本日の新規予約", subLabel: "今日入った予約", dateLabel: "2026年7月18日",
+    count: "3件", revenue: "¥84,000",
+    helper: "予約総額・キャンセル除外（チェックイン月は問わない）", tone: "green",
   });
   assert.ok(html.includes("daily-summary-strip"));
   assert.ok(html.includes("tone-green"));
   assert.ok(html.includes("本日の新規予約"));
+  assert.ok(html.includes("今日入った予約"));
+  assert.ok(html.includes("対象日: 2026年7月18日"));
   assert.ok(html.includes("3件 / ¥84,000"));
-  assert.ok(html.includes("2026年8月宿泊分"));
 });
 
-await check("renderDailyNewBookings shows 判定不可 without a revenue slash", async () => {
-  const html = renderDailyNewBookings({
+await check("renderDailySummaryCard shows 判定不可 without a revenue slash", async () => {
+  const html = renderDailySummaryCard({
     label: "本日の新規予約", count: "判定不可", revenue: "",
-    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber", targetMonthLabel: "2026年8月宿泊分",
+    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber",
   });
   assert.ok(html.includes("tone-amber"));
   assert.ok(html.includes("判定不可"));
   assert.ok(!html.includes("判定不可 /"));
 });
 
-// ---------------- 本日新規予約 詳細drilldown ----------------
+// ---------------- 日次サマリー 詳細drilldown ----------------
 const sampleDetails = [
   { bookingId: "1", checkin: "2026-08-10", checkout: "2026-08-12", guestName: "Yamada Taro",
     revenue: "¥24,000", roomName: "201", createdAtJst: "2026-08-10T09:00:00+09:00",
     otaName: "じゃらん", bookingSourceRaw: "じゃらんnet",
     roomType: "ツイン｜客室トイレ付", roomTypeKey: "twin_toilet",
-    currentRoomType: "ツイン｜客室トイレ付", currentRoomTypeKey: "twin_toilet",
-    originalRoomType: null, originalRoomTypeKey: null,
     // 取得不可の場合はroomChangeSummary自体が無い(表示しない)
     hasRoomChange: false, roomChangeHistoryStatus: "not_available",
     roomChangeSummary: null, roomChangeHistory: [] },
@@ -138,21 +138,23 @@ const sampleDetailsWithRoomChange = [
       changedBy: "staff", rawNote: "お客様都合による変更" }] },
 ];
 
-await check("renderDailyNewBookings renders as <details> with 詳細を見る when hasDetails", async () => {
-  const html = renderDailyNewBookings({
-    label: "本日の新規予約", count: "1件", revenue: "¥24,000",
-    helper: "JST今日作成された予約のみ", tone: "green", targetMonthLabel: "2026年8月宿泊分",
+await check("renderDailySummaryCard renders as <details> with aria-expanded and 詳細を見る when hasDetails", async () => {
+  const html = renderDailySummaryCard({
+    label: "本日の新規予約", subLabel: "今日入った予約", dateLabel: "2026年7月18日",
+    count: "1件", revenue: "¥24,000",
+    helper: "予約総額・キャンセル除外", tone: "green",
     details: sampleDetails, hasDetails: true, detailsTitle: "本日新規予約一覧", detailsCta: "詳細を見る",
   });
   assert.ok(html.startsWith("<details"));
   assert.ok(html.includes("<summary"));
+  assert.ok(html.includes('aria-expanded="false"'));
   assert.ok(html.includes("is-clickable"));
   assert.ok(html.includes("詳細を見る"));
   assert.ok(html.includes("本日新規予約一覧"));
 });
 
 await check("daily booking detail renders as a card list (not a table) with checkin/checkout/guest/amount", async () => {
-  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  const html = renderDailySummaryDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
   assert.ok(html.includes("daily-booking-detail-list"));
   assert.ok(html.includes("daily-booking-detail-card"));
   assert.ok(!html.includes("<table"), "table markup should be fully replaced by the card list");
@@ -163,26 +165,26 @@ await check("daily booking detail renders as a card list (not a table) with chec
 });
 
 await check("daily booking detail card shows OTA name and room type", async () => {
-  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  const html = renderDailySummaryDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
   assert.ok(html.includes("じゃらん"));
   assert.ok(html.includes("ツイン｜客室トイレ付"));
 });
 
 await check("daily booking detail card shows nothing for room-change when history is not_available", async () => {
-  const html = renderDailyNewBookingDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
+  const html = renderDailySummaryDetails({ details: sampleDetails, detailsTitle: "本日新規予約一覧" });
   assert.ok(!html.includes("変更履歴取得不可"));
   assert.ok(!html.includes("daily-booking-detail-room-change"));
   assert.ok(!html.includes("<details class=\"room-change-details\""));
 });
 
 await check("daily booking detail card shows 部屋変更なし when history is confirmed empty", async () => {
-  const html = renderDailyNewBookingDetails({ details: sampleDetailsNoRoomChange, detailsTitle: "本日新規予約一覧" });
+  const html = renderDailySummaryDetails({ details: sampleDetailsNoRoomChange, detailsTitle: "本日新規予約一覧" });
   assert.ok(html.includes("部屋変更なし"));
   assert.ok(!html.includes("<details class=\"room-change-details\""));
 });
 
 await check("daily booking detail card shows room change summary in a <details> when history exists", async () => {
-  const html = renderDailyNewBookingDetails({ details: sampleDetailsWithRoomChange, detailsTitle: "本日新規予約一覧" });
+  const html = renderDailySummaryDetails({ details: sampleDetailsWithRoomChange, detailsTitle: "本日新規予約一覧" });
   assert.ok(html.includes("部屋変更 1件"));
   assert.ok(html.includes("<details class=\"room-change-details\""));
   assert.ok(html.includes("<summary>部屋変更 1件</summary>"));
@@ -190,26 +192,43 @@ await check("daily booking detail card shows room change summary in a <details> 
   assert.ok(html.includes("お客様都合による変更"));
 });
 
-await check("renderDailyNewBookings does not render a booking list when hasDetails is false (0件)", async () => {
-  const html = renderDailyNewBookings({
+await check("renderDailySummaryCard does not render a booking list when hasDetails is false (正常な0件)", async () => {
+  const html = renderDailySummaryCard({
     label: "本日の新規予約", count: "0件", revenue: "¥0",
-    helper: "本日、選択月の新規予約はまだありません", tone: "neutral", targetMonthLabel: "2026年8月宿泊分",
+    helper: "本日の新規予約はまだありません", tone: "neutral",
     details: [], hasDetails: false,
   });
   assert.ok(!html.includes("<details"));
   assert.ok(!html.includes("daily-booking-list"));
   assert.ok(html.includes("まだありません"));
+  assert.ok(!html.includes("undefined"));
+  assert.ok(!html.includes("NaN"));
 });
 
-await check("renderDailyNewBookings shows unavailable note when details cannot be determined", async () => {
-  const html = renderDailyNewBookings({
+await check("renderDailySummaryCard shows unavailable note when details cannot be determined", async () => {
+  const html = renderDailySummaryCard({
     label: "本日の新規予約", count: "判定不可", revenue: "",
-    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber", targetMonthLabel: "2026年8月宿泊分",
+    helper: "Beds24の予約作成日時fieldを確認できません", tone: "amber",
     details: [], hasDetails: false,
     detailsUnavailableNote: "予約作成日時を確認できないため、詳細を表示できません",
   });
   assert.ok(!html.includes("<details"));
   assert.ok(html.includes("予約作成日時を確認できないため、詳細を表示できません"));
+});
+
+await check("renderDailySummarySection renders a heading and a responsive grid with 3 cards", async () => {
+  const cards = [
+    { label: "本日の新規予約", subLabel: "今日入った予約", count: "3件", revenue: "¥84,000", tone: "green" },
+    { label: "前日の新規予約", subLabel: "昨日入った予約", count: "1件", revenue: "¥20,000", tone: "green" },
+    { label: "本日のチェックイン", subLabel: "今日到着する予約", count: "0件", revenue: "¥0", tone: "neutral" },
+  ];
+  const html = renderDailySummarySection(cards);
+  assert.ok(html.includes("日次サマリー"));
+  assert.ok(html.includes("対象月に関係なく"));
+  assert.ok(html.includes("daily-summary-grid"));
+  assert.ok(html.includes("本日の新規予約"));
+  assert.ok(html.includes("前日の新規予約"));
+  assert.ok(html.includes("本日のチェックイン"));
 });
 
 // ---------------- 部屋タイプ別 日別稼働率グラフ ----------------
