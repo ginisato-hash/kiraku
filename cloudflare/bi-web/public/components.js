@@ -297,7 +297,9 @@ export function renderRefreshButton(state) {
 export function renderHeader(header) {
   return {
     title: header.title,
-    metaLine: `対象月: ${header.targetMonth} ｜ 最終更新: ${header.generatedAtJst || "—"}`,
+    // 「最終更新」の人間可読表示(何分前・更新遅延警告込み)はapp.js側でformatFreshness()を
+    // 使って別途組み立てる(このmetaLineは対象月のみを持つ)。
+    metaLine: `対象月: ${header.targetMonth}`,
     pillHtml: `<span class="status-pill tone-${header.statusPill.tone}">
       <span class="dot"></span>${header.statusPill.label}
     </span>`,
