@@ -5,7 +5,7 @@
   "type": "module",
   "description": "喜らく スタッフ向けDaily Ops / 清掃指示（Cloudflare Workers + R2、財務データ非表示）",
   "scripts": {
-    "test": "node test/cleaningOverrides.test.mjs && node test/worker.test.mjs && node test/dailyOpsViewModel.test.mjs && node test/financialGuard.test.mjs && node test/jst.test.mjs && node test/printUtils.test.mjs && node test/printGuestRegister.test.mjs && node test/printCleaning.test.mjs && node test/mobileCleaning.test.mjs && node test/sameEndpoint.test.mjs",
+    "test": "node test/cleaningOverrides.test.mjs && node test/worker.test.mjs && node test/dailyOpsViewModel.test.mjs && node test/financialGuard.test.mjs && node test/jst.test.mjs && node test/printUtils.test.mjs && node test/printGuestRegister.test.mjs && node test/printCleaning.test.mjs && node test/mobileCleaning.test.mjs && node test/sameEndpoint.test.mjs && node test/featureFlags.test.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run"

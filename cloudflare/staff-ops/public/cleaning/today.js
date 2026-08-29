@@ -8,6 +8,7 @@
 import { renderMobileCleaningRooms } from "../cleaningSheetTemplate.js";
 import { assertNoFinancialKeys } from "../financialGuard.js";
 import { todayJst, formatDateJp } from "../jst.js";
+import { cleaningVisualAllowed } from "../featureFlags.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -21,6 +22,14 @@ async function main() {
   document.getElementById("mc-date").textContent = formatDateJp(date);
   const listEl = document.getElementById("mc-room-list");
   const freshnessEl = document.getElementById("mc-freshness");
+
+  // 原本写真確認前は、清掃担当者の通常導線からこの仮visualへ到達させない。
+  // 内部QAは ?preview=1 を付けてこのURLへ直接アクセスすれば確認できる。
+  if (!cleaningVisualAllowed()) {
+    freshnessEl.textContent = "";
+    listEl.innerHTML = `<div class="mc-empty">清掃指示書：準備中（原本写真確認後に有効化されます）</div>`;
+    return;
+  }
 
   let cleaning = null;
   try {

@@ -7,158 +7,164 @@
   Authentication error [code: 10000]
 ```
 
-**重要な追加確認事項（2026-08-29判明）**: 同じ`CLOUDFLARE_API_TOKEN`で**既存の`kiraku-bi`
-Worker自体の再デプロイ**（新規作成ではなく、既にある同じスクリプトへの`wrangler deploy`）を
-試しても、まったく同じ`Authentication error [code: 10000]`で失敗することを確認しました
-（`.github/workflows/deploy-worker.yml`のrun、`kiraku-staff-ops`とは無関係の既存パイプライン）。
-つまり原因は「新しいWorkerだから」ではなく、**現在のCLOUDFLARE_API_TOKENに
-Workers Scripts:Edit 権限そのものが無い**ことです（R2バケット作成は成功するため、
-R2権限は生きています。Workers Scripts権限だけが欠けています）。
+**確認済みの事実**: 同じ`CLOUDFLARE_API_TOKEN`で**既存の`kiraku-bi` Worker自体の再デプロイ**
+（新規作成ではなく、既にある同じスクリプトへの`wrangler deploy`）を試しても、まったく同じ
+`Authentication error [code: 10000]`で失敗します（`.github/workflows/deploy-worker.yml`の実行、
+`kiraku-staff-ops`とは無関係の既存パイプライン。これは私の今回の変更が原因ではなく、この
+変更に着手する前の最後のmainコミット（`b6b0f0e`）時点で既に壊れていました）。
 
-**これは私の今回の変更が原因ではありません。** このリポジトリのgit履歴を確認したところ、
-私が触る前の最後のmainコミット（`b6b0f0e`）自身の`Deploy Cloudflare Worker`実行も
-同一エラーで失敗していました。つまり**既存の経営BI（kiraku-bi）のコードデプロイ経路も
-現在このトークン権限不足により壊れています**（データ更新=R2書き込みは無事に15分毎に
-動き続けているため、この破損はこれまで気づかれていなかったと考えられます）。
+**つまり現在のCLOUDFLARE_API_TOKENに必要な権限は次の3つで、全て確認・整理済みです:**
+
+| 権限 | 現状 | 用途 |
+|---|---|---|
+| Account → Workers Scripts → Edit | **無し（要追加）** | Worker自体のデプロイ（kiraku-bi再デプロイ・kiraku-staff-ops新規デプロイ双方） |
+| Account → Workers R2 Storage → Edit | 有り（動作確認済み） | R2バケット作成・データpublish |
+| Account → Workers KV Storage → Edit | **無し（要追加）** | 清掃指示override機能用のKVネームスペース作成（任意機能ではなく必須要件） |
+
+R2は生きているため今まで気づかれていませんでしたが、**既存の経営BI（kiraku-bi）自身の
+コードデプロイ経路も現在この権限不足により壊れています**（データ更新=R2書き込みは
+15分毎に動き続けているため気づかれていなかったと考えられます）。
 
 **これはコード側の問題ではありません。** `cloudflare/staff-ops/` のコード・テスト・ローカル
-`wrangler dev` 動作確認はすべて完了・green です。このトークン権限を直すだけで、
-次にpush（または `gh workflow run deploy-staff-worker.yml` /
-`gh workflow run deploy-worker.yml`）した時に、staff-ops・既存bi-web両方の
-デプロイが自動で成功するようになります。
+`wrangler dev` 動作確認・feature flag（清掃visual非公開化）はすべて完了・green です。
+上記2つの権限を追加するだけで、staff-ops・既存bi-web両方のデプロイが自動で成功するように
+なります。**ユーザーへtoken値そのものを要求することはありません** — ダッシュボードでの
+権限追加だけをお願いします。
 
 ## 対処方法（どちらか）
 
-**方法A（推奨・最も簡単）**: 新しいCloudflare APIトークンを発行し直す
-1. https://dash.cloudflare.com/profile/api-tokens → **Create Token** → **Edit Cloudflare Workers** テンプレートを選択
-   （これは通常 Account: Workers Scripts:Edit / Workers KV Storage:Edit / Workers R2 Storage:Edit を
-   まとめて含むテンプレートで、対象を「All zones」ではなく該当アカウントに絞れます）。
-2. 発行されたトークンをコピーし、GitHubの `CLOUDFLARE_API_TOKEN` シークレットを更新:
-   https://github.com/ginisato-hash/kiraku → **Settings** → **Secrets and variables** → **Actions**
-   → `CLOUDFLARE_API_TOKEN` → **Update** → 新しい値を貼り付け。
-3. （このトークンは `kiraku-bi` の既存デプロイにも使われているため、Workers Scripts の対象範囲に
-   `kiraku-bi` も含まれる設定を選ぶか、「All Workers」スコープにしてください。）
-
-**方法B（既存トークンを編集）**: 既存トークンに権限を追加できる場合
+**方法A（推奨）**: 既存トークンを編集し、不足している2権限を追加する
 1. https://dash.cloudflare.com/profile/api-tokens → 該当トークンの **Edit**
-2. Permissions に **Account → Workers Scripts → Edit** を追加（まだ無ければ）
+2. Permissions に以下を追加（既に付いているものはそのまま）:
+   - **Account → Workers Scripts → Edit**
+   - **Account → Workers KV Storage → Edit**
 3. Account Resources の対象が「Specific Workers」で `kiraku-bi` だけに限定されている場合、
-   `kiraku-staff-ops` も追加するか、「All Workers」に変更する
-4. （KV overrideも使うなら、同時に **Account → Workers KV Storage → Edit** も追加。上記1章参照）
+   `kiraku-staff-ops` も追加するか、「All Workers」に変更する（新しいWorkerを作成するため）。
 
-## 修正後の確認方法
+**方法B**: 新しいトークンを発行し直し、GitHub Secretsを更新する
+1. https://dash.cloudflare.com/profile/api-tokens → **Create Token** →
+   **Edit Cloudflare Workers** テンプレート（通常 Workers Scripts / KV / R2 の Edit をまとめて含む）
+2. 発行されたトークンを GitHub → Settings → Secrets and variables → Actions →
+   `CLOUDFLARE_API_TOKEN` → **Update** に貼り付け。
 
-トークン更新後、以下のどちらかで再デプロイをトリガーしてください（pushは不要）:
+## 修正後、明示的にデプロイを実行して確認する（push待ちにしない）
+
 ```bash
 gh workflow run deploy-staff-worker.yml -R ginisato-hash/kiraku
+gh workflow run deploy-worker.yml -R ginisato-hash/kiraku
 ```
-または GitHub の Actions タブ → "Deploy Staff Ops Worker" → **Run workflow**。
+両方が green になるまで `gh run list -R ginisato-hash/kiraku` で確認してください。
 成功すれば `https://kiraku-staff-ops.s-sato-dce.workers.dev/health` が `{"status":"ok"}` を返します。
+**このタイミングではまだ `STAFF_OPS_ACCESS_CONFIRMED` を設定しないでください**
+（下記「データゲート」参照。Access確認が先です）。
 
 ---
 
-## 0. 清掃指示の手動修正（override）機能を有効化する（任意・後回し可）
-
-`POST /api/cleaning/override`（フロント担当者が客室番号/備考を当日限定で修正する機能）は
-KVネームスペースが必要ですが、既存 `CLOUDFLARE_API_TOKEN`（GitHub Secrets）には
-**Workers KV Storage: Edit 権限が無く**、CIでの自動作成に失敗します
-（`wrangler kv namespace create` → `Authentication error [code: 10000]`）。
-**この機能が無くても Daily Ops 画面・宿泊者名簿印刷・清掃指示表示は問題なく動作します**
-（read側は空のoverride扱いになるだけ）。有効化する場合は次のどちらかを行ってください:
-
-- **(推奨・簡単)** https://dash.cloudflare.com/profile/api-tokens で既存トークンを編集し、
-  権限に **Account → Workers KV Storage → Edit** を追加する。追加後、
-  `cloudflare/staff-ops/wrangler.toml` の末尾でコメントアウトされている
-  `[[kv_namespaces]]` ブロックを元に戻し（`#`を外す）、`.github/workflows/deploy-staff-worker.yml`
-  に「Ensure KV namespace exists and bind its real id」ステップ
-  （このファイルの過去のgit historyに残っている。必要ならClaudeへ「KV override機能を有効化して」と依頼）を
-  復元してpushすれば、次回デプロイ時に自動でネームスペースが作成されます。
-- または、ダッシュボードで手動に `wrangler kv namespace create CLEANING_OVERRIDES` 相当を実行し、
-  発行されたidを `wrangler.toml` の `[[kv_namespaces]]` に直接書いてコミットしても構いません。
-
-# Cloudflare Access 設定手順（手動・必須・未実施）
+# Cloudflare Access 設定手順（Worker deploy成功後・PII投入前に必須）
 
 `kiraku-staff-ops` Worker は宿泊者氏名・電話番号・住所を配信するため、**Cloudflare Access
 （Zero Trust）でアクセス制御されるまで、URLを知っている誰でも閲覧できる状態です。**
 これは本リポジトリのコード・GitHub Actions・wrangler設定だけでは自動化できません
 （Cloudflare Zero Trust の Access Application 作成にはダッシュボード操作、または
-`Access: Apps and Policies: Edit` 権限を持つ別のAPIトークンが必要で、既存の
-`CLOUDFLARE_API_TOKEN`（Workers/R2/KV操作用）はこの権限を持っていません）。
+`Access: Apps and Policies: Edit` 権限を持つ別のAPIトークンが必要です）。
 
 **本番URLを一般スタッフへ周知する前に、必ず以下を完了してください。**
 
 ## 1. 対象ホスト名
 
-Worker名 `kiraku-staff-ops` は、既存 `kiraku-bi`（`https://kiraku-bi.s-sato-dce.workers.dev`）と
-同じアカウントのため、以下のURLで公開されます（カスタムドメイン未設定の場合）:
-
 ```
 https://kiraku-staff-ops.s-sato-dce.workers.dev
 ```
+Cloudflare Access は `*.workers.dev` サブドメインもそのまま保護対象にできます（DNS/カスタムドメイン不要）。
 
-Cloudflare Access は `*.workers.dev` サブドメインもそのまま保護対象にできます
-（DNS/カスタムドメインの追加設定は不要）。
-
-## 2. Access Application 作成手順（Cloudflare ダッシュボード）
+## 2. Access Application 作成手順
 
 1. https://one.dash.cloudflare.com/ にログイン → 対象アカウントを選択。
 2. 左メニュー **Access** → **Applications** → **Add an application** → **Self-hosted**。
 3. 設定:
    - Application name: `Kiraku Staff Ops`
-   - Session duration: `24 hours`（推奨。頻繁な再ログインを避けつつ、端末紛失時のリスクを抑える）
+   - Session duration: `24 hours`
    - Application domain: `kiraku-staff-ops.s-sato-dce.workers.dev`（パスは空欄 = サイト全体を保護）
 4. **Policies** で最低1つ追加。喜らくの実際の運用に応じて以下のいずれかを選択:
-   - **フロント担当者にメールアドレスがある場合**: `Include` ルールで `Emails ending in`
-     `@yuge-zao.com`（または実際に使っているドメイン）。
-   - **清掃担当者など個別メールアドレスが無いスタッフがいる場合**: 個人Gmail等の
-     `Emails` を明示的に列挙するか、Cloudflare Access の **One-time PIN**
-     （メール受信のみで認証、アカウント登録不要）を使い、許可するメールアドレスの
-     リストだけをPolicyに列挙する運用が最も簡単です。
-   - 経営BI（`kiraku-bi`）の閲覧権限を持つ人物と、Staff Ops / 清掃担当者に許可する
-     人物は**意図的に別リストにしてください**（本タスクの要件：清掃担当者に経営BI閲覧権限を
-     与えない。逆にstaff-ops側のPolicyに経営層のみのメールを含めるのは問題ありません）。
+   - フロント担当者にメールアドレスがある場合: `Include` ルールで `Emails ending in` `@yuge-zao.com`
+   - 個別メールアドレスが無いスタッフがいる場合: 個人メールを明示列挙するか、
+     Cloudflare Access の **One-time PIN**（メール受信のみで認証）で許可リストを作る
+   - 経営BI（`kiraku-bi`）閲覧権限を持つ人物と、Staff Ops/清掃担当者に許可する人物は
+     **意図的に別リストにしてください**（清掃担当者に経営BI閲覧権限を与えない）
 5. 保存。
 
-## 3. 動作確認
+## 3. 動作確認（実URLで未認証アクセスを試す — Applicationがあるだけでは不十分）
 
-Policy保存後、シークレットウィンドウ等で対象URLへアクセスし、Cloudflare Access の
-ログイン画面（メール入力→PINコード認証、またはSSO）が表示されることを確認してください。
-許可リストに無いメールアドレスでは拒否されることも確認してください。
+シークレットウィンドウ等、認証情報の無い状態で以下を確認してください:
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://kiraku-staff-ops.s-sato-dce.workers.dev/
+curl -s -o /dev/null -w "%{http_code}\n" https://kiraku-staff-ops.s-sato-dce.workers.dev/api/daily-ops?date=2026-08-30
+```
+両方とも **200でHTML/JSONがそのまま返ってはいけません**。Cloudflare Accessのログイン
+ページへのリダイレクト（302等）またはチャレンジページが返ることを確認してください。
+ブラウザでも同様に、未認証状態でアクセスするとログイン画面（メール→PIN or SSO）が
+表示されることを確認し、許可リストに無いメールアドレスでは拒否されることも確認してください。
 
 ## 4. 清掃担当者向けURLも同じApplicationで保護されます
 
-`kiraku-staff-ops` Worker配下のパス（`/`, `/ops/print/guest-register`, `/ops/print/cleaning`,
-`/cleaning/today`, `/api/*`）は同一ホスト名なので、上記1つのApplicationで全て保護されます。
-清掃担当者だけ別の狭いPolicyにしたい場合は、Application domainのパスを分けて
-（例: `kiraku-staff-ops.s-sato-dce.workers.dev/cleaning*` を別Applicationにする）
-個別のPolicyを設定することも可能です（任意・今回は必須ではありません）。
+`/`, `/ops/print/guest-register`, `/ops/print/cleaning`, `/cleaning/today`, `/api/*` は
+同一ホスト名なので、1つのApplicationで全て保護されます。
 
-## 5. データゲートを開く（Access確認後の最終ステップ・これをやるまで実データは配信されない）
+---
 
-上記1〜4を完了し、動作確認まで済んだら、**GitHub リポジトリ設定**で以下を追加してください:
+# R2バケットの公開設定について（自動チェック済み）
+
+`deploy-staff-worker.yml` に「Ensure staff-ops R2 bucket has NO public access (r2.dev disabled)」
+ステップを追加済みです。デプロイの度に `wrangler r2 bucket dev-url disable` を実行し、
+念のため `dev-url get` で状態を確認、公開URLが有効なままなら **デプロイ自体を失敗させます**
+（`STAFF_OPS_ACCESS_CONFIRMED`を開く前にこのステップがgreenであることを確認してください）。
+これによりWorkerのbinding経由でしかsnapshotへ到達できない状態を保証します（Cloudflare Access
+はWorkerの前段だけを守るため、R2自体がpublicだと迂回されてしまいます）。
+
+---
+
+# データゲートを開く（Access確認 **後** の最終ステップ・これをやるまで実データは配信されない）
+
+Worker deployのgreen化・Access動作確認まで完了したら:
 
 1. https://github.com/ginisato-hash/kiraku → **Settings** → **Secrets and variables** → **Actions**
    → **Variables** タブ → **New repository variable**
 2. Name: `STAFF_OPS_ACCESS_CONFIRMED` / Value: `1`
+3. **repository variableを設定しただけでは既存のworkflowは自動実行されません。** 次の15分の
+   Cloudflare Cronを待たず、明示的にkickしてください:
+   ```bash
+   gh workflow run refresh-bi-r2.yml -R ginisato-hash/kiraku
+   ```
+4. 完了後、`kiraku-staff-ops-data` R2バケットの `latest/staff_ops_snapshot.json` に
+   実データが書き込まれたことを確認する（構造のみ確認。実在氏名/電話/住所を
+   ターミナル/ログへ大量出力しない）。
 
-これを設定するまでは、`refresh-bi-r2.yml`（15分毎の既存データ更新ジョブ）は
-Daily Ops/清掃データのexport・R2publishを**意図的にスキップ**します
-（`kiraku-staff-ops` Worker自体は既にデプロイされ動作しますが、R2バケットが空のため
-すべての日付が404/空状態として返るだけで、実在の宿泊者氏名・電話番号・住所は
-一切公開されません）。**この変数を設定して初めて実データが配信され始めます。**
+これらを行うまでは、Worker自体はデプロイ済みでもR2バケットが空のため、すべての日付が
+404/空状態を返すだけで、実在の宿泊者氏名・電話番号・住所は一切公開されません。
 
-## 6. 完了後にやること
+---
 
-このファイルの手順が完了したら、ユーザーへ次を報告してください:
-- Access Application作成日時
-- 設定した許可Policy（メールドメイン/個別メールのどちらか、実際の値は本ファイルに書かない）
-- 動作確認結果（未許可メールで拒否されたか）
+# 清掃指示書の状態（原本写真到着まで）
 
-## なぜ自動化しなかったか
+- Cleaning infrastructure: **READY**（データモデル・分類ロジック・override機構・print/mobile
+  route・テストはすべて実装済み・green）
+- Cleaning visual reproduction: **WAITING FOR SOURCE IMAGE**（原本写真未提供）
+- Cleaning feature flag: **OFF**（`public/featureFlags.js` の `CLEANING_VISUAL_READY = false`。
+  Daily Ops上の「清掃指示書を表示/印刷」ボタンは無効化され「準備中」と表示、
+  `/ops/print/cleaning` と `/cleaning/today` も通常アクセスでは「準備中」を表示。
+  内部QA用に `?preview=1` を付けると仮visualを直接確認できる — スタッフへは案内しないこと）
 
-- 適切なPolicy（メールドメインか個別メール列挙か）は、清掃担当者が実際に
-  メールアドレスを持っているかという運用実態に依存し、コードからは判断できません。
-- 既存 `CLOUDFLARE_API_TOKEN`（GitHub Secrets）はWorkers/R2/KV操作用に発行されたもので、
-  Zero Trust Access の管理権限を含んでいる保証がありません。誤ったスコープのトークンで
-  Access Policyを自動作成すると、想定と異なるアクセス制御（過剰に緩い/厳しい）が
-  無人で本番反映されるリスクがあるため、この一点だけは人手での確認を必須にしています。
+原本写真到着後、`cleaningSheetTemplate.js` を写真ベースで100%再現し、acceptance通過後に
+`CLEANING_VISUAL_READY` を `true` に切り替えます。
+
+---
+
+## なぜ完全自動化しなかったか
+
+- Cloudflare APIトークンの権限追加はダッシュボード操作（またはトークン再発行）が必要で、
+  既存トークンの実際のスコープ・作成経緯が確認できないため、コード側からは変更できません。
+- Access Policyの内容（メールドメインか個別メール列挙か）は、清掃担当者が実際にメール
+  アドレスを持っているかという運用実態に依存し、コードからは判断できません。
+- 誤ったスコープのトークンでAccess Policyを自動作成すると、想定と異なるアクセス制御
+  （過剰に緩い/厳しい）が無人で本番反映されるリスクがあるため、この一点だけは
+  人手での確認を必須にしています。

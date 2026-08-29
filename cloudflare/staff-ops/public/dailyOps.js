@@ -11,6 +11,7 @@ import { buildDailyOpsViewModel, formatFreshness } from "./dailyOpsViewModel.js"
 import { renderCleaningSheetTemplate } from "./cleaningSheetTemplate.js";
 import { assertNoFinancialKeys } from "./financialGuard.js";
 import { todayJst, addDaysToDateString, formatDateJp } from "./jst.js";
+import { cleaningVisualAllowed } from "./featureFlags.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -104,10 +105,33 @@ function renderCleaningPreview(rooms) {
     .replace("cleaning-sheet-table", "cleaning-sheet-table cleaning-preview-table");
 }
 
+function setCleaningButtons(date) {
+  const showBtn = document.getElementById("show-cleaning-btn");
+  const printBtn = document.getElementById("print-cleaning-btn");
+  if (cleaningVisualAllowed()) {
+    showBtn.disabled = false;
+    showBtn.removeAttribute("aria-disabled");
+    showBtn.textContent = "清掃指示書を表示";
+    printBtn.href = `/ops/print/cleaning?date=${encodeURIComponent(date)}`;
+    printBtn.classList.remove("is-disabled");
+    printBtn.removeAttribute("aria-disabled");
+    printBtn.textContent = "清掃指示書を印刷";
+    return;
+  }
+  // 原本写真確認前は、一般スタッフの通常導線から仮visualへ到達できないように
+  // 両ボタンを無効化する（内部route/data model自体は温存。QAは ?preview=1 で確認可能）。
+  showBtn.disabled = true;
+  showBtn.setAttribute("aria-disabled", "true");
+  showBtn.textContent = "清掃指示書：準備中";
+  printBtn.removeAttribute("href");
+  printBtn.classList.add("is-disabled");
+  printBtn.setAttribute("aria-disabled", "true");
+  printBtn.textContent = "清掃指示書：準備中";
+}
+
 function setPrintLinks(date, hasArrivals) {
   const guestBtn = document.getElementById("print-guest-register-btn");
-  const cleaningBtn = document.getElementById("print-cleaning-btn");
-  cleaningBtn.href = `/ops/print/cleaning?date=${encodeURIComponent(date)}`;
+  setCleaningButtons(date);
   if (hasArrivals) {
     guestBtn.href = `/ops/print/guest-register?date=${encodeURIComponent(date)}`;
     guestBtn.classList.remove("is-disabled");
@@ -156,6 +180,10 @@ async function loadAndRender(date) {
 
 async function loadCleaningPreview() {
   const section = document.getElementById("cleaning-preview-section");
+  if (!cleaningVisualAllowed()) {
+    section.innerHTML = `<div class="empty-state">清掃指示書：準備中（原本写真確認後に有効化されます）</div>`;
+    return;
+  }
   section.innerHTML = `<div class="empty-state">読み込み中…</div>`;
   const cleaning = await fetchCleaning(currentDate);
   const rooms = (cleaning && Array.isArray(cleaning.rooms)) ? cleaning.rooms : [];

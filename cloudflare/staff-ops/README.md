@@ -53,7 +53,7 @@ Application/Policy作成はダッシュボード操作が必要で、本リポ�
 ```bash
 cd cloudflare/staff-ops
 npm install
-npm test                 # 89 checks
+npm test                 # 97 checks
 npx wrangler dev --port 8799
 # 別ターミナルでfixtureデータをローカルR2へ投入
 npx wrangler r2 object put kiraku-staff-ops-data/latest/staff_ops_snapshot.json \
@@ -64,7 +64,13 @@ npx wrangler r2 object put kiraku-staff-ops-data/latest/staff_ops_snapshot.json 
 `cleaningSheetTemplate.js` / `public/ops/print/cleaning.html` / `public/cleaning/today.html` の
 見た目は**現時点では仮**。既存の手書き清掃指示書の原本写真確認後、
 「原本と可能な限り同じ見た目」に差し替える（ユーザーからの明示的な指示）。
-それまでは本番相当として周知しないこと。
+
+**`public/featureFlags.js` の `CLEANING_VISUAL_READY = false` により、一般スタッフの通常導線
+（Daily Ops上のボタン、`/ops/print/cleaning`、`/cleaning/today`）からはこの仮visualへ到達
+できないようにガードされている。** 内部QAのみ各URLへ `?preview=1` を付けて直接確認できる
+（スタッフへは絶対に案内しないこと）。原本写真の分析・acceptance通過後に `true` へ切り替える。
+データモデル・分類ロジック・KV override機構・print/mobileのroute自体はこのフラグと無関係に
+production-readyで、フラグはあくまで「見た目」の露出だけを止めている。
 
 ## やらないこと
 Beds24 APIをこのWorkerから呼ばない / 売上・価格・ADR・RevPAR・手数料等を一切配信しない /

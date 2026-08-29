@@ -15,16 +15,14 @@ binding = "OPS_DATA"
 bucket_name = "kiraku-staff-ops-data"
 
 # 清掃指示のroom_number/notes上書き（POST /api/cleaning/override）専用のKV。
-#
-# 【一時的に無効化・要フォローアップ】既存 CLOUDFLARE_API_TOKEN (GitHub Secrets) には
-# 現状 R2/Workers の編集権限はあるが、KVネームスペース作成に必要な権限
-# (Workers KV Storage: Edit) が無く、CIでの自動払い出しに失敗する
-# (Cloudflare API: "Authentication error [code: 10000]")。worker.js側は
-# env.CLEANING_OVERRIDES が未定義でも安全に動作する(読み取りは空扱い、
-# 書き込みは500 kv_unavailableを返すのみでクラッシュしない)ため、コア機能
-# (Daily Ops / 宿泊者名簿印刷 / 清掃指示表示)を先に本番稼働させるためこの
-# bindingだけ一旦外す。有効化手順は cloudflare/staff-ops/ACCESS_SETUP.md 参照。
-#
-# [[kv_namespaces]]
-# binding = "CLEANING_OVERRIDES"
-# id = "REPLACE_WITH_REAL_KV_ID"
+# 必須機能（任意機能ではない）。real KV namespace idはCIで自動払い出す
+# （deploy-staff-worker.yml「Ensure KV namespace exists」ステップ）ため、
+# このplaceholderのままにしておくこと。CIには現状 Workers KV Storage: Edit
+# 権限が無くこのステップ自体が失敗するため、KV権限が追加されるまでは
+# Worker全体のdeployが通らない（worker.js自体はbinding未解決でも安全に
+# 動作するよう書かれているが、wrangler deployはbinding先IDを解決できないと
+# 失敗するため、実質的にはWorkers Scripts:Edit権限の欠如と合わせて解消が必要）。
+# 状況は cloudflare/staff-ops/ACCESS_SETUP.md 参照。
+[[kv_namespaces]]
+binding = "CLEANING_OVERRIDES"
+id = "REPLACE_WITH_REAL_KV_ID"
