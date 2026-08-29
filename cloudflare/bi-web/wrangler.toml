@@ -13,10 +13,11 @@ not_found_handling = "single-page-application"
 binding = "BI_DATA"
 bucket_name = "kiraku-bi-data"
 
-# 15分毎に refresh-bi-r2.yml の workflow_dispatch を叩くだけ（scheduled()参照）。
-# GitHub Actionsの on.schedule cron は同じ 3,18,33,48 分刻みで、ここでの
-# 二重発火はrefresh-bi-r2.yml側のconcurrency group（cancel-in-progress: false）
-# が直列化するため安全。GITHUB_ACTIONS_DISPATCH_TOKEN secretが必要
-# （`wrangler secret put GITHUB_ACTIONS_DISPATCH_TOKEN`、リポジトリには置かない）。
+# 15分毎に refresh-bi-r2.yml の workflow_dispatch を叩く（scheduled()参照）。
+# GitHub Actions自身の on.schedule は信頼性問題のため撤去済み
+# （fc1ffca参照：549回期待に対し実行100回、最大687分のsilent gapを実測）。
+# 15分起動はこのCloudflare Cron Trigger単独が担う一本構成。
+# GITHUB_ACTIONS_DISPATCH_TOKEN secretが必要
+# （wrangler secret put GITHUB_ACTIONS_DISPATCH_TOKEN、リポジトリには置かない）。
 [triggers]
 crons = ["3,18,33,48 * * * *"]
