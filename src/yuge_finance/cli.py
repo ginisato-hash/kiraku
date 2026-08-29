@@ -22,6 +22,7 @@ from .reports import (bi_export, breakeven_report, exception_report, labor_repor
                       revenue_reconciliation_report, validation_report)
 
 MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _validate_month(month: str) -> str:
@@ -486,6 +487,45 @@ def cmd_publish_bi_r2(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- export-daily-ops
+def cmd_export_daily_ops(args) -> int:
+    """スタッフDaily Ops(到着/出発/連泊 + 清掃指示)データをJSONへ出力する。
+
+    会計・売上(accounting/配下)には一切触れず、キャッシュ済みraw Beds24 JSONのみを
+    読む(ops.raw_reader経由。API再呼び出しはしない)。個人情報(氏名/電話/住所/備考)は
+    出力JSONには含めるが、標準出力(GitHub Actionsログ等)には一切表示しない。
+    """
+    from .ops import build as ops_build
+
+    if args.dates:
+        target_dates = [d.strip() for d in args.dates.split(",") if d.strip()]
+        for d in target_dates:
+            if not DATE_RE.match(d):
+                raise SystemExit(f"ERROR: --dates は YYYY-MM-DD のカンマ区切りで指定してください（不正値: {d}）")
+    else:
+        target_dates = ops_build.default_target_dates()
+
+    out_path = Path(args.out) if args.out else ops_build.default_out_path()
+
+    snapshot = ops_build.build_staff_ops_snapshot(target_dates)
+    ops_build.write_staff_ops_snapshot(snapshot, out_path)
+
+    total_events = sum(
+        len(d["arrivals"]) + len(d["departures"]) + len(d["stayovers"])
+        for d in snapshot["dates"].values())
+    cancelled_flags = sum(
+        1 for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
+        if r["state"] == "CANCELLED")
+    unassigned_flags = sum(
+        1 for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
+        if r["state"] == "UNASSIGNED")
+
+    _print(f"[export-daily-ops] dates={len(target_dates)} booking_events={total_events} "
+           f"cancelled_flags={cancelled_flags} unassigned_flags={unassigned_flags}")
+    _print(f"[export-daily-ops] 出力: {out_path}")
+    return 0
+
+
 # ---------------------------------------------------------------- close-month
 def cmd_close_month(args) -> int:
     month = _validate_month(args.month)
@@ -636,6 +676,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="R2アップロードしない（--publish-r2を上書き）")
     rb.add_argument("--dry-run", action="store_true", help="ファイルを書かず検証のみ")
 
+    edo = sub.add_parser("export-daily-ops",
+                         help="スタッフDaily Ops(到着/出発/連泊+清掃指示)データをJSON出力"
+                              "（会計・売上には触れない）")
+    edo.add_argument("--dates", default=None,
+                     help="対象日 YYYY-MM-DD のカンマ区切り（省略時: JST前日〜翌々日の4日間）")
+    edo.add_argument("--out", default=None,
+                     help="出力先パス（既定: data/output/latest/ops/staff_ops_snapshot.json）")
+
     def add_month(name, help_):
         sp = sub.add_parser(name, help=help_)
         sp.add_argument("--month", required=True, help="対象月 YYYY-MM")
@@ -680,6 +728,8 @@ def main(argv=None) -> int:
         return cmd_publish_bi(args)
     if cmd == "publish-bi-r2":
         return cmd_publish_bi_r2(args)
+    if cmd == "export-daily-ops":
+        return cmd_export_daily_ops(args)
     handlers = {
         "ingest-opening": lambda: (cmd_ingest_opening(args), 0)[1],
         "debug-beds24-revenue": lambda: cmd_debug_beds24_revenue(args),

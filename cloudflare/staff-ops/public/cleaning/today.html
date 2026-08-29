@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>清掃 本日 — 喜らく</title>
+  <link rel="stylesheet" href="../styles.css" />
+  <style>
+    /* モバイル清掃ビュー：大きめタップターゲット/高コントラスト/フラット構成。
+       原本写真確認後、行の並び順(現状はroom_type_key順の仮並び)を見直す想定。 */
+    body {
+      font-size: 16px;
+    }
+
+    .mc-shell {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+
+    .mc-date {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .mc-freshness {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 20px;
+    }
+
+    .mc-room-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 16px;
+      min-height: 44px;
+    }
+
+    .mc-room-label {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .mc-state-badge {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 6px 16px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .mc-state-TURNOVER { background: var(--red-bg); color: var(--red); }
+    .mc-state-STAYOVER { background: var(--blue-bg); color: var(--blue); }
+    .mc-state-CHECKIN { background: var(--amber-bg); color: var(--amber); }
+    .mc-state-CHECKOUT { background: var(--amber-bg); color: var(--amber); }
+    .mc-state-VACANT { background: var(--gray-bg); color: var(--gray); }
+    .mc-state-CANCELLED { background: var(--gray-bg); color: var(--gray); }
+    .mc-state-UNASSIGNED { background: var(--gray-bg); color: var(--gray); }
+
+    .mc-guests {
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    .mc-notes {
+      font-size: 1rem;
+      color: var(--text-muted);
+    }
+
+    .mc-empty {
+      font-size: 1.2rem;
+      text-align: center;
+      padding: 40px 16px;
+      color: var(--text-faint);
+    }
+  </style>
+</head>
+<body>
+  <div class="mc-shell">
+    <div class="mc-date" id="mc-date">—</div>
+    <div class="mc-freshness" id="mc-freshness"></div>
+    <div id="mc-room-list"></div>
+  </div>
+
+  <script type="module" src="./today.js"></script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+name: Deploy Staff Ops Worker
+
+# staff-ops Worker（Daily Ops / 清掃指示書 / 宿泊者名簿印刷）だけをデプロイする。
+# 既存 kiraku-bi Worker (deploy-worker.yml) とは完全に別デプロイ経路・別R2バケット・別KVネームスペース。
+# データ(latest/staff_ops_snapshot.json)はここではpublishしない。refresh-bi-r2.ymlが担当する。
+# R2バケット・KVネームスペースは初回デプロイ時に存在しなければ自動作成する（冪等）。
+# Cloudflare Access（アクセス制御）はこのworkflowでは設定しない — 別途手動でのZero Trust設定が必要。
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "cloudflare/staff-ops/**"
+      - ".github/workflows/deploy-staff-worker.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy kiraku-staff-ops Worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "cloudflare/staff-ops/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: cloudflare/staff-ops
+        run: npm ci
+
+      - name: Ensure R2 bucket exists
+        working-directory: cloudflare/staff-ops
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          if npx wrangler r2 bucket create kiraku-staff-ops-data 2>&1 | tee /tmp/r2-create.log; then
+            echo "R2 bucket ensured (created or already existed)."
+          else
+            if grep -qi "already exists" /tmp/r2-create.log; then
+              echo "R2 bucket already existed."
+            else
+              echo "::error::Failed to ensure R2 bucket kiraku-staff-ops-data. See log above."
+              exit 1
+            fi
+          fi
+
+      - name: Ensure KV namespace exists and bind its real id
+        working-directory: cloudflare/staff-ops
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          TITLE="kiraku-staff-ops-CLEANING_OVERRIDES"
+          # 既存ネームスペースをタイトルで検索（jqで抽出。無ければcreateしてstdoutからid抽出）。
+          EXISTING_ID=$( (npx wrangler kv namespace list 2>/dev/null || echo "[]") | jq -r --arg t "$TITLE" '(. // []) | .[] | select(.title == $t) | .id' 2>/dev/null | head -1)
+          if [ -n "$EXISTING_ID" ]; then
+            KV_ID="$EXISTING_ID"
+            echo "Found existing KV namespace id=$KV_ID"
+          else
+            echo "No existing KV namespace named $TITLE — creating."
+            CREATE_OUT=$(npx wrangler kv namespace create CLEANING_OVERRIDES 2>&1) || {
+              echo "::error::Failed to create KV namespace. Output:"
+              echo "$CREATE_OUT"
+              exit 1
+            }
+            echo "$CREATE_OUT"
+            KV_ID=$(echo "$CREATE_OUT" | grep -oE 'id = "[a-f0-9]+"' | head -1 | grep -oE '[a-f0-9]{16,}')
+            if [ -z "$KV_ID" ]; then
+              echo "::error::Could not parse new KV namespace id from wrangler output above."
+              exit 1
+            fi
+            echo "Created KV namespace id=$KV_ID"
+          fi
+          # wrangler.tomlのプレースホルダを実idへ置換（このCIチェックアウト内のみ。git管理下のファイルはコミットしない）。
+          sed -i "s/REPLACE_WITH_REAL_KV_ID/$KV_ID/" wrangler.toml
+          echo "Resolved wrangler.toml kv_namespaces id:"
+          grep -A2 "kv_namespaces" wrangler.toml
+
+      - name: Deploy Worker
+        working-directory: cloudflare/staff-ops
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

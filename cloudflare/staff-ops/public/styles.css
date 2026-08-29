@@ -1,0 +1,197 @@
+/* 喜らく DAILY OPS — スタッフ向け画面（ダークテーマ固定、bi-webのデザイントークンを
+   コピー。cross-worker @import はせず、各Workerの静的アセットは自己完結させる）。 */
+:root {
+  --bg: #0b0f17; --surface: #111827; --surface-2: #151f2e; --surface-3: #1f2937;
+  --border: rgba(148, 163, 184, 0.16); --border-strong: rgba(148, 163, 184, 0.28);
+  --text: #e5e7eb; --text-muted: #94a3b8; --text-faint: #64748b;
+  --green: #34d399; --green-bg: rgba(52, 211, 153, 0.12);
+  --amber: #fbbf24; --amber-bg: rgba(251, 191, 36, 0.12);
+  --red: #fb7185; --red-bg: rgba(251, 113, 133, 0.12);
+  --blue: #38bdf8; --blue-bg: rgba(56, 189, 248, 0.10);
+  --gray: #94a3b8; --gray-bg: rgba(148, 163, 184, 0.10);
+  --radius-lg: 20px; --radius-md: 14px; --radius-sm: 10px;
+  --shadow-soft: 0 20px 60px rgba(0, 0, 0, 0.25);
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
+  --font-sans: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "SF Pro Text", system-ui, sans-serif;
+  --page-max-width: 1200px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.metric-value, .tabular { font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+.page-shell {
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: var(--space-5);
+}
+
+.hero-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.hero-header h1 {
+  font-size: 1.6rem;
+  margin: 0 0 var(--space-1) 0;
+}
+
+.meta-line { color: var(--text-muted); font-size: 0.9rem; }
+.meta-line.is-stale { color: var(--amber); }
+
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.date-nav button {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.date-nav button:hover { background: var(--surface-3); }
+
+.date-nav .current-date {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.summary-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+}
+
+.summary-card .summary-label {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-2);
+}
+
+.summary-card .summary-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.summary-card .summary-breakdown {
+  color: var(--text-faint);
+  font-size: 0.85rem;
+  margin-top: var(--space-2);
+}
+
+.actions-row {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.action-button {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-5);
+  font-size: 0.95rem;
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.action-button:disabled, .action-button.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--text-faint);
+  background: var(--gray-bg);
+}
+.action-button-note {
+  color: var(--text-faint);
+  font-size: 0.85rem;
+  align-self: center;
+}
+
+.booking-list { margin-bottom: var(--space-6); }
+.booking-list h2 { font-size: 1.15rem; margin-bottom: var(--space-3); }
+
+.booking-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  justify-content: space-between;
+}
+
+.booking-row .booking-main { flex: 1 1 220px; }
+.booking-row .booking-guest { font-weight: 600; font-size: 1.05rem; }
+.booking-row .booking-room { color: var(--text-muted); font-size: 0.9rem; }
+.booking-row .booking-ota {
+  display: inline-block;
+  background: var(--gray-bg);
+  color: var(--gray);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.78rem;
+  margin-left: var(--space-2);
+}
+.booking-row .booking-guests { color: var(--text-faint); font-size: 0.85rem; }
+.booking-row .booking-dates { color: var(--text-muted); font-size: 0.9rem; }
+
+.booking-row details.booking-detail-toggle summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 0.85rem;
+}
+.booking-row details.booking-detail-toggle .detail-body {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+.empty-state {
+  color: var(--text-faint);
+  padding: var(--space-5);
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.cleaning-preview { margin-top: var(--space-5); }
+.cleaning-preview-row {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>喜らく DAILY OPS</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero-header" id="hero-header">
+      <div>
+        <h1>喜らく DAILY OPS</h1>
+        <div class="meta-line" id="header-meta">読み込み中…</div>
+      </div>
+    </header>
+
+    <nav class="date-nav" id="date-nav" aria-label="日付選択">
+      <button type="button" id="prev-day-btn">前日</button>
+      <span class="current-date" id="current-date-label">—</span>
+      <button type="button" id="today-btn">今日</button>
+      <button type="button" id="next-day-btn">翌日</button>
+    </nav>
+
+    <main id="dashboard">
+      <section class="summary-grid" id="summary-grid" aria-label="本日のサマリー"></section>
+
+      <section class="actions-row" id="actions-row" aria-label="操作">
+        <a class="action-button" id="print-guest-register-btn" target="_blank" rel="noopener" href="#">
+          本日の宿泊者名簿を一括印刷
+        </a>
+        <button class="action-button" type="button" id="show-cleaning-btn">清掃指示書を表示</button>
+        <a class="action-button" id="print-cleaning-btn" target="_blank" rel="noopener" href="#">
+          清掃指示書を印刷
+        </a>
+      </section>
+
+      <section class="booking-list" id="arrivals-section" aria-label="本日の到着"></section>
+      <section class="booking-list" id="departures-section" aria-label="本日の出発"></section>
+      <section class="booking-list" id="stayovers-section" aria-label="連泊"></section>
+
+      <section class="cleaning-preview" id="cleaning-preview-section" aria-label="清掃指示（プレビュー）"></section>
+    </main>
+  </div>
+
+  <script type="module" src="./dailyOps.js"></script>
+</body>
+</html>

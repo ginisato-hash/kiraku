@@ -1,0 +1,21 @@
+name = "kiraku-staff-ops"
+main = "src/worker.js"
+compatibility_date = "2026-07-08"
+
+# HTML/JS/CSS は Static Assets から配信（staff-ops データは同梱しない）
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# staff_ops_snapshot.json（到着/出発/連泊/清掃データ）は R2 の latest/ から読むだけ。
+# Beds24 APIはここでは呼ばない。データパイプラインは別プロセスが15分毎に公開する。
+[[r2_buckets]]
+binding = "OPS_DATA"
+bucket_name = "kiraku-staff-ops-data"
+
+# 清掃指示のroom_number/notes上書き（POST /api/cleaning/override）専用のKV。
+# real KV namespace idは別途CIで払い出す — このplaceholderのままにしておくこと。
+[[kv_namespaces]]
+binding = "CLEANING_OVERRIDES"
+id = "REPLACE_WITH_REAL_KV_ID"

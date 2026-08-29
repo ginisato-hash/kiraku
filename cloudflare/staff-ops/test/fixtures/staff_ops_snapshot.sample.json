@@ -1,0 +1,150 @@
+{
+  "generated_at_jst": "2026-08-30T06:15:00+09:00",
+  "property_name": "喜らく",
+  "dates": {
+    "2026-08-30": {
+      "date": "2026-08-30",
+      "arrivals": [
+        {
+          "booking_id": "89381508",
+          "guest_name": "山田 太郎",
+          "ota_name": "楽天トラベル",
+          "booking_source_raw": "rakuten",
+          "room_type_key": "twin_toilet",
+          "room_type_label": "ツイン｜客室トイレ付",
+          "room_number": null,
+          "adults": 2,
+          "children": 1,
+          "total_guests": 3,
+          "checkin_date": "2026-08-30",
+          "checkout_date": "2026-09-01",
+          "arrival_time": null,
+          "phone": "090-1234-5678",
+          "notes": "アレルギー: なし",
+          "address": { "postcode": "990-2301", "prefecture": "山形県", "city": "山形市", "rest": "蔵王温泉935-25" },
+          "status": "confirmed"
+        },
+        {
+          "booking_id": "89381999",
+          "guest_name": "佐藤 花子",
+          "ota_name": null,
+          "booking_source_raw": null,
+          "room_type_key": "single_no_toilet",
+          "room_type_label": "シングル｜客室トイレなし",
+          "room_number": null,
+          "adults": 1,
+          "children": 0,
+          "total_guests": 1,
+          "checkin_date": "2026-08-30",
+          "checkout_date": "2026-08-31",
+          "arrival_time": "15:00",
+          "phone": null,
+          "notes": null,
+          "address": null,
+          "status": "confirmed"
+        }
+      ],
+      "departures": [
+        {
+          "booking_id": "89381500",
+          "guest_name": "鈴木 一郎",
+          "ota_name": "Booking.com",
+          "booking_source_raw": "booking.com",
+          "room_type_key": "twin_toilet",
+          "room_type_label": "ツイン｜客室トイレ付",
+          "room_number": null,
+          "adults": 2,
+          "children": 0,
+          "total_guests": 2,
+          "checkin_date": "2026-08-28",
+          "checkout_date": "2026-08-30",
+          "arrival_time": null,
+          "phone": "080-9999-0000",
+          "notes": null,
+          "address": { "postcode": "990-2301", "prefecture": "山形県", "city": "山形市", "rest": "蔵王温泉1-1" },
+          "status": "confirmed"
+        }
+      ],
+      "stayovers": [
+        {
+          "booking_id": "89381700",
+          "guest_name": "高橋 次郎",
+          "ota_name": "じゃらん",
+          "booking_source_raw": "jalan",
+          "room_type_key": "triple_toilet",
+          "room_type_label": "トリプル｜客室トイレ付",
+          "room_number": null,
+          "adults": 3,
+          "children": 0,
+          "total_guests": 3,
+          "checkin_date": "2026-08-29",
+          "checkout_date": "2026-09-02",
+          "arrival_time": null,
+          "phone": null,
+          "notes": null,
+          "address": null,
+          "status": "confirmed"
+        }
+      ],
+      "cleaning": {
+        "rooms": [
+          {
+            "room_type_key": "twin_toilet",
+            "room_type_label": "ツイン｜客室トイレ付",
+            "room_number": null,
+            "state": "TURNOVER",
+            "checkout_booking_id": "89381500",
+            "checkin_booking_id": "89381508",
+            "adults": 2,
+            "children": 1,
+            "total_guests": 3,
+            "notes": null
+          },
+          {
+            "room_type_key": "single_no_toilet",
+            "room_type_label": "シングル｜客室トイレなし",
+            "room_number": null,
+            "state": "CHECKIN",
+            "checkout_booking_id": null,
+            "checkin_booking_id": "89381999",
+            "adults": 1,
+            "children": 0,
+            "total_guests": 1,
+            "notes": null
+          },
+          {
+            "room_type_key": "triple_toilet",
+            "room_type_label": "トリプル｜客室トイレ付",
+            "room_number": null,
+            "state": "STAYOVER",
+            "checkout_booking_id": null,
+            "checkin_booking_id": null,
+            "adults": 3,
+            "children": 0,
+            "total_guests": 3,
+            "notes": null
+          },
+          {
+            "room_type_key": "twin_no_toilet",
+            "room_type_label": "ツイン｜客室トイレなし",
+            "room_number": null,
+            "state": "VACANT",
+            "checkout_booking_id": null,
+            "checkin_booking_id": null,
+            "adults": 0,
+            "children": 0,
+            "total_guests": 0,
+            "notes": null
+          }
+        ]
+      }
+    },
+    "2026-08-31": {
+      "date": "2026-08-31",
+      "arrivals": [],
+      "departures": [],
+      "stayovers": [],
+      "cleaning": { "rooms": [] }
+    }
+  }
+}

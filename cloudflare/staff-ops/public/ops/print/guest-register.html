@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宿泊者名簿 / GUEST REGISTRATION FORM — 喜らく</title>
+  <style>
+    /* 印刷専用ページ。通常のダーク画面とは無関係の、明示的なlight/print-safeパレット
+       (このページは印刷目的専用で通常のダーク画面としては使わないため、ダークモードと
+       戦う必要はなく最初からlightに固定する)。 */
+    @page {
+      size: A4 portrait;
+      margin: 15mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: #111111;
+      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+    }
+
+    .grf-page {
+      width: 100%;
+      padding: 0;
+      break-inside: avoid;
+    }
+
+    /* 最後のページ以外はbreak-after:page（末尾の空白ページを出さないため）。 */
+    .grf-page-break {
+      break-after: page;
+    }
+
+    .grf-header {
+      display: flex;
+      align-items: center;
+      gap: 6mm;
+      border-bottom: 0.5mm solid #333333;
+      padding-bottom: 4mm;
+      margin-bottom: 6mm;
+    }
+
+    .grf-logo {
+      max-height: 14mm;
+      max-width: 40mm;
+      object-fit: contain;
+    }
+
+    .grf-property {
+      font-size: 3mm;
+      line-height: 1.6;
+    }
+
+    .grf-title {
+      text-align: center;
+      font-size: 5.5mm;
+      margin: 0 0 6mm 0;
+      line-height: 1.5;
+    }
+
+    .grf-title-en {
+      font-size: 3.6mm;
+      font-weight: normal;
+      color: #444444;
+    }
+
+    .grf-printed {
+      margin-bottom: 6mm;
+    }
+
+    .grf-printed-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 3.4mm;
+    }
+
+    .grf-printed-table th, .grf-printed-table td {
+      border: 0.3mm solid #999999;
+      padding: 2.2mm 3mm;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .grf-printed-table th {
+      width: 32mm;
+      background: #f2f2f2;
+      font-weight: 600;
+    }
+
+    /* 手書き欄：印刷済み部分とはっきり視覚的に分離する（枠 + 薄い背景色）。 */
+    .grf-handwritten {
+      border: 0.5mm solid #555555;
+      border-radius: 2mm;
+      background: #fafafa;
+      padding: 5mm;
+    }
+
+    .grf-handwritten-label {
+      font-size: 3.2mm;
+      font-weight: 600;
+      margin-bottom: 4mm;
+      color: #333333;
+    }
+
+    .grf-age-line {
+      font-size: 3.4mm;
+      margin-bottom: 4mm;
+    }
+
+    .grf-age-blank {
+      display: inline-block;
+      width: 30mm;
+      border-bottom: 0.3mm solid #333333;
+    }
+
+    .grf-companion-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 5mm;
+      font-size: 3.2mm;
+    }
+
+    .grf-companion-table th, .grf-companion-table td {
+      border: 0.3mm solid #999999;
+      padding: 1mm 2mm;
+      text-align: left;
+    }
+
+    .grf-companion-table th { background: #eeeeee; }
+
+    /* 手書きに十分なスペースを確保する（1行あたり実寸9mm）。 */
+    .grf-companion-table tbody tr {
+      height: 9mm;
+    }
+
+    .grf-companion-no {
+      width: 10mm;
+      text-align: center;
+    }
+
+    .grf-confirmation {
+      font-size: 3mm;
+      line-height: 1.7;
+      margin: 0 0 5mm 0;
+    }
+
+    .grf-signature {
+      display: flex;
+      flex-direction: column;
+      gap: 2mm;
+    }
+
+    .grf-signature-label {
+      font-size: 3.2mm;
+      font-weight: 600;
+    }
+
+    .grf-signature-line {
+      height: 15mm;
+      border: 0.3mm solid #333333;
+      border-radius: 1mm;
+    }
+
+    .no-print {
+      margin-bottom: 4mm;
+    }
+
+    .no-print a {
+      color: #2f6fed;
+      font-size: 3.4mm;
+    }
+
+    @media print {
+      .no-print, nav, button {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <a href="/">← 戻る / Back</a>
+  </div>
+  <div id="grf-root">
+    <p class="no-print">読み込み中…</p>
+  </div>
+
+  <script type="module" src="./print-guest-register.js"></script>
+</body>
+</html>

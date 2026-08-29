@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>清掃指示書 — 喜らく（仮レイアウト）</title>
+  <style>
+    /* PLACEHOLDER TEMPLATE — 原本写真確認後に本番デザインへ差し替え予定。
+       このCSSも仮のもの。A4/light前提のみ確定、それ以外(罫線・列構成・フォント等)は
+       すべて写真確認後に変更される想定。 */
+    @page {
+      size: A4 portrait;
+      margin: 15mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: #111111;
+      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+    }
+
+    .cs-provisional-banner {
+      background: #fff3cd;
+      color: #7a5b00;
+      border: 0.3mm solid #e0b400;
+      border-radius: 2mm;
+      padding: 4mm;
+      margin-bottom: 6mm;
+      font-size: 3.6mm;
+      font-weight: 600;
+    }
+
+    .cs-title {
+      font-size: 5mm;
+      margin: 0 0 4mm 0;
+    }
+
+    .cs-date {
+      font-size: 3.6mm;
+      margin-bottom: 6mm;
+      color: #333333;
+    }
+
+    .cleaning-sheet-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 3.4mm;
+    }
+
+    .cleaning-sheet-table th, .cleaning-sheet-table td {
+      border: 0.3mm solid #999999;
+      padding: 2.2mm 3mm;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .cleaning-sheet-table th {
+      background: #f2f2f2;
+      font-weight: 600;
+    }
+
+    .no-print a {
+      color: #2f6fed;
+      font-size: 3.4mm;
+    }
+
+    @media print {
+      /* 警告バナー自体はprint contentの外側にあるので、print時は必ず非表示にする
+         (実物に紛れ込ませないため)。 */
+      .no-print, nav, button {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <a href="/">← 戻る / Back</a>
+    <div class="cs-provisional-banner">
+      ⚠ 仮レイアウト — 原本写真確認後に本番デザインへ差し替え予定
+    </div>
+  </div>
+
+  <div id="cs-print-content">
+    <h1 class="cs-title">清掃指示書</h1>
+    <div class="cs-date" id="cs-date-label">—</div>
+    <div id="cs-table-root"><p class="no-print">読み込み中…</p></div>
+  </div>
+
+  <script type="module" src="./print-cleaning.js"></script>
+</body>
+</html>

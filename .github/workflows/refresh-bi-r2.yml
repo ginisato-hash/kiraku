@@ -94,6 +94,59 @@ jobs:
         run: |
           yuge-finance publish-bi-r2 --bucket "$CLOUDFLARE_R2_BUCKET" --preserve-bank-fields-from-r2
 
+      # --- ここから Staff Daily Ops / 清掃指示書 用データ（財務情報を一切含まない別系統）---
+      # 既存BI(latest/bi_snapshot.json等、売上・ADR等を含む)とは完全に別バケット(kiraku-staff-ops-data)。
+      # 取得元は本ジョブが直前に取得した同じBeds24生データ(data/raw/beds24/)であり、二重取得はしない。
+      #
+      # ゲート: STAFF_OPS_ACCESS_CONFIRMED という repository variable が "1" になるまで、
+      # 実在の宿泊者氏名・電話番号・住所を含むデータはR2へ一切書き込まない（ステップごと
+      # スキップ）。kiraku-staff-ops Workerの本番URLはコード上デプロイ済みでも、
+      # Cloudflare Access（cloudflare/staff-ops/ACCESS_SETUP.md）が未設定の間は
+      # 「秘密URLだけがセキュリティ」という状態になり得るため、それを避けるための
+      # 明示的な運用者ゲート（このリポジトリの既存RMS authorizationパターンと同じ思想）。
+      # 設定手順: GitHub → Settings → Secrets and variables → Actions → Variables タブで
+      # STAFF_OPS_ACCESS_CONFIRMED=1 を追加する（Access設定完了を確認した後に）。
+      - name: Export Daily Ops + cleaning data (no financial fields)
+        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        env:
+          TZ: Asia/Tokyo
+        run: |
+          yuge-finance export-daily-ops
+
+      - name: Staff Ops data gate not yet open (Cloudflare Access unconfirmed)
+        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED != '1' }}
+        run: |
+          echo "::warning::STAFF_OPS_ACCESS_CONFIRMED repository variable is not '1' — skipping Daily Ops/cleaning data export+publish. See cloudflare/staff-ops/ACCESS_SETUP.md. The kiraku-staff-ops Worker stays deployed but its R2 bucket stays empty (safe 404/empty-state) until this gate is opened."
+
+      - name: Ensure staff-ops R2 bucket exists
+        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          if wrangler r2 bucket create kiraku-staff-ops-data 2>&1 | tee /tmp/r2-create-ops.log; then
+            echo "R2 bucket ensured (created or already existed)."
+          else
+            if grep -qi "already exists" /tmp/r2-create-ops.log; then
+              echo "R2 bucket already existed."
+            else
+              echo "::error::Failed to ensure R2 bucket kiraku-staff-ops-data. See log above."
+              exit 1
+            fi
+          fi
+
+      - name: Publish Daily Ops data to R2
+        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler r2 object put kiraku-staff-ops-data/latest/staff_ops_snapshot.json \
+            --file data/output/latest/ops/staff_ops_snapshot.json \
+            --content-type application/json \
+            --remote
+
       # 補助確認のみ。主検証はrefresh-beds24-bi/publish-bi-r2のexit codeで既に厳密に行っている
       # （publish-bi-r2は成功時に generated_at_jst / default_month / uploaded files を出力済み）。
       # CloudflareがPython urllibの既定UAを弾いて403を返すことがあるため、User-Agentを明示し、

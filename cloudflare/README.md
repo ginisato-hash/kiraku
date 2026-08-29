@@ -15,9 +15,19 @@ cloudflare/
     public/app.js         # /data/* を取得（= Worker→R2）
     public/data/          # ローカル publish-bi 出力（Worker配信はR2を使う）
     package.json          # dev/deploy/r2:* scripts
+  staff-ops/
+    wrangler.toml         # kiraku-staff-ops / 別R2バケット(kiraku-staff-ops-data) / 別KVネームスペース
+    src/worker.js         # Daily Ops / 清掃指示書 / 宿泊者名簿印刷（bi-webとは完全に別デプロイ・別データ境界）
+    public/               # Daily Ops画面・印刷専用ページ・清掃スマホ画面（財務情報は一切含まない）
+    ACCESS_SETUP.md        # Cloudflare Access（Zero Trust）手動設定手順（本リポジトリでは自動化できない）
   scripts/publish_bi.py   # ローカル公開ヘルパー（= yuge-finance publish-bi）
   wrangler.toml.example   # （旧Pages用。Workers版は bi-web/wrangler.toml が正）
 ```
+
+`staff-ops/` は喜らく一般スタッフ・清掃担当者向け。**売上・ADR・RevPAR・宿泊料金・OTA手数料等の経営情報は
+一切配信しない**（Beds24予約データのうち運用に必要な項目だけをallow-list方式で別R2バケットへ出力する新系統。
+`bi-web`とはR2バケットもCloudflare Workerも完全に分離しており、コードにバグがあっても構造的に財務データへ
+到達できない）。詳細は [staff-ops/README.md](staff-ops/README.md) を参照。
 
 ## 方針（重要）
 - Worker本体は **HTML/JS/CSS配信 + R2読み出しだけ**。Beds24 API は呼ばない。
