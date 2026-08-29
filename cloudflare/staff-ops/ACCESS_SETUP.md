@@ -1,3 +1,62 @@
+# 【最優先・ブロッカー】既存トークンの権限拡張が必要（コード側は完成済み・ここだけ人手作業）
+
+`deploy-staff-worker.yml` を実行すると、`npx wrangler deploy` が以下で失敗します:
+
+```
+✘ [ERROR] A request to the Cloudflare API (/accounts/***/workers/services/kiraku-staff-ops) failed.
+  Authentication error [code: 10000]
+```
+
+**重要な追加確認事項（2026-08-29判明）**: 同じ`CLOUDFLARE_API_TOKEN`で**既存の`kiraku-bi`
+Worker自体の再デプロイ**（新規作成ではなく、既にある同じスクリプトへの`wrangler deploy`）を
+試しても、まったく同じ`Authentication error [code: 10000]`で失敗することを確認しました
+（`.github/workflows/deploy-worker.yml`のrun、`kiraku-staff-ops`とは無関係の既存パイプライン）。
+つまり原因は「新しいWorkerだから」ではなく、**現在のCLOUDFLARE_API_TOKENに
+Workers Scripts:Edit 権限そのものが無い**ことです（R2バケット作成は成功するため、
+R2権限は生きています。Workers Scripts権限だけが欠けています）。
+
+**これは私の今回の変更が原因ではありません。** このリポジトリのgit履歴を確認したところ、
+私が触る前の最後のmainコミット（`b6b0f0e`）自身の`Deploy Cloudflare Worker`実行も
+同一エラーで失敗していました。つまり**既存の経営BI（kiraku-bi）のコードデプロイ経路も
+現在このトークン権限不足により壊れています**（データ更新=R2書き込みは無事に15分毎に
+動き続けているため、この破損はこれまで気づかれていなかったと考えられます）。
+
+**これはコード側の問題ではありません。** `cloudflare/staff-ops/` のコード・テスト・ローカル
+`wrangler dev` 動作確認はすべて完了・green です。このトークン権限を直すだけで、
+次にpush（または `gh workflow run deploy-staff-worker.yml` /
+`gh workflow run deploy-worker.yml`）した時に、staff-ops・既存bi-web両方の
+デプロイが自動で成功するようになります。
+
+## 対処方法（どちらか）
+
+**方法A（推奨・最も簡単）**: 新しいCloudflare APIトークンを発行し直す
+1. https://dash.cloudflare.com/profile/api-tokens → **Create Token** → **Edit Cloudflare Workers** テンプレートを選択
+   （これは通常 Account: Workers Scripts:Edit / Workers KV Storage:Edit / Workers R2 Storage:Edit を
+   まとめて含むテンプレートで、対象を「All zones」ではなく該当アカウントに絞れます）。
+2. 発行されたトークンをコピーし、GitHubの `CLOUDFLARE_API_TOKEN` シークレットを更新:
+   https://github.com/ginisato-hash/kiraku → **Settings** → **Secrets and variables** → **Actions**
+   → `CLOUDFLARE_API_TOKEN` → **Update** → 新しい値を貼り付け。
+3. （このトークンは `kiraku-bi` の既存デプロイにも使われているため、Workers Scripts の対象範囲に
+   `kiraku-bi` も含まれる設定を選ぶか、「All Workers」スコープにしてください。）
+
+**方法B（既存トークンを編集）**: 既存トークンに権限を追加できる場合
+1. https://dash.cloudflare.com/profile/api-tokens → 該当トークンの **Edit**
+2. Permissions に **Account → Workers Scripts → Edit** を追加（まだ無ければ）
+3. Account Resources の対象が「Specific Workers」で `kiraku-bi` だけに限定されている場合、
+   `kiraku-staff-ops` も追加するか、「All Workers」に変更する
+4. （KV overrideも使うなら、同時に **Account → Workers KV Storage → Edit** も追加。上記1章参照）
+
+## 修正後の確認方法
+
+トークン更新後、以下のどちらかで再デプロイをトリガーしてください（pushは不要）:
+```bash
+gh workflow run deploy-staff-worker.yml -R ginisato-hash/kiraku
+```
+または GitHub の Actions タブ → "Deploy Staff Ops Worker" → **Run workflow**。
+成功すれば `https://kiraku-staff-ops.s-sato-dce.workers.dev/health` が `{"status":"ok"}` を返します。
+
+---
+
 ## 0. 清掃指示の手動修正（override）機能を有効化する（任意・後回し可）
 
 `POST /api/cleaning/override`（フロント担当者が客室番号/備考を当日限定で修正する機能）は
