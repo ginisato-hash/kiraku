@@ -60,11 +60,19 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          npx wrangler r2 bucket dev-url disable kiraku-staff-ops-data 2>&1 | tee /tmp/r2-devurl.log || true
-          echo "--- current public access status ---"
-          npx wrangler r2 bucket dev-url get kiraku-staff-ops-data 2>&1 | tee -a /tmp/r2-devurl.log
-          if grep -qiE "enabled|https://pub-" /tmp/r2-devurl.log; then
+          # disableコマンド自身の成功メッセージにも "Public access disabled at
+          # 'https://pub-...'" のようにURL文字列が含まれるため、その出力を
+          # 状態判定に使ってはいけない（誤検知の原因になる）。判定は必ず
+          # 独立した `dev-url get` の出力だけを見る。
+          npx wrangler r2 bucket dev-url disable kiraku-staff-ops-data 2>&1 || true
+          echo "--- current public access status (dev-url get only) ---"
+          npx wrangler r2 bucket dev-url get kiraku-staff-ops-data 2>&1 | tee /tmp/r2-devurl-status.log
+          if grep -qi "is enabled" /tmp/r2-devurl-status.log; then
             echo "::error::kiraku-staff-ops-data STILL has public r2.dev access enabled after disable attempt. Do not open STAFF_OPS_ACCESS_CONFIRMED until this is fixed."
+            exit 1
+          fi
+          if ! grep -qi "is disabled" /tmp/r2-devurl-status.log; then
+            echo "::error::Could not confirm public-access status from 'wrangler r2 bucket dev-url get' output above (unexpected format) — treating as unverified/unsafe."
             exit 1
           fi
           echo "Confirmed: no public r2.dev URL for kiraku-staff-ops-data."
