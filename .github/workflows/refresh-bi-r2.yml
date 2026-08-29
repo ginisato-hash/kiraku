@@ -124,7 +124,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -e
+          set -euo pipefail
           if wrangler r2 bucket create kiraku-staff-ops-data 2>&1 | tee /tmp/r2-create-ops.log; then
             echo "R2 bucket ensured (created or already existed)."
           else
