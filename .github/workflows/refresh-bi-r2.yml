@@ -7,10 +7,12 @@ name: Refresh BI R2
 # Beds24 token・Cloudflare credentialはこのworkflowのSecretsにのみ置き、Worker側には置かない。
 
 on:
-  schedule:
-    # 毎時00分は混雑しやすいため避け、15分間隔で 3,18,33,48 分に実行する。
-    # GitHub ActionsのscheduleはUTC基準だが、15分間隔なのでJST変換は不要。
-    - cron: "3,18,33,48 * * * *"
+  # 15分周期の起動はCloudflare Cron Trigger（cloudflare/bi-web/wrangler.toml
+  # [triggers] crons = ["3,18,33,48 * * * *"]、cloudflare/bi-web/src/worker.js
+  # の scheduled()）がworkflow_dispatchを叩く形に一本化した。GitHub Actions
+  # 自身のon.scheduleは信頼性が低く（fc1ffca参照：549回期待に対し実行100回、
+  # 最大687分のsilent gapを実測）、Cloudflare側の経路が2026-08-29に本番検証
+  # 済み（手動+自律発火とも成功、production freshness ~1-2分）のため撤去。
   workflow_dispatch:
 
 concurrency:

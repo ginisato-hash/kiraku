@@ -23,13 +23,19 @@ def test_workflow_file_exists():
     assert WORKFLOW_PATH.exists()
 
 
-def test_workflow_has_schedule_trigger():
+def test_workflow_has_no_schedule_trigger():
+    """2026-08-29: GitHub Actions自身のon.scheduleは信頼できないと判明した
+    （fc1ffca参照：15分cronのはずが実際は549回期待に対し実行100回、最大687分の
+    silent gap）。15分起動はCloudflare Cron Trigger
+    （cloudflare/bi-web/wrangler.toml [triggers] crons）がworkflow_dispatchを
+    叩く形に一本化し、本番検証済み（手動+自律発火とも成功、freshness ~1-2分）。
+    on.scheduleとの二重発火を避けるため、ここでは完全に撤去したことを保証する。
+    """
     wf = _load_workflow()
     # YAMLの "on" キーはPyYAMLでbool Trueとしてパースされることがあるため両対応する。
     on = wf.get("on", wf.get(True))
-    assert "schedule" in on
-    crons = [item["cron"] for item in on["schedule"]]
-    assert "3,18,33,48 * * * *" in crons
+    assert "schedule" not in on
+    assert "cron:" not in _raw_text()
 
 
 def test_workflow_has_workflow_dispatch():

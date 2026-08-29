@@ -5,7 +5,7 @@
   "type": "module",
   "description": "喜らく単体 Beds24速報BI（Cloudflare Workers + R2 データ分離）",
   "scripts": {
-    "test": "node test/worker.test.mjs && node test/biViewModel.test.mjs && node test/components.test.mjs && node test/app.test.mjs",
+    "test": "node test/worker.test.mjs && node test/scheduled.test.mjs && node test/biViewModel.test.mjs && node test/components.test.mjs && node test/app.test.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run",

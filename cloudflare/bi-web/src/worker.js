@@ -1,9 +1,61 @@
-// 喜らく 速報BI Worker（表示専用）
+// 喜らく 速報BI Worker（表示 + 15分更新スケジューラ）
 // - HTML/JS/CSS は ASSETS binding（./public）から配信
 // - BIデータ JSON/CSV は R2 bucket kiraku-bi-data の latest/ から読むだけ
-// - Beds24 API は呼ばない。token/.env は参照しない。
+// - Beds24 API は呼ばない。Beds24 token/.env は参照しない。
+// - scheduled(): 15分毎のCloudflare Cron Triggerから、GitHub Actions
+//   workflow_dispatch APIを叩くだけ（GITHUB_ACTIONS_DISPATCH_TOKEN secret）。
+//   実際のBeds24取得・BI生成・R2 publishは既存の refresh-bi-r2.yml
+//   （refresh-beds24-bi → publish-bi-r2）がそのまま担う。ここでは何も
+//   fetch/生成/publishしない — GitHub Actionsの`on.schedule`が信頼できない
+//   問題（fc1ffca参照）を、より確実なCloudflare Cron Triggerで置き換える
+//   だけの役割。dispatch tokenの値は絶対にログしない。
 
 const R2_PREFIX = "latest/";
+
+// GitHub Actions workflow_dispatch target — matches refresh-bi-r2.yml exactly.
+// This Worker never touches Beds24/R2 publish logic itself; it only asks
+// GitHub to run the existing workflow, on a schedule GitHub's own
+// `on.schedule` cron cannot reliably guarantee (see fc1ffca commit message
+// for the original diagnosis; this Cron Trigger replaces that unreliable
+// path, it does not duplicate the workflow's own logic).
+const GITHUB_OWNER = "ginisato-hash";
+const GITHUB_REPO = "kiraku";
+const GITHUB_WORKFLOW_FILE = "refresh-bi-r2.yml";
+const GITHUB_DISPATCH_REF = "main";
+const GITHUB_API_VERSION = "2022-11-28";
+
+// Fires the existing refresh-bi-r2.yml workflow via workflow_dispatch. Success
+// is HTTP 204 (GitHub returns no body for this endpoint). Never logs the
+// token value — only the outcome (status code / ok / error text).
+async function dispatchBiRefreshWorkflow(env) {
+  const token = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
+  if (!token) {
+    return { ok: false, status: null, error: "GITHUB_ACTIONS_DISPATCH_TOKEN secret is not set" };
+  }
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW_FILE}/dispatches`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        "User-Agent": "kiraku-bi-worker-cron-dispatcher",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ref: GITHUB_DISPATCH_REF }),
+    });
+    if (res.status === 204) {
+      return { ok: true, status: 204, error: null };
+    }
+    // Read the body for diagnostics on failure (GitHub's error JSON never
+    // contains the token), but still never echo request headers.
+    const bodyText = await res.text().catch(() => "");
+    return { ok: false, status: res.status, error: bodyText.slice(0, 500) };
+  } catch (e) {
+    return { ok: false, status: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
 const MONTH_RE = /^\d{4}-\d{2}$/;
 
 // path -> { key: R2 object key (R2_PREFIX付与前), type: Content-Type }
@@ -168,4 +220,24 @@ export default {
     // それ以外 : 静的アセット（index.html / app.js 等）
     return env.ASSETS.fetch(request);
   },
+
+  // Cloudflare Cron Trigger (see wrangler.toml [triggers] crons) — fires every
+  // 15 minutes. Only dispatches the existing GitHub Actions workflow; does
+  // NOT fetch Beds24, does NOT touch R2, does NOT generate BI data itself.
+  // ctx.waitUntil keeps the dispatch call alive past the handler's return
+  // (Cloudflare Workers may otherwise cancel in-flight fetches once
+  // scheduled() returns).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      dispatchBiRefreshWorkflow(env).then((result) => {
+        if (result.ok) {
+          console.log(`bi_dispatch_ok cron=${event.cron} scheduled_time=${new Date(event.scheduledTime).toISOString()}`);
+        } else {
+          console.log(`bi_dispatch_failed cron=${event.cron} status=${result.status} error=${result.error}`);
+        }
+      })
+    );
+  },
 };
+
+export { dispatchBiRefreshWorkflow };
