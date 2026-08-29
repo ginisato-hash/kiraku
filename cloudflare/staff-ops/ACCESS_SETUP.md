@@ -1,3 +1,22 @@
+## 0. 清掃指示の手動修正（override）機能を有効化する（任意・後回し可）
+
+`POST /api/cleaning/override`（フロント担当者が客室番号/備考を当日限定で修正する機能）は
+KVネームスペースが必要ですが、既存 `CLOUDFLARE_API_TOKEN`（GitHub Secrets）には
+**Workers KV Storage: Edit 権限が無く**、CIでの自動作成に失敗します
+（`wrangler kv namespace create` → `Authentication error [code: 10000]`）。
+**この機能が無くても Daily Ops 画面・宿泊者名簿印刷・清掃指示表示は問題なく動作します**
+（read側は空のoverride扱いになるだけ）。有効化する場合は次のどちらかを行ってください:
+
+- **(推奨・簡単)** https://dash.cloudflare.com/profile/api-tokens で既存トークンを編集し、
+  権限に **Account → Workers KV Storage → Edit** を追加する。追加後、
+  `cloudflare/staff-ops/wrangler.toml` の末尾でコメントアウトされている
+  `[[kv_namespaces]]` ブロックを元に戻し（`#`を外す）、`.github/workflows/deploy-staff-worker.yml`
+  に「Ensure KV namespace exists and bind its real id」ステップ
+  （このファイルの過去のgit historyに残っている。必要ならClaudeへ「KV override機能を有効化して」と依頼）を
+  復元してpushすれば、次回デプロイ時に自動でネームスペースが作成されます。
+- または、ダッシュボードで手動に `wrangler kv namespace create CLEANING_OVERRIDES` 相当を実行し、
+  発行されたidを `wrangler.toml` の `[[kv_namespaces]]` に直接書いてコミットしても構いません。
+
 # Cloudflare Access 設定手順（手動・必須・未実施）
 
 `kiraku-staff-ops` Worker は宿泊者氏名・電話番号・住所を配信するため、**Cloudflare Access

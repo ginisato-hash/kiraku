@@ -50,38 +50,10 @@ jobs:
             fi
           fi
 
-      - name: Ensure KV namespace exists and bind its real id
-        working-directory: cloudflare/staff-ops
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          TITLE="kiraku-staff-ops-CLEANING_OVERRIDES"
-          # 既存ネームスペースをタイトルで検索（jqで抽出。無ければcreateしてstdoutからid抽出）。
-          EXISTING_ID=$( (npx wrangler kv namespace list 2>/dev/null || echo "[]") | jq -r --arg t "$TITLE" '(. // []) | .[] | select(.title == $t) | .id' 2>/dev/null | head -1)
-          if [ -n "$EXISTING_ID" ]; then
-            KV_ID="$EXISTING_ID"
-            echo "Found existing KV namespace id=$KV_ID"
-          else
-            echo "No existing KV namespace named $TITLE — creating."
-            CREATE_OUT=$(npx wrangler kv namespace create CLEANING_OVERRIDES 2>&1) || {
-              echo "::error::Failed to create KV namespace. Output:"
-              echo "$CREATE_OUT"
-              exit 1
-            }
-            echo "$CREATE_OUT"
-            KV_ID=$(echo "$CREATE_OUT" | grep -oE 'id = "[a-f0-9]+"' | head -1 | grep -oE '[a-f0-9]{16,}')
-            if [ -z "$KV_ID" ]; then
-              echo "::error::Could not parse new KV namespace id from wrangler output above."
-              exit 1
-            fi
-            echo "Created KV namespace id=$KV_ID"
-          fi
-          # wrangler.tomlのプレースホルダを実idへ置換（このCIチェックアウト内のみ。git管理下のファイルはコミットしない）。
-          sed -i "s/REPLACE_WITH_REAL_KV_ID/$KV_ID/" wrangler.toml
-          echo "Resolved wrangler.toml kv_namespaces id:"
-          grep -A2 "kv_namespaces" wrangler.toml
+      # KVネームスペースの自動払い出しは現状スキップ（既存CLOUDFLARE_API_TOKENに
+      # Workers KV Storage: Edit 権限が無いため）。wrangler.toml側でも
+      # [[kv_namespaces]] をコメントアウト済み。有効化手順は
+      # cloudflare/staff-ops/ACCESS_SETUP.md 参照。
 
       - name: Deploy Worker
         working-directory: cloudflare/staff-ops
