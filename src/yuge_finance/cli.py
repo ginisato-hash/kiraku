@@ -515,10 +515,10 @@ def cmd_export_daily_ops(args) -> int:
         for d in snapshot["dates"].values())
     cancelled_flags = sum(
         1 for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
-        if r["state"] == "CANCELLED")
+        if r["status"] == "CANCELLED")
     unassigned_flags = sum(
         1 for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
-        if r["state"] == "UNASSIGNED")
+        if r["status"] == "UNASSIGNED")
 
     _print(f"[export-daily-ops] dates={len(target_dates)} booking_events={total_events} "
            f"cancelled_flags={cancelled_flags} unassigned_flags={unassigned_flags}")
