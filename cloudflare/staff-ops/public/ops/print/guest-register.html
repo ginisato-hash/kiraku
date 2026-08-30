@@ -5,177 +5,72 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>宿泊者名簿 / GUEST REGISTRATION FORM — 喜らく</title>
   <style>
-    /* 印刷専用ページ。通常のダーク画面とは無関係の、明示的なlight/print-safeパレット
-       (このページは印刷目的専用で通常のダーク画面としては使わないため、ダークモードと
-       戦う必要はなく最初からlightに固定する)。 */
+    /* 印刷CSSは既存Beds24版帳票をsource of truthとして固定。数値・寸法は
+       勝手に調整しないこと（用紙内寸・余白・ロゴ幅・フォントサイズ等は
+       guestRegisterTemplate.js側のインラインstyleと合わせて1セット）。 */
     @page {
       size: A4 portrait;
-      margin: 15mm;
+      margin: 10mm 12mm;
     }
 
-    * { box-sizing: border-box; }
-
+    html,
     body {
       margin: 0;
-      background: #ffffff;
-      color: #111111;
-      font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
-    }
-
-    .grf-page {
-      width: 100%;
       padding: 0;
-      break-inside: avoid;
+      background: #fff;
     }
 
-    /* 最後のページ以外はbreak-after:page（末尾の空白ページを出さないため）。 */
-    .grf-page-break {
-      break-after: page;
-    }
-
-    .grf-header {
-      display: flex;
-      align-items: center;
-      gap: 6mm;
-      border-bottom: 0.5mm solid #333333;
-      padding-bottom: 4mm;
-      margin-bottom: 6mm;
-    }
-
-    .grf-logo {
-      max-height: 14mm;
-      max-width: 40mm;
-      object-fit: contain;
-    }
-
-    .grf-property {
-      font-size: 3mm;
-      line-height: 1.6;
-    }
-
-    .grf-title {
-      text-align: center;
-      font-size: 5.5mm;
-      margin: 0 0 6mm 0;
-      line-height: 1.5;
-    }
-
-    .grf-title-en {
-      font-size: 3.6mm;
-      font-weight: normal;
-      color: #444444;
-    }
-
-    .grf-printed {
-      margin-bottom: 6mm;
-    }
-
-    .grf-printed-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 3.4mm;
-    }
-
-    .grf-printed-table th, .grf-printed-table td {
-      border: 0.3mm solid #999999;
-      padding: 2.2mm 3mm;
-      text-align: left;
-      vertical-align: top;
-    }
-
-    .grf-printed-table th {
-      width: 32mm;
-      background: #f2f2f2;
-      font-weight: 600;
-    }
-
-    /* 手書き欄：印刷済み部分とはっきり視覚的に分離する（枠 + 薄い背景色）。 */
-    .grf-handwritten {
-      border: 0.5mm solid #555555;
-      border-radius: 2mm;
-      background: #fafafa;
-      padding: 5mm;
-    }
-
-    .grf-handwritten-label {
-      font-size: 3.2mm;
-      font-weight: 600;
-      margin-bottom: 4mm;
-      color: #333333;
-    }
-
-    .grf-age-line {
-      font-size: 3.4mm;
-      margin-bottom: 4mm;
-    }
-
-    .grf-age-blank {
-      display: inline-block;
-      width: 30mm;
-      border-bottom: 0.3mm solid #333333;
-    }
-
-    .grf-companion-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 5mm;
-      font-size: 3.2mm;
-    }
-
-    .grf-companion-table th, .grf-companion-table td {
-      border: 0.3mm solid #999999;
-      padding: 1mm 2mm;
-      text-align: left;
-    }
-
-    .grf-companion-table th { background: #eeeeee; }
-
-    /* 手書きに十分なスペースを確保する（1行あたり実寸9mm）。 */
-    .grf-companion-table tbody tr {
-      height: 9mm;
-    }
-
-    .grf-companion-no {
-      width: 10mm;
-      text-align: center;
-    }
-
-    .grf-confirmation {
-      font-size: 3mm;
-      line-height: 1.7;
-      margin: 0 0 5mm 0;
-    }
-
-    .grf-signature {
+    .guest-register-sheet {
+      width: 186mm;
+      height: 267mm;
+      margin: 5mm auto 0 auto;
+      box-sizing: border-box;
       display: flex;
       flex-direction: column;
-      gap: 2mm;
+      justify-content: space-between;
+      background: #ffffff;
+      color: #222222;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Hiragino Kaku Gothic ProN",
+        "Yu Gothic",
+        Meiryo,
+        Arial,
+        sans-serif;
+      font-size: 11.5px;
+      line-height: 1.35;
+      break-inside: avoid;
+      page-break-inside: avoid;
     }
 
-    .grf-signature-label {
-      font-size: 3.2mm;
-      font-weight: 600;
+    @media print {
+      .guest-register-sheet {
+        break-after: page;
+        page-break-after: always;
+      }
+
+      .guest-register-sheet:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+
+      .no-print {
+        display: none !important;
+      }
     }
 
-    .grf-signature-line {
-      height: 15mm;
-      border: 0.3mm solid #333333;
-      border-radius: 1mm;
-    }
-
+    /* ここから下は帳票そのものではなく、画面上でのみ見える「戻る」リンクの
+       体裁（印刷時は上の @media print で非表示）。帳票デザインとは無関係。 */
     .no-print {
-      margin-bottom: 4mm;
+      margin: 4mm 0;
+      text-align: center;
     }
 
     .no-print a {
       color: #2f6fed;
-      font-size: 3.4mm;
-    }
-
-    @media print {
-      .no-print, nav, button {
-        display: none !important;
-      }
+      font-size: 13px;
+      font-family: -apple-system, "Hiragino Sans", sans-serif;
     }
   </style>
 </head>

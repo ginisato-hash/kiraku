@@ -2,7 +2,7 @@
 // wall-clockに依存せず、明示的な参照時刻(refDate)を渡してテストする
 // (bi-webのformatFreshnessがnowMsを明示的に受け取るのと同じ設計方針)。
 import assert from "node:assert";
-import { todayJst, addDaysToDateString, formatDateJp } from "../public/jst.js";
+import { todayJst, addDaysToDateString, formatDateJp, formatJapaneseDateWithWeekday } from "../public/jst.js";
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -36,6 +36,17 @@ await check("addDaysToDateString: adds/subtracts days without timezone drift", a
 await check("formatDateJp renders Japanese date and handles bad input", async () => {
   assert.equal(formatDateJp("2026-08-30"), "2026年8月30日");
   assert.equal(formatDateJp("not-a-date"), "—");
+});
+
+await check("formatJapaneseDateWithWeekday renders '2026年8月29日, 土曜日' (guest register stay-date format)", async () => {
+  assert.equal(formatJapaneseDateWithWeekday("2026-08-29"), "2026年8月29日, 土曜日");
+  assert.equal(formatJapaneseDateWithWeekday("2026-08-30"), "2026年8月30日, 日曜日");
+  assert.equal(formatJapaneseDateWithWeekday("2026-09-01"), "2026年9月1日, 火曜日");
+});
+
+await check("formatJapaneseDateWithWeekday handles bad input without throwing", async () => {
+  assert.equal(formatJapaneseDateWithWeekday("not-a-date"), "");
+  assert.equal(formatJapaneseDateWithWeekday(null), "");
 });
 
 console.log(`\n${passed} jst checks passed`);

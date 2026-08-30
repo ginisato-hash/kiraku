@@ -37,3 +37,18 @@ export function formatDateJp(dateStr) {
   if (!m) return "—";
   return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日`;
 }
+
+const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"];
+
+// "2026-08-29" -> "2026年8月29日, 土曜日". Same UTC-noon-anchor date-string
+// parsing as addDaysToDateString/todayJst above (these are plain calendar
+// date strings, not instants — weekday is derived deterministically from
+// the string itself, no additional timezone conversion involved).
+export function formatJapaneseDateWithWeekday(dateStr) {
+  const m = typeof dateStr === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr) : null;
+  if (!m) return "";
+  const [, y, mo, d] = m;
+  const dt = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), 12, 0, 0));
+  const weekday = WEEKDAY_JA[dt.getUTCDay()];
+  return `${Number(y)}年${Number(mo)}月${Number(d)}日, ${weekday}曜日`;
+}

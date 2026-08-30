@@ -40,7 +40,7 @@ async function main() {
 
   root.innerHTML = buildGuestRegisterDocumentHtml(arrivals);
 
-  const logoImg = root.querySelector(".grf-logo");
+  const logoImg = root.querySelector("img");
   await waitForPrintReady(logoImg);
   window.print();
 }

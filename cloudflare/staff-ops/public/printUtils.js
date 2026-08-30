@@ -17,6 +17,18 @@ export function printField(value) {
   return s;
 }
 
+// Minimal HTML-escaping for values interpolated into template-literal HTML
+// (guest name, address, phone, etc. come from Beds24 and are not otherwise
+// sanitized before this point).
+export function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // Waits for web fonts to be ready and for a logo <img> element to settle
 // (load or error — either is fine, we just don't want to print mid-decode),
 // then resolves. Races against a short timeout so a slow/broken external
