@@ -1,7 +1,8 @@
-// 清掃データを消費する2つのページ（印刷ページ print-cleaning.js とモバイル今日ビュー
-// today.js）が、まったく同じ /api/cleaning?date=... エンドポイントを叩き、
-// クライアント側での分岐フィルタリングを行っていないことを確認する。
-// これにより、KV上書き(room_number/notes)が両方のページで必ず一致して表示される。
+// 清掃データを消費する3つの画面（印刷ページ print-cleaning.js、モバイル今日ビュー
+// today.js、Staff Ops の Staff cleaning list cleaningStaffView.js）が、まったく同じ
+// /api/cleaning?date=... エンドポイントを叩き、クライアント側での分岐フィルタリング
+// (rooms配列そのものを間引くようなフィルタ)を行っていないことを確認する。
+// これにより、KV上書き(effectiveInstruction)がどの画面でも必ず一致して表示される。
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,7 @@ import path from "node:path";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const printJs = readFileSync(path.join(dir, "../public/ops/print/print-cleaning.js"), "utf-8");
 const mobileJs = readFileSync(path.join(dir, "../public/cleaning/today.js"), "utf-8");
+const staffViewJs = readFileSync(path.join(dir, "../public/cleaningStaffView.js"), "utf-8");
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -24,20 +26,25 @@ await check("today.js (mobile) fetches the exact same /api/cleaning?date= URL co
   assert.ok(FETCH_URL_RE.test(mobileJs), "today.js should fetch `/api/cleaning?date=${encodeURIComponent(date)}`");
 });
 
-await check("neither page applies its own client-side room filtering after the fetch", async () => {
-  assert.ok(!/\.filter\(/.test(printJs), "print-cleaning.js must not filter rooms client-side");
-  assert.ok(!/\.filter\(/.test(mobileJs), "today.js must not filter rooms client-side");
+await check("cleaningStaffView.js (Daily Ops Staff cleaning list) fetches the exact same /api/cleaning?date= URL construction", async () => {
+  assert.ok(FETCH_URL_RE.test(staffViewJs), "cleaningStaffView.js should fetch `/api/cleaning?date=${encodeURIComponent(date)}`");
 });
 
-await check("both pages read rooms the same way: cleaning.rooms with an Array.isArray guard, nothing else", async () => {
+await check("none of the 3 pages apply their own client-side room-list filtering after the fetch", async () => {
+  assert.ok(!/\.filter\(/.test(printJs), "print-cleaning.js must not filter rooms client-side");
+  assert.ok(!/\.filter\(/.test(mobileJs), "today.js must not filter rooms client-side");
+  assert.ok(!/rooms\.filter\(/.test(staffViewJs), "cleaningStaffView.js must not filter the rooms array client-side");
+});
+
+await check("print and mobile pages read rooms the same way: cleaning.rooms with an Array.isArray guard, nothing else", async () => {
   const roomsAccessRe = /Array\.isArray\(cleaning\.rooms\)\)?\s*\?\s*cleaning\.rooms\s*:\s*\[\]/;
   assert.ok(roomsAccessRe.test(printJs), "print-cleaning.js should read rooms via an Array.isArray(cleaning.rooms) guard");
   assert.ok(roomsAccessRe.test(mobileJs), "today.js should read rooms via an Array.isArray(cleaning.rooms) guard");
 });
 
-await check("both pages pass the merged rooms straight into their render function with no intermediate transform", async () => {
+await check("print and mobile pages pass the merged rooms straight into their render function with no intermediate transform", async () => {
   assert.ok(/renderCleaningSheetTemplate\(rooms, date\)/.test(printJs));
-  assert.ok(/renderMobileCleaningRooms\(rooms\)/.test(mobileJs));
+  assert.ok(/renderMobileCleaningBody\(rooms\)/.test(mobileJs));
 });
 
 console.log(`\n${passed} same-endpoint checks passed`);

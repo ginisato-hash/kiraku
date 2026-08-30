@@ -3,91 +3,140 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>清掃指示書 — 喜らく（仮レイアウト）</title>
+  <title>清掃・客室指示表 — 喜らく</title>
   <style>
-    /* PLACEHOLDER TEMPLATE — 原本写真確認後に本番デザインへ差し替え予定。
-       このCSSも仮のもの。A4/light前提のみ確定、それ以外(罫線・列構成・フォント等)は
-       すべて写真確認後に変更される想定。 */
+    /* FINAL DESIGN — 確定仕様。白黒/最小限のスタイルのみ(角丸・影・カード風UI・
+       ヘッダー以外の色は使わない)。ロゴ不要。 */
     @page {
       size: A4 portrait;
-      margin: 15mm;
+      margin: 7mm;
     }
 
     * { box-sizing: border-box; }
 
-    body {
+    html, body {
       margin: 0;
+      padding: 0;
       background: #ffffff;
+    }
+
+    body {
       color: #111111;
       font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
     }
 
-    .cs-provisional-banner {
-      background: #fff3cd;
-      color: #7a5b00;
-      border: 0.3mm solid #e0b400;
-      border-radius: 2mm;
-      padding: 4mm;
-      margin-bottom: 6mm;
-      font-size: 3.6mm;
-      font-weight: 600;
-    }
-
-    .cs-title {
-      font-size: 5mm;
-      margin: 0 0 4mm 0;
-    }
-
-    .cs-date {
-      font-size: 3.6mm;
-      margin-bottom: 6mm;
-      color: #333333;
-    }
-
-    .cleaning-sheet-table {
-      width: 100%;
+    table {
       border-collapse: collapse;
-      font-size: 3.4mm;
+      table-layout: fixed;
     }
 
-    .cleaning-sheet-table th, .cleaning-sheet-table td {
-      border: 0.3mm solid #999999;
-      padding: 2.2mm 3mm;
-      text-align: left;
-      vertical-align: top;
+    th, td {
+      border: 1px solid #777777;
+      box-sizing: border-box;
     }
 
-    .cleaning-sheet-table th {
-      background: #f2f2f2;
+    @media print {
+      .no-print { display: none !important; }
+    }
+
+    .cleaning-sheet {
+      width: 196mm;
+      height: 283mm;
+      margin: 0 auto;
+      box-sizing: border-box;
+    }
+
+    .cs-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      height: 13mm;
+      margin-bottom: 2mm;
+    }
+
+    .cs-header-date { font-size: 4mm; }
+    .cs-header-title { font-size: 5mm; font-weight: 700; }
+    .cs-header-property { font-size: 4mm; font-weight: 700; }
+
+    .cs-unassigned-warning {
+      font-size: 3.2mm;
+      color: #111111;
+      margin: 0 0 2mm 0;
+    }
+
+    .cs-main-table {
+      width: 196mm;
+    }
+
+    .cs-main-table thead tr { height: 7.5mm; }
+
+    .cs-main-table th {
+      background: #f3f3f3;
+      font-size: 2.8mm;
       font-weight: 600;
+      padding: 0.8mm;
+      text-align: center;
+      vertical-align: middle;
+    }
+
+    .cs-main-table tbody tr { height: 10.5mm; }
+
+    .cs-main-table td {
+      font-size: 2.8mm;
+      padding: 1mm 1.2mm;
+      vertical-align: middle;
+      overflow: hidden;
+    }
+
+    .cs-c-room {
+      font-weight: 700;
+      font-size: 4mm;
+      text-align: center;
+    }
+
+    .cs-c-guest, .cs-c-notes { text-align: left; }
+
+    .cs-c-count, .cs-c-nights, .cs-c-status,
+    .cs-c-in, .cs-c-out, .cs-c-arrival, .cs-c-ota {
+      text-align: center;
+    }
+
+    .cs-c-notes {
+      max-height: 10.5mm;
+      overflow: hidden;
+      line-height: 1.2;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .cs-footer-box {
+      border: 1px solid #777777;
+      height: 50mm;
+      margin-top: 2mm;
+      padding: 2mm;
+      box-sizing: border-box;
+    }
+
+    .cs-footer-title {
+      font-size: 3.4mm;
+      font-weight: 700;
+      margin-bottom: 1mm;
     }
 
     .no-print a {
       color: #2f6fed;
       font-size: 3.4mm;
     }
-
-    @media print {
-      /* 警告バナー自体はprint contentの外側にあるので、print時は必ず非表示にする
-         (実物に紛れ込ませないため)。 */
-      .no-print, nav, button {
-        display: none !important;
-      }
-    }
   </style>
 </head>
 <body>
   <div class="no-print">
     <a href="/">← 戻る / Back</a>
-    <div class="cs-provisional-banner">
-      ⚠ 仮レイアウト — 原本写真確認後に本番デザインへ差し替え予定
-    </div>
   </div>
 
   <div id="cs-print-content">
-    <h1 class="cs-title">清掃指示書</h1>
-    <div class="cs-date" id="cs-date-label">—</div>
-    <div id="cs-table-root"><p class="no-print">読み込み中…</p></div>
+    <p class="no-print" id="cs-loading-label">読み込み中…</p>
   </div>
 
   <script type="module" src="./print-cleaning.js"></script>

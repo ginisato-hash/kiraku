@@ -1,12 +1,12 @@
-// print-cleaning.js — bootstrap for /ops/print/cleaning.
-// PLACEHOLDER TEMPLATE wiring — pending source photo of the original paper
-// cleaning sheet. Fetches the SAME /api/cleaning?date=... endpoint the
-// mobile view (/cleaning/today) uses, with no divergent client-side
-// filtering, so overrides show consistently in both places.
+// print-cleaning.js — bootstrap for /ops/print/cleaning (FINAL design).
+// Fetches the SAME /api/cleaning?date=... endpoint the mobile view
+// (/cleaning/today) and the Staff Ops "Staff cleaning list" use, with no
+// divergent client-side filtering, so overrides show consistently
+// everywhere — see test/sameEndpoint.test.mjs.
 import { renderCleaningSheetTemplate } from "../../cleaningSheetTemplate.js";
-import { assertNoFinancialKeys } from "../../financialGuard.js";
+import { assertNoFinancialKeys, assertNoForbiddenCleaningKeys } from "../../financialGuard.js";
 import { waitForPrintReady } from "../../printUtils.js";
-import { todayJst, formatDateJp } from "../../jst.js";
+import { todayJst } from "../../jst.js";
 import { cleaningVisualAllowed } from "../../featureFlags.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -18,15 +18,14 @@ function getDate() {
 
 async function main() {
   const date = getDate();
-  document.getElementById("cs-date-label").textContent = formatDateJp(date);
-  const tableRoot = document.getElementById("cs-table-root");
+  const contentRoot = document.getElementById("cs-print-content");
 
-  // 原本写真確認前は、一般スタッフの通常導線からこの仮visualへ到達させない。
-  // 内部QAは ?preview=1 を付けてこのURLへ直接アクセスすれば確認できる。
+  // CLEANING_VISUAL_READY が false の間は、一般スタッフの通常導線からこの
+  // 帳票へ到達させない(内部QAは ?preview=1 を付けて直接アクセスすれば確認できる)。
   // データ自体もfetchしない（未使用のPIIをネットワークに流さないため）し、
-  // window.print()も呼ばない（仮の帳票を実際に印刷させないため）。
+  // window.print()も呼ばない。
   if (!cleaningVisualAllowed()) {
-    tableRoot.innerHTML = `<p class="no-print">清掃指示書：準備中（原本写真確認後に有効化されます）</p>`;
+    contentRoot.innerHTML = `<p class="no-print">清掃指示書：準備中</p>`;
     return;
   }
 
@@ -36,13 +35,14 @@ async function main() {
     if (res.ok) {
       cleaning = await res.json();
       assertNoFinancialKeys(cleaning);
+      assertNoForbiddenCleaningKeys(cleaning);
     }
   } catch (e) {
     cleaning = null;
   }
 
   const rooms = (cleaning && Array.isArray(cleaning.rooms)) ? cleaning.rooms : [];
-  tableRoot.innerHTML = renderCleaningSheetTemplate(rooms, date);
+  contentRoot.innerHTML = renderCleaningSheetTemplate(rooms, date);
 
   await waitForPrintReady(null);
   window.print();

@@ -8,7 +8,7 @@
 // assertNoFinancialKeys() を通し、revenue/price/commission等の財務系keyが
 // 万一混入していないかを実行時にも確認する。
 import { buildDailyOpsViewModel, formatFreshness } from "./dailyOpsViewModel.js";
-import { renderCleaningSheetTemplate } from "./cleaningSheetTemplate.js";
+import { mountCleaningStaffView } from "./cleaningStaffView.js";
 import { assertNoFinancialKeys } from "./financialGuard.js";
 import { todayJst, addDaysToDateString, formatDateJp } from "./jst.js";
 import { cleaningVisualAllowed } from "./featureFlags.js";
@@ -31,10 +31,6 @@ async function getJSON(url) {
 
 function fetchDailyOps(date) {
   return getJSON(`/api/daily-ops?date=${encodeURIComponent(date)}`);
-}
-
-function fetchCleaning(date) {
-  return getJSON(`/api/cleaning?date=${encodeURIComponent(date)}`);
 }
 
 function getDateFromUrl() {
@@ -95,16 +91,6 @@ function renderBookingSection(title, rows, emptyText) {
   return `<h2>${title}</h2>${rows.map(renderBookingRow).join("")}`;
 }
 
-function renderCleaningPreview(rooms) {
-  if (!rooms || !rooms.length) {
-    return `<div class="empty-state">対象日の清掃データがありません</div>`;
-  }
-  // オンスクリーンのプレビューは紙の原本デザインに合わせる必要はない
-  // （原本合わせが必要なのは実際の印刷/モバイルページのみ）。
-  return renderCleaningSheetTemplate(rooms, currentDate)
-    .replace("cleaning-sheet-table", "cleaning-sheet-table cleaning-preview-table");
-}
-
 function setCleaningButtons(date) {
   const showBtn = document.getElementById("show-cleaning-btn");
   const printBtn = document.getElementById("print-cleaning-btn");
@@ -115,10 +101,10 @@ function setCleaningButtons(date) {
     printBtn.href = `/ops/print/cleaning?date=${encodeURIComponent(date)}`;
     printBtn.classList.remove("is-disabled");
     printBtn.removeAttribute("aria-disabled");
-    printBtn.textContent = "清掃指示書を印刷";
+    printBtn.textContent = "本日の清掃指示書を印刷";
     return;
   }
-  // 原本写真確認前は、一般スタッフの通常導線から仮visualへ到達できないように
+  // CLEANING_VISUAL_READY が false の間は、一般スタッフの通常導線から到達できないように
   // 両ボタンを無効化する（内部route/data model自体は温存。QAは ?preview=1 で確認可能）。
   showBtn.disabled = true;
   showBtn.setAttribute("aria-disabled", "true");
@@ -178,16 +164,15 @@ async function loadAndRender(date) {
   document.getElementById("header-meta").classList.toggle("is-stale", freshness.stale);
 }
 
-async function loadCleaningPreview() {
+function loadCleaningStaffView() {
   const section = document.getElementById("cleaning-preview-section");
   if (!cleaningVisualAllowed()) {
-    section.innerHTML = `<div class="empty-state">清掃指示書：準備中（原本写真確認後に有効化されます）</div>`;
+    section.innerHTML = `<div class="empty-state">清掃指示書：準備中</div>`;
     return;
   }
-  section.innerHTML = `<div class="empty-state">読み込み中…</div>`;
-  const cleaning = await fetchCleaning(currentDate);
-  const rooms = (cleaning && Array.isArray(cleaning.rooms)) ? cleaning.rooms : [];
-  section.innerHTML = `<h2>清掃指示（プレビュー）</h2>${renderCleaningPreview(rooms)}`;
+  section.innerHTML = `<h2>清掃指示（Staff cleaning list）</h2><div id="cleaning-staff-view-root"></div>`;
+  const root = document.getElementById("cleaning-staff-view-root");
+  mountCleaningStaffView(root, currentDate);
 }
 
 function attachListeners() {
@@ -201,7 +186,7 @@ function attachListeners() {
     loadAndRender(todayJst());
   });
   document.getElementById("show-cleaning-btn").addEventListener("click", () => {
-    loadCleaningPreview();
+    loadCleaningStaffView();
   });
   document.getElementById("logout-btn").addEventListener("click", async () => {
     try {

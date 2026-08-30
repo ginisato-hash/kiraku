@@ -89,52 +89,131 @@
       "cleaning": {
         "rooms": [
           {
-            "room_type_key": "twin_toilet",
-            "room_type_label": "ツイン｜客室トイレ付",
-            "room_number": null,
-            "state": "TURNOVER",
-            "checkout_booking_id": "89381500",
-            "checkin_booking_id": "89381508",
-            "adults": 2,
-            "children": 1,
-            "total_guests": 3,
-            "notes": null
+            "date": "2026-08-30", "room_number": "401", "status": "TURNOVER",
+            "departing_guest": {
+              "booking_id": "89381500", "guest_name": "鈴木 一郎", "adults": 2, "children": 0,
+              "total_guests": 2, "check_in": "2026-08-28", "check_out": "2026-08-30",
+              "arrival_time": null, "source": "Booking.com"
+            },
+            "arriving_guest": {
+              "booking_id": "89381508", "guest_name": "山田 太郎", "adults": 2, "children": 1,
+              "total_guests": 3, "check_in": "2026-08-30", "check_out": "2026-09-01",
+              "arrival_time": null, "source": "楽天トラベル"
+            },
+            "staying_guest": null, "current_night_index": 1, "total_nights": 2,
+            "source_instruction": "入替"
           },
           {
-            "room_type_key": "single_no_toilet",
-            "room_type_label": "シングル｜客室トイレなし",
-            "room_number": null,
-            "state": "CHECKIN",
-            "checkout_booking_id": null,
-            "checkin_booking_id": "89381999",
-            "adults": 1,
-            "children": 0,
-            "total_guests": 1,
-            "notes": null
+            "date": "2026-08-30", "room_number": "402", "status": "CHECKIN",
+            "departing_guest": null,
+            "arriving_guest": {
+              "booking_id": "89381999", "guest_name": "佐藤 花子", "adults": 1, "children": 0,
+              "total_guests": 1, "check_in": "2026-08-30", "check_out": "2026-08-31",
+              "arrival_time": "15:00", "source": "Direct"
+            },
+            "staying_guest": null, "current_night_index": 1, "total_nights": 1,
+            "source_instruction": ""
           },
           {
-            "room_type_key": "triple_toilet",
-            "room_type_label": "トリプル｜客室トイレ付",
-            "room_number": null,
-            "state": "STAYOVER",
-            "checkout_booking_id": null,
-            "checkin_booking_id": null,
-            "adults": 3,
-            "children": 0,
-            "total_guests": 3,
-            "notes": null
+            "date": "2026-08-30", "room_number": "403", "status": "CHECKOUT",
+            "departing_guest": {
+              "booking_id": "89381600", "guest_name": "田中 一美", "adults": 1, "children": 0,
+              "total_guests": 1, "check_in": "2026-08-28", "check_out": "2026-08-30",
+              "arrival_time": null, "source": "じゃらん"
+            },
+            "arriving_guest": null, "staying_guest": null,
+            "current_night_index": 2, "total_nights": 2, "source_instruction": ""
           },
           {
-            "room_type_key": "twin_no_toilet",
-            "room_type_label": "ツイン｜客室トイレなし",
-            "room_number": null,
-            "state": "VACANT",
-            "checkout_booking_id": null,
-            "checkin_booking_id": null,
-            "adults": 0,
-            "children": 0,
-            "total_guests": 0,
-            "notes": null
+            "date": "2026-08-30", "room_number": "404", "status": "STAYOVER",
+            "departing_guest": null, "arriving_guest": null,
+            "staying_guest": {
+              "booking_id": "89381700", "guest_name": "高橋 次郎", "adults": 3, "children": 0,
+              "total_guests": 3, "check_in": "2026-08-29", "check_out": "2026-09-02",
+              "arrival_time": null, "source": "じゃらん"
+            },
+            "current_night_index": 2, "total_nights": 4, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "405", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "406", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "501", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "502", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "503", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "504", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "505", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "507", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "601", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "602", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "603", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "604", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "605", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": "607", "status": "VACANT",
+            "departing_guest": null, "arriving_guest": null, "staying_guest": null,
+            "current_night_index": null, "total_nights": null, "source_instruction": ""
+          },
+          {
+            "date": "2026-08-30", "room_number": null, "status": "UNASSIGNED",
+            "departing_guest": null,
+            "arriving_guest": {
+              "booking_id": "89382000", "guest_name": "中村 光", "adults": 1, "children": 0,
+              "total_guests": 1, "check_in": "2026-08-30", "check_out": "2026-08-31",
+              "arrival_time": null, "source": "Booking.com"
+            },
+            "staying_guest": null, "current_night_index": null, "total_nights": null,
+            "source_instruction": ""
           }
         ]
       }
@@ -144,7 +223,28 @@
       "arrivals": [],
       "departures": [],
       "stayovers": [],
-      "cleaning": { "rooms": [] }
+      "cleaning": {
+        "rooms": [
+          { "date": "2026-08-31", "room_number": "401", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "402", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "403", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "404", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "405", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "406", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "501", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "502", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "503", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "504", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "505", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "507", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "601", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "602", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "603", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "604", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "605", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" },
+          { "date": "2026-08-31", "room_number": "607", "status": "VACANT", "departing_guest": null, "arriving_guest": null, "staying_guest": null, "current_night_index": null, "total_nights": null, "source_instruction": "" }
+        ]
+      }
     }
   }
 }

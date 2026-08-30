@@ -38,3 +38,45 @@ export function assertNoFinancialKeys(value, path = "$") {
     assertNoFinancialKeys(value[key], `${path}.${key}`);
   }
 }
+
+// Cleaning-specific forbidden-key list: mirrors the Python side's
+// CLEANING_FORBIDDEN_KEYS (src/yuge_finance/ops/schema.py) — the financial
+// keys above PLUS PII fields that have no business being in the Cleaning DTO
+// (phone/address/email/passport/nationality/etc.). The Cleaning DTO is
+// enforced by construction on the Python side to never carry these, but this
+// lets every page that consumes /api/cleaning assert it at runtime too,
+// exactly like assertNoFinancialKeys is already called after /api/daily-ops
+// fetches.
+export const CLEANING_FORBIDDEN_KEYS = [
+  ...FORBIDDEN_FINANCIAL_KEYS,
+  "phone",
+  "mobile",
+  "address",
+  "postcode",
+  "prefecture",
+  "city",
+  "rest",
+  "email",
+  "passport",
+  "nationality",
+  "country",
+  "notes",
+  "rate",
+  "amount",
+];
+
+const CLEANING_FORBIDDEN_SET = new Set(CLEANING_FORBIDDEN_KEYS.map((k) => k.toLowerCase()));
+
+export function assertNoForbiddenCleaningKeys(value, path = "$") {
+  if (value == null || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((item, i) => assertNoForbiddenCleaningKeys(item, `${path}[${i}]`));
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (CLEANING_FORBIDDEN_SET.has(key.toLowerCase())) {
+      throw new Error(`assertNoForbiddenCleaningKeys: forbidden key "${key}" found at ${path}.${key}`);
+    }
+    assertNoForbiddenCleaningKeys(value[key], `${path}.${key}`);
+  }
+}

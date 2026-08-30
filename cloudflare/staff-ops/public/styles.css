@@ -271,3 +271,100 @@ body {
   cursor: pointer;
   padding: 0;
 }
+
+/* --- Staff cleaning list（Daily Ops内、清掃指示の一覧+編集UI） --- */
+.csv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.csv-table th, .csv-table td {
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+}
+
+.csv-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.csv-edit-btn {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.csv-edit-row td {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.csv-edit-panel {
+  padding: var(--space-3) 0;
+}
+
+.csv-edit-title {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin-bottom: var(--space-2);
+}
+
+.csv-edit-label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: var(--space-1);
+}
+
+.csv-edit-input {
+  width: 100%;
+  max-width: 480px;
+  min-height: 64px;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.csv-edit-error {
+  color: var(--red);
+  font-size: 0.85rem;
+  margin-top: var(--space-2);
+}
+
+.csv-edit-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.csv-edit-actions button {
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+}
+
+.csv-btn-save { background: var(--blue); color: #06202f; border: none; font-weight: 700; }
+.csv-btn-reset { background: var(--surface-3); color: var(--text); }
+.csv-btn-cancel { background: none; color: var(--text-muted); }
+
+.csv-loading {
+  color: var(--text-faint);
+  padding: var(--space-4);
+}

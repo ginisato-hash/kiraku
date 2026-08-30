@@ -52,3 +52,15 @@ export function formatJapaneseDateWithWeekday(dateStr) {
   const weekday = WEEKDAY_JA[dt.getUTCDay()];
   return `${Number(y)}年${Number(mo)}月${Number(d)}日, ${weekday}曜日`;
 }
+
+// "2026-08-31" -> "2026年8月31日（月）" — same UTC-noon-anchor date-string
+// parsing as formatJapaneseDateWithWeekday above, just a different (single
+// parenthesized kanji) rendering used by the print cleaning-sheet header.
+export function formatJapaneseDateWithWeekdayParen(dateStr) {
+  const m = typeof dateStr === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr) : null;
+  if (!m) return "";
+  const [, y, mo, d] = m;
+  const dt = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), 12, 0, 0));
+  const weekday = WEEKDAY_JA[dt.getUTCDay()];
+  return `${Number(y)}年${Number(mo)}月${Number(d)}日（${weekday}）`;
+}

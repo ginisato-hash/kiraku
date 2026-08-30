@@ -1,4 +1,4 @@
-// 喜らく スタッフ Daily Ops Worker（表示 + 清掃上書きの1書き込みエンドポイントのみ）
+// 喜らく スタッフ Daily Ops Worker（表示 + 清掃指示の上書きAPIのみ）
 // - HTML/JS/CSS は ASSETS binding（./public）から配信
 // - 到着/出発/連泊/清掃データ(JSON)は R2 bucket kiraku-staff-ops-data の
 //   latest/staff_ops_snapshot.json を読むだけ。生成は別プロセス(Pythonチーム)が
@@ -14,8 +14,16 @@
 //   明示的に許可したpublicパス以外は、有効なsessionが無ければ
 //   (/api/*は401 JSON、それ以外は/loginへ302)。secretが未設定の場合は
 //   fail closed(全リクエスト拒否)。
+//
+// 清掃指示のoverrideキー体系(NEW): `${date}:${roomNumber}` (詳細はsrc/cleaningOverrides.js)。
+// room_numberは常にKIRAKU_ROOM_ORDER(src/roomMaster.js)の18室いずれかで、この
+// Worker自身がoverride検証にも使う。ブラウザ側の静的資産(public/配下)は
+// src/roomMaster.jsへ直接importできない(ASSETS bindingはpublic/配下のみを配信する
+// ため)ので、認証済みリクエストに対してこのファイルの内容から `/src/roomMaster.js` を
+// 動的に生成して配信する — 実体はsrc/roomMaster.js 1箇所のみで二重管理にはならない。
 
-import { buildOverrideKey, mergeCleaningOverrides } from "./cleaningOverrides.js";
+import { KIRAKU_ROOM_ORDER } from "./roomMaster.js";
+import { buildOverrideKey, mergeCleaningOverrides, readOverridesForDate } from "./cleaningOverrides.js";
 import {
   SESSION_COOKIE_NAME,
   DEFAULT_SESSION_MAX_AGE_SECONDS,
@@ -32,8 +40,7 @@ import {
 } from "./auth.js";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const ALLOWED_OVERRIDE_FIELDS = ["room_number", "notes"];
-const MAX_OVERRIDE_VALUE_LEN = 200;
+const MAX_INSTRUCTION_LEN = 200;
 const MAX_PASSWORD_LEN = 500;
 const PUBLIC_STATIC_PATHS = new Set(["/login", "/login.js", "/styles.css"]);
 
@@ -68,23 +75,6 @@ function getDayData(snapshot, date) {
   return snapshot.dates[date] || null;
 }
 
-async function readOverridesForDate(env, date) {
-  if (!env.CLEANING_OVERRIDES) return {};
-  let raw = null;
-  try {
-    raw = await env.CLEANING_OVERRIDES.get(`overrides:${date}`);
-  } catch (e) {
-    return {};
-  }
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === "object") ? parsed : {};
-  } catch (e) {
-    return {};
-  }
-}
-
 async function handleDailyOps(env, url) {
   const date = url.searchParams.get("date");
   if (!date || !DATE_RE.test(date)) {
@@ -109,14 +99,26 @@ async function handleCleaningGet(env, url) {
     return jsonResponse({ error: "not_found" }, 404);
   }
   const baseRooms = Array.isArray(dayData.cleaning.rooms) ? dayData.cleaning.rooms : [];
-  const overridesObj = await readOverridesForDate(env, date);
-  const rooms = mergeCleaningOverrides(baseRooms, overridesObj);
+  const overridesByRoom = await readOverridesForDate(env.CLEANING_OVERRIDES, date);
+  const rooms = mergeCleaningOverrides(baseRooms, overridesByRoom);
   return jsonResponse({ date, rooms }, 200);
 }
 
-function isValidOverrideValue(value) {
-  if (value === null) return true;
-  return typeof value === "string" && value.length <= MAX_OVERRIDE_VALUE_LEN;
+// POST/DELETE の両方が共有する date/roomNumber検証 + 許可body-key検証。
+// allowedKeys: POSTは {date, roomNumber, instruction}、DELETEは {date, roomNumber} のみ許可。
+function validateDateAndRoomBody(body, allowedKeys) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "invalid_payload" };
+  }
+  for (const key of Object.keys(body)) {
+    if (!allowedKeys.has(key)) return { error: "invalid_payload" };
+  }
+  const { date, roomNumber } = body;
+  if (!date || !DATE_RE.test(date)) return { error: "invalid_date" };
+  if (typeof roomNumber !== "string" || !KIRAKU_ROOM_ORDER.includes(roomNumber)) {
+    return { error: "invalid_room" };
+  }
+  return { ok: true, date, roomNumber };
 }
 
 async function handleCleaningOverridePost(request, env) {
@@ -126,27 +128,25 @@ async function handleCleaningOverridePost(request, env) {
   } catch (e) {
     return jsonResponse({ error: "invalid_json" }, 400);
   }
-  const { date, room_type_key, checkout_booking_id, checkin_booking_id, field, value } = body || {};
 
-  if (!date || !DATE_RE.test(date)) {
-    return jsonResponse({ error: "invalid_date" }, 400);
+  const validation = validateDateAndRoomBody(body, new Set(["date", "roomNumber", "instruction"]));
+  if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
+  const { date, roomNumber } = validation;
+
+  const instruction = body.instruction;
+  if (typeof instruction !== "string") {
+    return jsonResponse({ error: "invalid_instruction" }, 400);
   }
-  if (!room_type_key || typeof room_type_key !== "string") {
-    return jsonResponse({ error: "invalid_room_type_key" }, 400);
-  }
-  if (!ALLOWED_OVERRIDE_FIELDS.includes(field)) {
-    return jsonResponse({ error: "invalid_field" }, 400);
-  }
-  if (!isValidOverrideValue(value)) {
-    return jsonResponse({ error: "invalid_value" }, 400);
+  const trimmed = instruction.trim();
+  // 空文字を永久overrideとして保存する曖昧な実装は禁止 — 空欄は明示的に拒否し、
+  // 上書きを消す操作はDELETEでのみ行う。
+  if (!trimmed || trimmed.length > MAX_INSTRUCTION_LEN) {
+    return jsonResponse({ error: "invalid_instruction" }, 400);
   }
 
-  // The caller has already passed the global auth middleware (valid session
-  // required for any non-public path) by the time we get here. This is an
-  // EXTRA, mutation-specific check: reject if a cross-origin Origin header
-  // is present (defense-in-depth against CSRF; SameSite=Strict on the
-  // session cookie already blocks true cross-site delivery in modern
-  // browsers, but we check explicitly anyway).
+  // 既にグローバル認証ミドルウェアを通過済み(有効なsessionが必須)。ここは
+  // mutation専用の追加チェック: クロスオリジンのOriginヘッダを拒否する
+  // (CSRF対策の多層防御。SameSite=Strictでも既に大半を防げているが明示的に確認)。
   if (!isSameOriginRequest(request)) {
     return jsonResponse({ error: "origin_not_allowed" }, 403);
   }
@@ -155,26 +155,53 @@ async function handleCleaningOverridePost(request, env) {
     return jsonResponse({ error: "kv_unavailable" }, 500);
   }
 
-  const kvKey = `overrides:${date}`;
-  const overridesObj = await readOverridesForDate(env, date);
-  const roomKey = buildOverrideKey({ room_type_key, checkout_booking_id, checkin_booking_id });
-
-  const existing = (overridesObj[roomKey] && typeof overridesObj[roomKey] === "object")
-    ? overridesObj[roomKey] : {};
-  const nextRecord = { ...existing };
-  if (value === null) {
-    delete nextRecord[field];
-  } else {
-    nextRecord[field] = value;
-  }
-  // Shared staff password = no per-user identity to attribute this to.
-  // "staff_shared_login" is a constant marker, not a real username.
-  nextRecord.updated_by = "staff_shared_login";
-  nextRecord.updated_at = new Date().toISOString();
-  overridesObj[roomKey] = nextRecord;
-
-  await env.CLEANING_OVERRIDES.put(kvKey, JSON.stringify(overridesObj));
+  await env.CLEANING_OVERRIDES.put(
+    buildOverrideKey(date, roomNumber),
+    JSON.stringify({ instruction: trimmed, updatedAt: new Date().toISOString() }),
+  );
   return jsonResponse({ ok: true });
+}
+
+async function handleCleaningOverrideDelete(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return jsonResponse({ error: "invalid_json" }, 400);
+  }
+
+  const validation = validateDateAndRoomBody(body, new Set(["date", "roomNumber"]));
+  if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
+  const { date, roomNumber } = validation;
+
+  if (!isSameOriginRequest(request)) {
+    return jsonResponse({ error: "origin_not_allowed" }, 403);
+  }
+
+  if (!env.CLEANING_OVERRIDES) {
+    return jsonResponse({ error: "kv_unavailable" }, 500);
+  }
+
+  // 存在しないキーの削除も含めて常に成功(冪等) — クリック連打やダブルリクエストで
+  // エラーにしないため。
+  await env.CLEANING_OVERRIDES.delete(buildOverrideKey(date, roomNumber));
+  return jsonResponse({ ok: true });
+}
+
+// public/配下の静的資産からsrc/roomMaster.jsへ直接importできないため、この
+// Workerが唯一の実体(src/roomMaster.js)からJSモジュールを動的に生成して配信する。
+// public/cleaningSheetTemplate.jsの `import ... from "../src/roomMaster.js"` は、
+// ブラウザ上ではそのファイルのURL("/cleaningSheetTemplate.js")からの相対URL解決に
+// より "/src/roomMaster.js" として要求される — この関数はまさにそのパスへ応答する。
+// 認証済みリクエストのみ到達する(PUBLIC_STATIC_PATHSに含めていないため、下の
+// デフォルト拒否ブロックを必ず通過する)。
+function handleRoomMasterJs() {
+  const body = `// Auto-served by worker.js from src/roomMaster.js (single source of truth).\n`
+    + `export const KIRAKU_ROOM_ORDER = ${JSON.stringify(KIRAKU_ROOM_ORDER)};\n`;
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/javascript; charset=utf-8", ...NO_STORE_HEADERS },
+  });
 }
 
 // --- Authentication (shared staff password + signed session cookie) ---
@@ -277,6 +304,14 @@ export default {
 
     if (path === "/api/cleaning/override" && request.method === "POST") {
       return handleCleaningOverridePost(request, env);
+    }
+
+    if (path === "/api/cleaning/override" && request.method === "DELETE") {
+      return handleCleaningOverrideDelete(request, env);
+    }
+
+    if (path === "/src/roomMaster.js" && request.method === "GET") {
+      return handleRoomMasterJs();
     }
 
     // それ以外 : 静的アセット（index.html / print pages / mobile pages 等）

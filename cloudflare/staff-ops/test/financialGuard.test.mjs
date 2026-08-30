@@ -4,7 +4,11 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { assertNoFinancialKeys, FORBIDDEN_FINANCIAL_KEYS } from "../public/financialGuard.js";
+import {
+  assertNoFinancialKeys, FORBIDDEN_FINANCIAL_KEYS,
+  assertNoForbiddenCleaningKeys, CLEANING_FORBIDDEN_KEYS,
+} from "../public/financialGuard.js";
+import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(readFileSync(path.join(dir, "fixtures/staff_ops_snapshot.sample.json"), "utf-8"));
@@ -46,6 +50,41 @@ await check("FORBIDDEN_FINANCIAL_KEYS mirrors the agreed list from the Python si
     "invoice_status", "invoiceItems",
   ];
   assert.deepEqual(FORBIDDEN_FINANCIAL_KEYS, expected);
+});
+
+// ---------------- assertNoForbiddenCleaningKeys (cleaning-specific guard) ----------------
+
+await check("passing case: the real merged cleaning payload (GET /api/cleaning response shape) is clean", async () => {
+  const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
+  const rooms = mergeCleaningOverrides(rawRooms, {});
+  assert.doesNotThrow(() => assertNoForbiddenCleaningKeys({ date: "2026-08-30", rooms }));
+});
+
+await check("failing case: a cleaning row deliberately augmented with a forbidden PII key (phone) is rejected", async () => {
+  const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
+  const rooms = mergeCleaningOverrides(rawRooms, {});
+  const tampered = { date: "2026-08-30", rooms: [{ ...rooms[0], phone: "090-1234-5678" }, ...rooms.slice(1)] };
+  assert.throws(() => assertNoForbiddenCleaningKeys(tampered), /phone/);
+});
+
+await check("failing case: a financial key (price) inside a cleaning row is also rejected by the cleaning guard", async () => {
+  const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
+  const rooms = mergeCleaningOverrides(rawRooms, {});
+  const tampered = { date: "2026-08-30", rooms: [{ ...rooms[0], price: 9800 }, ...rooms.slice(1)] };
+  assert.throws(() => assertNoForbiddenCleaningKeys(tampered), /price/);
+});
+
+await check("CLEANING_FORBIDDEN_KEYS is FORBIDDEN_FINANCIAL_KEYS plus the agreed cleaning-specific PII list", async () => {
+  const expectedExtra = [
+    "phone", "mobile", "address", "postcode", "prefecture", "city", "rest",
+    "email", "passport", "nationality", "country", "notes", "rate", "amount",
+  ];
+  for (const key of FORBIDDEN_FINANCIAL_KEYS) {
+    assert.ok(CLEANING_FORBIDDEN_KEYS.includes(key), `expected ${key} to be included`);
+  }
+  for (const key of expectedExtra) {
+    assert.ok(CLEANING_FORBIDDEN_KEYS.includes(key), `expected ${key} to be included`);
+  }
 });
 
 console.log(`\n${passed} financialGuard checks passed`);

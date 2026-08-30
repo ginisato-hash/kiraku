@@ -1,12 +1,15 @@
-// today.js — bootstrap for the mobile cleaning view (/cleaning/today).
+// today.js — bootstrap for the mobile cleaning view (/cleaning/today), FINAL design.
 // Read-only display for cleaning staff on a phone: today (JST) by default,
-// accepts ?date=. No start/complete/inspected status buttons in this
-// version (explicitly out of scope). Uses the SAME /api/cleaning?date=...
-// endpoint and merged room data as the print/cleaning page — see
-// test/sameEndpoint.test.mjs, which asserts both pages fetch the identical
-// URL with no divergent client-side filtering.
-import { renderMobileCleaningRooms } from "../cleaningSheetTemplate.js";
-import { assertNoFinancialKeys } from "../financialGuard.js";
+// accepts ?date=. No start/complete/inspected/assign status buttons in this
+// version (explicitly out of scope — editing lives only in the Staff Ops
+// desktop "Staff cleaning list", see cleaningStaffView.js). Uses the SAME
+// /api/cleaning?date=... endpoint and merged room data as the print page and
+// the Staff Ops cleaning list — see test/sameEndpoint.test.mjs, which
+// asserts all pages fetch the identical URL with no divergent filtering.
+// The actual block-rendering logic lives in cleaningSheetTemplate.js
+// (renderMobileCleaningBody) so it stays pure/DOM-free and unit-testable.
+import { renderMobileCleaningBody } from "../cleaningSheetTemplate.js";
+import { assertNoFinancialKeys, assertNoForbiddenCleaningKeys } from "../financialGuard.js";
 import { todayJst, formatDateJp } from "../jst.js";
 import { cleaningVisualAllowed } from "../featureFlags.js";
 
@@ -23,11 +26,11 @@ async function main() {
   const listEl = document.getElementById("mc-room-list");
   const freshnessEl = document.getElementById("mc-freshness");
 
-  // 原本写真確認前は、清掃担当者の通常導線からこの仮visualへ到達させない。
-  // 内部QAは ?preview=1 を付けてこのURLへ直接アクセスすれば確認できる。
+  // CLEANING_VISUAL_READY が false の間は、清掃担当者の通常導線からこの
+  // 画面へ到達させない（内部QAは ?preview=1 を付けて直接アクセスすれば確認できる）。
   if (!cleaningVisualAllowed()) {
     freshnessEl.textContent = "";
-    listEl.innerHTML = `<div class="mc-empty">清掃指示書：準備中（原本写真確認後に有効化されます）</div>`;
+    listEl.innerHTML = `<div class="mc-empty">清掃指示書：準備中</div>`;
     return;
   }
 
@@ -37,6 +40,7 @@ async function main() {
     if (res.ok) {
       cleaning = await res.json();
       assertNoFinancialKeys(cleaning);
+      assertNoForbiddenCleaningKeys(cleaning);
     }
   } catch (e) {
     cleaning = null;
@@ -49,7 +53,8 @@ async function main() {
   }
 
   const rooms = Array.isArray(cleaning.rooms) ? cleaning.rooms : [];
-  listEl.innerHTML = renderMobileCleaningRooms(rooms);
+  freshnessEl.textContent = "";
+  listEl.innerHTML = renderMobileCleaningBody(rooms);
 }
 
 main();

@@ -1,43 +1,80 @@
 // cleaningOverrides.js — pure functions for the清掃 override key scheme and merge.
 //
-// KEY SCHEME (both GET /api/cleaning and POST /api/cleaning/override must agree
-// on this exact function — do not change one side without the other):
+// KEY SCHEME (both GET /api/cleaning and POST/DELETE /api/cleaning/override
+// must agree on this exact function — do not change one side without the
+// other):
 //
-//   room_number is null in essentially all real cases today (Beds24 only
-//   exposes room TYPE for this property, not physical unit numbers), so it
-//   cannot be used as a stable per-room identifier. Instead we key an
-//   override by the composite string:
+//   `${date}:${roomNumber}` e.g. "2026-08-31:607"
 //
-//     `${room_type_key}:${checkout_booking_id || ""}:${checkin_booking_id || ""}`
+// This replaces the OLD `room_type_key:checkout_booking_id:checkin_booking_id`
+// scheme entirely — room_number is now always resolved to one of the 18
+// canonical physical rooms (KIRAKU_ROOM_ORDER) by the Python classifier, so a
+// stable per-room-per-date key is available and preferred.
 //
-//   which uniquely identifies one cleaning "slot" for a given date (the
-//   overrides object itself is already scoped per-date via the KV key
-//   `overrides:${date}`, so date is not part of this composite key).
+// VALUE SHAPE stored in KV (JSON string): { instruction, updatedAt } — never
+// copy booking data (guest name, counts, etc.) into the override value.
 
-export function buildOverrideKey(room) {
-  const r = room || {};
-  const roomTypeKey = r.room_type_key || "";
-  const checkoutId = r.checkout_booking_id || "";
-  const checkinId = r.checkin_booking_id || "";
-  return `${roomTypeKey}:${checkoutId}:${checkinId}`;
+import { KIRAKU_ROOM_ORDER } from "./roomMaster.js";
+
+export function buildOverrideKey(date, roomNumber) {
+  return `${date}:${roomNumber}`;
 }
 
-// Pure merge: base cleaning room rows (from the R2 snapshot) + an overrides
-// object (keyed by buildOverrideKey, value = partial fields to shallow-merge
-// on top, e.g. { room_number: "12", notes: "水漏れ確認" }) -> merged room rows.
-// Does not mutate either input. An absent override for a room leaves that
-// room's object reference-equal to the input (cheap, and easy to assert in
-// tests).
-export function mergeCleaningOverrides(baseRooms, overridesObj) {
+// Reads all override entries for a date (bounded to the 18 canonical rooms —
+// UNASSIGNED rows have no room_number and can never have an override, so
+// there is no reason to ever look one up for them). 18 individual KV reads
+// via Promise.all rather than a list() call — this avoids needing KV's
+// list() API and keeps behavior simple/predictable.
+// Returns a plain object: { [roomNumber]: { instruction, updatedAt } }.
+export async function readOverridesForDate(kv, date) {
+  if (!kv) return {};
+  const entries = await Promise.all(KIRAKU_ROOM_ORDER.map(async (room) => {
+    let raw = null;
+    try {
+      raw = await kv.get(buildOverrideKey(date, room));
+    } catch (e) {
+      raw = null;
+    }
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return (parsed && typeof parsed.instruction === "string") ? [room, parsed] : null;
+    } catch (e) {
+      return null;
+    }
+  }));
+  const result = {};
+  for (const entry of entries) {
+    if (entry) result[entry[0]] = entry[1];
+  }
+  return result;
+}
+
+// Pure merge: base cleaning room rows (from the R2 snapshot) + an
+// overridesByRoom object (from readOverridesForDate) -> rows with
+// effectiveInstruction/hasOverride/updatedAt added. Does not mutate either
+// input.
+//
+// A room whose room_number is null (UNASSIGNED) is never looked up in the
+// overrides map — it always falls back to its own source_instruction ("").
+export function mergeCleaningOverrides(baseRooms, overridesByRoom) {
   const rooms = Array.isArray(baseRooms) ? baseRooms : [];
-  const overrides = (overridesObj && typeof overridesObj === "object") ? overridesObj : {};
+  const overrides = (overridesByRoom && typeof overridesByRoom === "object") ? overridesByRoom : {};
   return rooms.map((room) => {
-    const key = buildOverrideKey(room);
-    const override = overrides[key];
-    if (!override || typeof override !== "object") return room;
-    // updated_by / updated_at are bookkeeping fields written by the POST
-    // handler — never surface them as if they were cleaning-sheet data.
-    const { updated_by, updated_at, ...fields } = override;
-    return { ...room, ...fields };
+    const override = room && room.room_number ? overrides[room.room_number] : null;
+    if (override) {
+      return {
+        ...room,
+        effectiveInstruction: override.instruction,
+        hasOverride: true,
+        updatedAt: override.updatedAt || null,
+      };
+    }
+    return {
+      ...room,
+      effectiveInstruction: (room && room.source_instruction) || "",
+      hasOverride: false,
+      updatedAt: null,
+    };
   });
 }

@@ -1,13 +1,15 @@
 // 最小Workerテスト（wrangler不要・node実行）。
 // 確認: 認証ミドルウェア(login/logout/session cookie/デフォルト拒否)、
-// /health、/api/daily-ops、/api/cleaning（override merge込み）、
-// POST /api/cleaning/override（401/400/403含む・Origin確認）、その他はASSETSへ。
+// /health、/api/daily-ops、/src/roomMaster.js、/api/cleaning（override merge込み、
+// NEWキー体系 `${date}:${roomNumber}`）、POST/DELETE /api/cleaning/override
+// （401/400/403含む・Origin確認・同一ロジックの共有バリデーション）、その他はASSETSへ。
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import worker from "../src/worker.js";
 import { createSessionToken, SESSION_COOKIE_NAME } from "../src/auth.js";
+import { KIRAKU_ROOM_ORDER } from "../src/roomMaster.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(readFileSync(path.join(dir, "fixtures/staff_ops_snapshot.sample.json"), "utf-8"));
@@ -42,6 +44,11 @@ async function validCookieHeader(env) {
 const get = (env, p, headers) => worker.fetch(new Request("https://x" + p, { headers: headers || {} }), env);
 const post = (env, p, body, headers) => worker.fetch(new Request("https://x" + p, {
   method: "POST",
+  headers: { "content-type": "application/json", ...(headers || {}) },
+  body: JSON.stringify(body),
+}), env);
+const del = (env, p, body, headers) => worker.fetch(new Request("https://x" + p, {
+  method: "DELETE",
   headers: { "content-type": "application/json", ...(headers || {}) },
   body: JSON.stringify(body),
 }), env);
@@ -94,6 +101,12 @@ await check("unauthenticated GET /api/cleaning returns 401", async () => {
   const env = makeEnv();
   const r = await get(env, "/api/cleaning?date=2026-08-30");
   assert.equal(r.status, 401);
+});
+
+await check("unauthenticated GET /src/roomMaster.js returns 302 (page-like route, not /api/*)", async () => {
+  const env = makeEnv();
+  const r = await get(env, "/src/roomMaster.js");
+  assert.equal(r.status, 302);
 });
 
 await check("unauthenticated GET /ops/print/guest-register redirects to /login (page route, not /api/*)", async () => {
@@ -186,17 +199,33 @@ await check("after logout, the cleared cookie no longer authenticates (client wo
   assert.equal(r.status, 401);
 });
 
-// --- Cleaning data + override (now behind the auth middleware; also has an Origin check) ---
+// --- /src/roomMaster.js (dynamically served from src/roomMaster.js, authenticated) ---
 
-await check("authenticated GET /api/cleaning?date=2026-08-30 returns merged rooms (no overrides yet)", async () => {
+await check("authenticated GET /src/roomMaster.js serves a JS module mirroring KIRAKU_ROOM_ORDER exactly", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await get(env, "/src/roomMaster.js", { Cookie: cookie });
+  assert.equal(r.status, 200);
+  assert.ok((r.headers.get("content-type") || "").includes("javascript"));
+  const text = await r.text();
+  assert.ok(text.includes(JSON.stringify(KIRAKU_ROOM_ORDER)));
+});
+
+// --- GET /api/cleaning (now behind the auth middleware; merges overrides) ---
+
+await check("authenticated GET /api/cleaning?date=2026-08-30 returns 18 canonical rooms + 1 UNASSIGNED, no overrides yet", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await get(env, "/api/cleaning?date=2026-08-30", { Cookie: cookie });
   assert.equal(r.status, 200);
   const j = await r.json();
   assert.equal(j.date, "2026-08-30");
-  assert.equal(j.rooms.length, 4);
-  assert.equal(j.rooms[0].room_number, null);
+  assert.equal(j.rooms.length, 19);
+  assert.equal(j.rooms[0].room_number, "401");
+  assert.equal(j.rooms[0].hasOverride, false);
+  assert.equal(j.rooms[0].effectiveInstruction, "入替");
+  const unassigned = j.rooms.find((r2) => r2.room_number === null);
+  assert.equal(unassigned.status, "UNASSIGNED");
 });
 
 await check("authenticated GET /api/cleaning bad date -> 400", async () => {
@@ -204,13 +233,23 @@ await check("authenticated GET /api/cleaning bad date -> 400", async () => {
   const cookie = await validCookieHeader(env);
   const r = await get(env, "/api/cleaning?date=20260830", { Cookie: cookie });
   assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_date");
 });
+
+await check("authenticated GET /api/cleaning for a date not in the snapshot -> 404", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await get(env, "/api/cleaning?date=2099-01-01", { Cookie: cookie });
+  assert.equal(r.status, 404);
+});
+
+// --- POST /api/cleaning/override (NEW body shape: {date, roomNumber, instruction}) ---
 
 await check("authenticated POST /api/cleaning/override with a cross-origin Origin header -> 403", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet", field: "room_number", value: "12",
+    date: "2026-08-30", roomNumber: "405", instruction: "タオル追加",
   }, { Cookie: cookie, Origin: "https://evil.example.com" });
   assert.equal(r.status, 403);
   assert.equal((await r.json()).error, "origin_not_allowed");
@@ -220,9 +259,7 @@ await check("authenticated POST /api/cleaning/override with matching Origin succ
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet",
-    checkout_booking_id: "89381500", checkin_booking_id: "89381508",
-    field: "room_number", value: "12",
+    date: "2026-08-30", roomNumber: "405", instruction: "タオル追加",
   }, { Cookie: cookie, Origin: "https://x" });
   assert.equal(r.status, 200);
   assert.equal((await r.json()).ok, true);
@@ -232,73 +269,175 @@ await check("authenticated POST /api/cleaning/override with NO Origin header (to
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet", field: "notes", value: "確認済み",
+    date: "2026-08-30", roomNumber: "406", instruction: "確認済み",
   }, { Cookie: cookie });
   assert.equal(r.status, 200);
 });
 
-await check("authenticated POST /api/cleaning/override rejects a field outside the allowlist (e.g. state)", async () => {
+await check("authenticated POST /api/cleaning/override rejects an invalid date", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet", field: "state", value: "VACANT",
+    date: "20260830", roomNumber: "405", instruction: "x",
   }, { Cookie: cookie });
   assert.equal(r.status, 400);
-  assert.equal((await r.json()).error, "invalid_field");
+  assert.equal((await r.json()).error, "invalid_date");
 });
 
-await check("authenticated POST /api/cleaning/override rejects an over-length value", async () => {
+await check("authenticated POST /api/cleaning/override rejects a room number not in KIRAKU_ROOM_ORDER", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet", field: "notes", value: "x".repeat(201),
+    date: "2026-08-30", roomNumber: "999", instruction: "x",
   }, { Cookie: cookie });
   assert.equal(r.status, 400);
-  assert.equal((await r.json()).error, "invalid_value");
+  assert.equal((await r.json()).error, "invalid_room");
 });
 
-await check("unauthenticated POST /api/cleaning/override is rejected by the auth middleware BEFORE the origin/field checks (401, not 403/400)", async () => {
+await check("authenticated POST /api/cleaning/override rejects an empty instruction (must not silently store '' as a permanent override)", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await post(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "405", instruction: "",
+  }, { Cookie: cookie });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_instruction");
+});
+
+await check("authenticated POST /api/cleaning/override rejects a whitespace-only instruction", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await post(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "405", instruction: "   ",
+  }, { Cookie: cookie });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_instruction");
+});
+
+await check("authenticated POST /api/cleaning/override rejects an over-length instruction (>200 chars)", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await post(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "405", instruction: "x".repeat(201),
+  }, { Cookie: cookie });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_instruction");
+});
+
+await check("authenticated POST /api/cleaning/override rejects a body with extra unexpected properties", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await post(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "405", instruction: "x", price: 9800,
+  }, { Cookie: cookie });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_payload");
+});
+
+await check("unauthenticated POST /api/cleaning/override is rejected by the auth middleware BEFORE any body validation (401, not 403/400)", async () => {
   const env = makeEnv();
   const r = await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet", field: "room_number", value: "12",
+    date: "2026-08-30", roomNumber: "405", instruction: "x",
   });
   assert.equal(r.status, 401);
 });
 
-await check("override succeeds then GET /api/cleaning reflects it, with no updated_by real-name attribution (shared login)", async () => {
+await check("override succeeds then GET /api/cleaning reflects it (effectiveInstruction/hasOverride/updatedAt)", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "twin_toilet",
-    checkout_booking_id: "89381500", checkin_booking_id: "89381508",
-    field: "room_number", value: "12",
+    date: "2026-08-30", roomNumber: "402", instruction: "追加タオル希望",
   }, { Cookie: cookie });
 
   const getRes = await get(env, "/api/cleaning?date=2026-08-30", { Cookie: cookie });
   const j = await getRes.json();
-  const room = j.rooms.find((r2) => r2.room_type_key === "twin_toilet");
-  assert.equal(room.room_number, "12");
-  assert.equal(room.updated_by, undefined); // bookkeeping field, stripped before exposure
+  const room = j.rooms.find((r2) => r2.room_number === "402");
+  assert.equal(room.effectiveInstruction, "追加タオル希望");
+  assert.equal(room.hasOverride, true);
+  assert.ok(room.updatedAt);
 });
 
-await check("override value:null clears a previously-set field", async () => {
+await check("override instruction is trimmed before storage", async () => {
   const env = makeEnv();
   const cookie = await validCookieHeader(env);
   await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "single_no_toilet",
-    checkout_booking_id: null, checkin_booking_id: "89381999",
-    field: "notes", value: "要確認",
-  }, { Cookie: cookie });
-  await post(env, "/api/cleaning/override", {
-    date: "2026-08-30", room_type_key: "single_no_toilet",
-    checkout_booking_id: null, checkin_booking_id: "89381999",
-    field: "notes", value: null,
+    date: "2026-08-30", roomNumber: "403", instruction: "  水回り重点清掃  ",
   }, { Cookie: cookie });
 
   const getRes = await get(env, "/api/cleaning?date=2026-08-30", { Cookie: cookie });
   const j = await getRes.json();
-  const room = j.rooms.find((r2) => r2.room_type_key === "single_no_toilet");
-  assert.equal(room.notes, null);
+  const room = j.rooms.find((r2) => r2.room_number === "403");
+  assert.equal(room.effectiveInstruction, "水回り重点清掃");
+});
+
+// --- DELETE /api/cleaning/override (NEW route) ---
+
+await check("authenticated DELETE /api/cleaning/override removes an existing override; subsequent GET shows source_instruction again", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  await post(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "404", instruction: "臨時対応済み",
+  }, { Cookie: cookie });
+
+  const delRes = await del(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "404",
+  }, { Cookie: cookie });
+  assert.equal(delRes.status, 200);
+  assert.equal((await delRes.json()).ok, true);
+
+  const getRes = await get(env, "/api/cleaning?date=2026-08-30", { Cookie: cookie });
+  const j = await getRes.json();
+  const room = j.rooms.find((r2) => r2.room_number === "404");
+  assert.equal(room.hasOverride, false);
+  assert.equal(room.effectiveInstruction, room.source_instruction);
+});
+
+await check("DELETE /api/cleaning/override is idempotent when nothing exists yet", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await del(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "501",
+  }, { Cookie: cookie });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).ok, true);
+});
+
+await check("DELETE /api/cleaning/override rejects invalid date / invalid room the same way POST does", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r1 = await del(env, "/api/cleaning/override", { date: "bad", roomNumber: "401" }, { Cookie: cookie });
+  assert.equal(r1.status, 400);
+  assert.equal((await r1.json()).error, "invalid_date");
+
+  const r2 = await del(env, "/api/cleaning/override", { date: "2026-08-30", roomNumber: "999" }, { Cookie: cookie });
+  assert.equal(r2.status, 400);
+  assert.equal((await r2.json()).error, "invalid_room");
+});
+
+await check("DELETE /api/cleaning/override rejects extra unexpected body properties", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await del(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "401", instruction: "should not be here",
+  }, { Cookie: cookie });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "invalid_payload");
+});
+
+await check("DELETE /api/cleaning/override rejects a cross-origin Origin header", async () => {
+  const env = makeEnv();
+  const cookie = await validCookieHeader(env);
+  const r = await del(env, "/api/cleaning/override", {
+    date: "2026-08-30", roomNumber: "401",
+  }, { Cookie: cookie, Origin: "https://evil.example.com" });
+  assert.equal(r.status, 403);
+  assert.equal((await r.json()).error, "origin_not_allowed");
+});
+
+await check("unauthenticated DELETE /api/cleaning/override is rejected by the auth middleware (401)", async () => {
+  const env = makeEnv();
+  const r = await del(env, "/api/cleaning/override", { date: "2026-08-30", roomNumber: "401" });
+  assert.equal(r.status, 401);
 });
 
 // --- Misc ---

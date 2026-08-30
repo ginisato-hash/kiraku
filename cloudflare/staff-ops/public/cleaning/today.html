@@ -6,8 +6,9 @@
   <title>清掃 本日 — 喜らく</title>
   <link rel="stylesheet" href="../styles.css" />
   <style>
-    /* モバイル清掃ビュー：大きめタップターゲット/高コントラスト/フラット構成。
-       原本写真確認後、行の並び順(現状はroom_type_key順の仮並び)を見直す想定。 */
+    /* モバイル清掃ビュー（FINAL）: 印刷帳票を縮小したものではなく、1室=1ブロックの
+       独自レイアウト。70歳超スタッフを含む現場従業員向けに大きな文字/高コントラスト/
+       単純な1カラムを維持する。閲覧専用（開始/完了/担当割当等のボタンは無し）。 */
     body {
       font-size: 16px;
     }
@@ -28,24 +29,39 @@
       color: var(--text-muted);
       font-size: 0.95rem;
       margin-bottom: 20px;
+      min-height: 1.2em;
     }
 
-    .mc-room-card {
+    .mc-room-block {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       padding: 20px;
       margin-bottom: 16px;
-      min-height: 44px;
     }
 
-    .mc-room-label {
-      font-size: 1.4rem;
+    .mc-room-vacant {
+      padding: 14px 20px;
+      opacity: 0.7;
+    }
+
+    /* 最も目立つ要素: 室番号。このCSS内で最大のfont-size。 */
+    .mc-room-number {
+      font-size: 1.5rem;
       font-weight: 700;
       margin-bottom: 8px;
     }
 
-    .mc-state-badge {
+    .mc-room-vacant .mc-room-number {
+      margin-bottom: 2px;
+    }
+
+    .mc-vacant-label {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+    }
+
+    .mc-status-badge {
       display: inline-block;
       border-radius: 999px;
       padding: 6px 16px;
@@ -54,22 +70,29 @@
       margin-bottom: 12px;
     }
 
-    .mc-state-TURNOVER { background: var(--red-bg); color: var(--red); }
-    .mc-state-STAYOVER { background: var(--blue-bg); color: var(--blue); }
-    .mc-state-CHECKIN { background: var(--amber-bg); color: var(--amber); }
-    .mc-state-CHECKOUT { background: var(--amber-bg); color: var(--amber); }
-    .mc-state-VACANT { background: var(--gray-bg); color: var(--gray); }
-    .mc-state-CANCELLED { background: var(--gray-bg); color: var(--gray); }
-    .mc-state-UNASSIGNED { background: var(--gray-bg); color: var(--gray); }
+    .mc-status-TURNOVER { background: var(--red-bg); color: var(--red); }
+    .mc-status-STAYOVER { background: var(--blue-bg); color: var(--blue); }
+    .mc-status-CHECKIN { background: var(--amber-bg); color: var(--amber); }
+    .mc-status-CHECKOUT { background: var(--amber-bg); color: var(--amber); }
 
-    .mc-guests {
-      font-size: 1.1rem;
+    .mc-guest-name {
+      font-size: 1.15rem;
+      font-weight: 600;
       margin-bottom: 8px;
     }
 
-    .mc-notes {
+    .mc-detail-line {
       font-size: 1rem;
-      color: var(--text-muted);
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    .mc-instruction {
+      font-size: 1rem;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      color: var(--text);
     }
 
     .mc-empty {
