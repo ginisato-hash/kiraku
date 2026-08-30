@@ -117,34 +117,28 @@ jobs:
           data = body.get("data", body if isinstance(body, list) else [])
           print(f"properties returned: {len(data)}")
 
-          def find_unit_like_keys(obj, path=""):
-              hits = []
-              if isinstance(obj, dict):
-                  for k, v in obj.items():
-                      p = f"{path}.{k}" if path else k
-                      if "unit" in k.lower() or "roomnumber" in k.lower():
-                          hits.append((p, v if not isinstance(v, (dict, list)) else f"<{type(v).__name__}>"))
-                      hits.extend(find_unit_like_keys(v, p))
-              elif isinstance(obj, list):
-                  for i, item in enumerate(obj):
-                      hits.extend(find_unit_like_keys(item, f"{path}[{i}]"))
-              return hits
-
           for prop in data:
+              if str(prop.get("id")) != "330695":
+                  continue
               room_types = prop.get("roomTypes") or prop.get("rooms") or []
               print(f"--- property id={prop.get('id')} name={prop.get('name')} roomTypes={len(room_types)} ---")
+              print("ROOM_UNIT_MAPPING_JSON_START")
+              mapping = {}
               for rt in room_types:
                   rid = rt.get("id")
                   name = rt.get("name")
                   qty = rt.get("qty")
-                  print(f"roomType id={rid} name={name!r} qty={qty}")
-                  unit_hits = find_unit_like_keys(rt)
-                  for path, val in unit_hits:
-                      print(f"    {path} = {val!r}")
-                  # Also dump the full raw shape of ONE room type once, so we can see
-                  # field names we didn't think to grep for (facility config, not PII).
-                  if rid == room_types[0].get("id"):
-                      print("    FULL_RAW_FIRST_ROOMTYPE:", json.dumps(rt, ensure_ascii=False)[:4000])
+                  units = rt.get("units") or []
+                  print(f"roomType id={rid} name={name!r} qty={qty} unit_count={len(units)}")
+                  type_map = {}
+                  for u in units:
+                      uid, uname = u.get("id"), u.get("name")
+                      print(f"    unit id={uid} name={uname!r}")
+                      if uname:
+                          type_map[str(uid)] = str(uname)
+                  mapping[str(rid)] = type_map
+              print(json.dumps(mapping, ensure_ascii=False))
+              print("ROOM_UNIT_MAPPING_JSON_END")
           PY
 
       - name: Publish BI to R2
