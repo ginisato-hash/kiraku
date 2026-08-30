@@ -148,6 +148,62 @@ jobs:
             --content-type application/json \
             --remote
 
+      # TEMPORARY one-off diagnostic (to be removed after this verification pass):
+      # structural-only confirmation of the just-published snapshot. Never prints
+      # guest name/phone/address/notes values themselves, only field presence,
+      # counts, and a financial-key scan.
+      - name: TEMP diagnostic - structural check of published staff snapshot
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          FORBIDDEN = {"revenue","gross_revenue","net_revenue","price","ota_commission",
+                       "commission","tax_amount","adr","revpar","payment_status",
+                       "invoice_status","invoiceitems","cash_operating_breakeven_revenue",
+                       "beds24_revenue_net_for_bi","amount","totalprice","totalrevenue","rate"}
+          def scan(obj, hits):
+              if isinstance(obj, dict):
+                  for k, v in obj.items():
+                      if isinstance(k, str) and k.lower() in FORBIDDEN:
+                          hits.append(k)
+                      scan(v, hits)
+              elif isinstance(obj, list):
+                  for item in obj:
+                      scan(item, hits)
+
+          with open("data/output/latest/ops/staff_ops_snapshot.json", encoding="utf-8") as f:
+              snap = json.load(f)
+
+          hits = []
+          scan(snap, hits)
+          print(f"generated_at_jst={snap.get('generated_at_jst')}")
+          print(f"property_name={snap.get('property_name')}")
+          print(f"dates_present={sorted(snap.get('dates', {}).keys())}")
+          print(f"FINANCIAL_KEY_HITS={sorted(set(hits))} (must be empty)")
+
+          for date, bucket in snap.get("dates", {}).items():
+              arr, dep, stay = bucket.get("arrivals", []), bucket.get("departures", []), bucket.get("stayovers", [])
+              cleaning = bucket.get("cleaning", {}).get("rooms", [])
+              print(f"--- {date} ---")
+              print(f"  arrivals={len(arr)} departures={len(dep)} stayovers={len(stay)} cleaning_rows={len(cleaning)}")
+              for label, rows in (("arrival", arr), ("departure", dep), ("stayover", stay)):
+                  for r in rows:
+                      has_name = bool(r.get("guest_name"))
+                      has_phone = r.get("phone") is not None
+                      has_addr = any(r.get("address", {}).values())
+                      print(f"  {label}: booking_id={r.get('booking_id')} ota={r.get('ota_name')} "
+                            f"room_type={r.get('room_type_key')} room_number={r.get('room_number')} "
+                            f"adults={r.get('adults')} children={r.get('children')} total={r.get('total_guests')} "
+                            f"checkin={r.get('checkin_date')} checkout={r.get('checkout_date')} "
+                            f"arrival_time={r.get('arrival_time')} status={r.get('status')} "
+                            f"has_name={has_name} has_phone={has_phone} has_address={has_addr}")
+              for c in cleaning:
+                  print(f"  cleaning: type={c.get('room_type_key')} state={c.get('state')} "
+                        f"room_number={c.get('room_number')} adults={c.get('adults')} children={c.get('children')}")
+          assert not hits, f"FINANCIAL KEY LEAK DETECTED: {hits}"
+          print("OK: no financial keys found in published staff snapshot.")
+          PY
+
       # 補助確認のみ。主検証はrefresh-beds24-bi/publish-bi-r2のexit codeで既に厳密に行っている
       # （publish-bi-r2は成功時に generated_at_jst / default_month / uploaded files を出力済み）。
       # CloudflareがPython urllibの既定UAを弾いて403を返すことがあるため、User-Agentを明示し、
