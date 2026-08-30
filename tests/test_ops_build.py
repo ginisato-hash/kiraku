@@ -23,12 +23,15 @@ def _write_month(tmp_path, month, bookings):
 
 
 def _raw(bid, room_id, arrival, departure, status="confirmed", first="花子", last="架空",
-         adult=2, child=0):
-    return {
+         adult=2, child=0, unit_id=None):
+    raw = {
         "id": bid, "roomId": room_id, "arrival": arrival, "departure": departure,
         "status": status, "firstName": first, "lastName": last,
         "numAdult": adult, "numChild": child, "refererEditable": "Booking.com",
     }
+    if unit_id is not None:
+        raw["unitId"] = unit_id
+    return raw
 
 
 def test_build_staff_ops_snapshot_groups_arrivals_departures_stayovers(tmp_path):
@@ -65,14 +68,17 @@ def test_build_staff_ops_snapshot_groups_arrivals_departures_stayovers(tmp_path)
 
 
 def test_build_staff_ops_snapshot_cleaning_rooms_present_for_each_date(tmp_path):
-    bookings = [_raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02")]
+    # single_toilet unit "1" -> 実物理客室番号"607"(config/kiraku_room_unit_mapping.yml、
+    # 2026-08-30にBeds24 API実データで確認済み)。
+    bookings = [_raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02", unit_id=1)]
     _write_month(tmp_path, "2026-09", bookings)
     snapshot = ops_build.build_staff_ops_snapshot(["2026-09-02"], data_root=tmp_path)
     rooms = snapshot["dates"]["2026-09-02"]["cleaning"]["rooms"]
-    single_rows = [r for r in rooms if r["room_type_key"] == "single_toilet"]
-    assert len(single_rows) == 1
-    assert single_rows[0]["state"] == "CHECKOUT"
-    assert single_rows[0]["checkout_booking_id"] == "A"
+    assert len(rooms) == 18  # KIRAKU_ROOM_ORDER全室分、必ず1日18行
+    room_607 = [r for r in rooms if r["room_number"] == "607"]
+    assert len(room_607) == 1
+    assert room_607[0]["status"] == "CHECKOUT"
+    assert room_607[0]["departing_guest"]["booking_id"] == "A"
 
 
 def test_build_staff_ops_snapshot_top_level_shape(tmp_path):
@@ -92,13 +98,13 @@ def test_build_staff_ops_snapshot_recursively_passes_financial_key_guard(tmp_pat
 
 def test_missing_raw_file_yields_empty_but_valid_snapshot(tmp_path):
     """該当月のraw JSONがまだ存在しない(未取得)場合でもエラーにせず空のバケットを返す。
-    予約が1件も無いため、清掃状態は設定済みの各部屋タイプ(capacity>0)がすべてVACANTになる。"""
+    予約が1件も無いため、清掃状態はKIRAKU_ROOM_ORDERの18室すべてがVACANTになる。"""
     snapshot = ops_build.build_staff_ops_snapshot(["2026-12-25"], data_root=tmp_path)
     d = snapshot["dates"]["2026-12-25"]
     assert d["arrivals"] == d["departures"] == d["stayovers"] == []
     rooms = d["cleaning"]["rooms"]
-    assert rooms  # 設定済みの部屋タイプ分だけVACANT行が出る(空にはならない)
-    assert all(r["state"] == "VACANT" for r in rooms)
+    assert len(rooms) == 18
+    assert all(r["status"] == "VACANT" for r in rooms)
 
 
 # ---------------- write_staff_ops_snapshot atomic write ----------------

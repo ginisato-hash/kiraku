@@ -1,17 +1,18 @@
-"""日付×部屋タイプ単位の清掃状態分類（会計・売上ロジックとは完全に独立）。
+"""日付×物理客室番号(KIRAKU_ROOM_ORDER)単位の清掃状態分類（会計・売上ロジックとは完全に独立）。
 
-既知の制約（推測で解消しようとしない）: Beds24はroom TYPE(タイプ単位のqty)のみを公開し、
-物理的な部屋番号を持たない。そのため、同一タイプでキャンセルが実稼働(チェックイン/
-チェックアウト/連泊)と共存する場合、キャンセルされたのがどの物理室だったのかは判別
-できない。よってキャンセルは「他に何も無い場合にのみCANCELLEDとして可視化し、実稼働と
-共存する場合は単に無視する」という保守的な扱いにとどめる。
+18室の物理客室マスターを基準に、対象日1件ごとに必ず18行を生成する
+（「予約のある客室だけ」ではなく「実在する客室すべて」）。room_numberが
+KIRAKU_ROOM_ORDERで解決できない予約(マッピング未確定/unitId不明)は、
+18室表には混ぜずUNASSIGNEDとして別途保持する(推測で客室へ割り当てない)。
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from datetime import date as _date
+from typing import Dict, List, Optional, Tuple
 
 from .. import config
-from .schema import CleaningRoomState, StaffBookingRecord
+from .room_master import KIRAKU_ROOM_ORDER
+from .schema import CleaningGuestInfo, CleaningRoomState, StaffBookingRecord
 
 _DEFAULT_CANCELLED_STATUSES = ["cancelled", "canceled", "black"]
 
@@ -26,20 +27,55 @@ def _is_cancelled(status: str, cancelled_statuses: List[str]) -> bool:
     return str(status or "").strip().lower() in {str(s).lower() for s in cancelled_statuses}
 
 
-def _empty_bucket() -> Dict[str, list]:
-    return {"checkout": [], "checkin": [], "stayover": [], "cancelled": []}
+def compute_night_progress(checkin: str, checkout: str,
+                           target_date: str) -> Tuple[Optional[int], Optional[int]]:
+    """(current_night_index, total_nights)を返す。target_dateがcheckin<=d<=checkoutの
+    範囲外、または日付parse不可の場合は(None, None)。
+
+    例: checkin=8/29, checkout=8/31 (2泊) -> 8/29:(1,2) 8/30:(2,2) 8/31(checkout日):(2,2)
+    （チェックアウト日は「直前に完了した泊数」を表示し、宿泊進捗と矛盾させない）。
+    """
+    try:
+        ci = _date.fromisoformat(checkin)
+        co = _date.fromisoformat(checkout)
+        d = _date.fromisoformat(target_date)
+    except (ValueError, TypeError):
+        return None, None
+    total = (co - ci).days
+    if total <= 0:
+        return None, None
+    if d == ci:
+        return 1, total
+    if ci < d < co:
+        return (d - ci).days + 1, total
+    if d == co:
+        return total, total
+    return None, total
 
 
-def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: str,
-                               room_types_config: Dict) -> List[CleaningRoomState]:
-    """target_date(YYYY-MM-DD)について、部屋タイプごとの清掃状態一覧を返す。
+def _guest_info(b: StaffBookingRecord) -> CleaningGuestInfo:
+    return CleaningGuestInfo(
+        booking_id=b.booking_id,
+        guest_name=b.guest_name,
+        adults=b.adults,
+        children=b.children,
+        total_guests=b.total_guests,
+        check_in=b.checkin_date,
+        check_out=b.checkout_date,
+        arrival_time=b.arrival_time,
+        source=b.ota_name,
+    )
 
-    capacity_rooms > 1 で同一タイプに複数の予約イベントが同日に重なる場合は、
-    1タイプ1行に集約せず、イベント単位(予約単位)で個別の行を返す
-    (housekeepingが実際に「何件の清掃が必要か」を数えられるようにするため)。
+
+def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
+                               target_date: str) -> List[CleaningRoomState]:
+    """target_date(YYYY-MM-DD, Asia/Tokyo基準)について、KIRAKU_ROOM_ORDERの18室
+    それぞれの清掃状態を1行ずつ、かつ解決できなかった予約をUNASSIGNED行として返す。
     """
     cancelled_statuses = _cancelled_statuses()
-    by_type: Dict[str, Dict[str, list]] = {}
+
+    by_room: Dict[str, Dict[str, List[StaffBookingRecord]]] = {}
+    unassigned: List[StaffBookingRecord] = []
 
     for b in bookings:
         touches_checkout = b.checkout_date == target_date
@@ -48,11 +84,15 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: 
             b.checkin_date < target_date < b.checkout_date
         if not (touches_checkout or touches_checkin or touches_stayover):
             continue
-
-        bucket = by_type.setdefault(b.room_type_key, _empty_bucket())
         if _is_cancelled(b.status, cancelled_statuses):
-            bucket["cancelled"].append(b)
+            # CANCELLEDはoccupancy/cleaning判定に含めない(通常rowを埋めない)。
             continue
+
+        if not b.room_number or b.room_number not in KIRAKU_ROOM_ORDER:
+            unassigned.append(b)
+            continue
+
+        bucket = by_room.setdefault(b.room_number, {"checkout": [], "checkin": [], "stayover": []})
         if touches_checkout:
             bucket["checkout"].append(b)
         elif touches_checkin:
@@ -62,82 +102,57 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: 
 
     rows: List[CleaningRoomState] = []
 
-    for rt_key in sorted(set(room_types_config.keys()) | set(by_type.keys())):
-        spec = room_types_config.get(rt_key, {})
-        label = spec.get("label", rt_key)
-        capacity = int(spec.get("capacity_rooms", 0) or 0)
-        data = by_type.get(rt_key, _empty_bucket())
+    for room_number in KIRAKU_ROOM_ORDER:
+        data = by_room.get(room_number, {"checkout": [], "checkin": [], "stayover": []})
+        checkouts, checkins, stayovers = data["checkout"], data["checkin"], data["stayover"]
 
-        if rt_key == "unknown":
-            # 未分類(room_idがどの部屋タイプにも一致しない)予約は、清掃対象から
-            # サイレントに消さず、必ずUNASSIGNEDとして個別可視化する。
-            for b in data["checkout"] + data["checkin"] + data["stayover"]:
-                rows.append(CleaningRoomState(
-                    room_type_key="unknown", room_type_label=label, room_number=None,
-                    state="UNASSIGNED",
-                    checkout_booking_id=b.booking_id if b.checkout_date == target_date else None,
-                    checkin_booking_id=b.booking_id if b.checkin_date == target_date else None,
-                    adults=b.adults, children=b.children, total_guests=b.total_guests,
-                    notes=b.notes,
-                ))
-            continue
-
-        if capacity == 0 and not any(data.values()):
-            # 設定上capacity=0(未設定/廃止タイプ)かつ何のイベントも無いタイプは出力しない。
-            continue
-
-        checkouts, checkins, stayovers, cancelled = (
-            data["checkout"], data["checkin"], data["stayover"], data["cancelled"])
-
-        if not checkouts and not checkins and not stayovers:
-            if cancelled:
-                # このタイプ・この日には他に実稼働イベントが無く、キャンセルだけがある。
-                for b in cancelled:
-                    rows.append(CleaningRoomState(
-                        room_type_key=rt_key, room_type_label=label, room_number=None,
-                        state="CANCELLED",
-                        notes=f"キャンセル済み予約 booking_id={b.booking_id}",
-                    ))
-            else:
-                rows.append(CleaningRoomState(
-                    room_type_key=rt_key, room_type_label=label, room_number=None,
-                    state="VACANT",
-                ))
-            continue
-
-        # TURNOVER: チェックアウト予約とチェックイン予約を同数分だけペアリングする。
-        # 余った側はそれぞれ単独のCHECKOUT/CHECKINとして扱う。
-        pair_count = min(len(checkouts), len(checkins))
-        for i in range(pair_count):
-            co, ci = checkouts[i], checkins[i]
+        if checkouts and checkins:
+            # 同一物理客室でのTURNOVER: CHECKOUT行+CHECKIN行に分割せず1行に統合する。
+            # 複数該当は想定外(物理1室=同時1予約のはず)だが、防御的に先頭のみ使用。
+            departing, arriving = checkouts[0], checkins[0]
+            idx, total = compute_night_progress(arriving.checkin_date, arriving.checkout_date, target_date)
             rows.append(CleaningRoomState(
-                room_type_key=rt_key, room_type_label=label, room_number=None,
-                state="TURNOVER",
-                checkout_booking_id=co.booking_id, checkin_booking_id=ci.booking_id,
-                # 部屋を準備する対象は「これから入居する」ゲスト側の人数を使う。
-                adults=ci.adults, children=ci.children, total_guests=ci.total_guests,
-                notes=ci.notes,
+                date=target_date, room_number=room_number, status="TURNOVER",
+                departing_guest=_guest_info(departing), arriving_guest=_guest_info(arriving),
+                staying_guest=None, current_night_index=idx, total_nights=total,
+                source_instruction="入替",
             ))
-        for co in checkouts[pair_count:]:
+        elif checkouts:
+            departing = checkouts[0]
+            idx, total = compute_night_progress(departing.checkin_date, departing.checkout_date, target_date)
             rows.append(CleaningRoomState(
-                room_type_key=rt_key, room_type_label=label, room_number=None,
-                state="CHECKOUT", checkout_booking_id=co.booking_id,
-                adults=co.adults, children=co.children, total_guests=co.total_guests,
-                notes=co.notes,
+                date=target_date, room_number=room_number, status="CHECKOUT",
+                departing_guest=_guest_info(departing), arriving_guest=None, staying_guest=None,
+                current_night_index=idx, total_nights=total, source_instruction="",
             ))
-        for ci in checkins[pair_count:]:
+        elif checkins:
+            arriving = checkins[0]
+            idx, total = compute_night_progress(arriving.checkin_date, arriving.checkout_date, target_date)
             rows.append(CleaningRoomState(
-                room_type_key=rt_key, room_type_label=label, room_number=None,
-                state="CHECKIN", checkin_booking_id=ci.booking_id,
-                adults=ci.adults, children=ci.children, total_guests=ci.total_guests,
-                notes=ci.notes,
+                date=target_date, room_number=room_number, status="CHECKIN",
+                departing_guest=None, arriving_guest=_guest_info(arriving), staying_guest=None,
+                current_night_index=idx, total_nights=total, source_instruction="",
             ))
-        for so in stayovers:
+        elif stayovers:
+            staying = stayovers[0]
+            idx, total = compute_night_progress(staying.checkin_date, staying.checkout_date, target_date)
             rows.append(CleaningRoomState(
-                room_type_key=rt_key, room_type_label=label, room_number=None,
-                state="STAYOVER",
-                adults=so.adults, children=so.children, total_guests=so.total_guests,
-                notes=so.notes,
+                date=target_date, room_number=room_number, status="STAYOVER",
+                departing_guest=None, arriving_guest=None, staying_guest=_guest_info(staying),
+                current_night_index=idx, total_nights=total, source_instruction="",
             ))
+        else:
+            rows.append(CleaningRoomState(date=target_date, room_number=room_number, status="VACANT"))
+
+    # UNASSIGNED: room_numberが未解決(マッピング未確定/unitId不明)の予約。
+    # 18室表には混ぜず、その日に関係する分だけ個別に可視化する(サイレントに消さない)。
+    for b in unassigned:
+        rows.append(CleaningRoomState(
+            date=target_date, room_number=None, status="UNASSIGNED",
+            arriving_guest=_guest_info(b) if b.checkin_date == target_date else None,
+            departing_guest=_guest_info(b) if b.checkout_date == target_date else None,
+            staying_guest=_guest_info(b) if (b.checkin_date and b.checkout_date
+                                             and b.checkin_date < target_date < b.checkout_date) else None,
+        ))
 
     return rows

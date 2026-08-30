@@ -108,11 +108,27 @@ def test_room_number_stays_none_when_no_unit_field_present():
     assert rec.room_number is None
 
 
-def test_room_number_picked_up_defensively_if_unit_field_ever_appears():
-    """将来Beds24側にunitId等が出現した場合に備えた防御的抽出の確認
-    (現状の実データには存在しない。テストのみの架空フィールド)。"""
-    rec = extract_staff_booking(_raw(unitId="7"), TEST_ROOM_TYPES)
-    assert rec.room_number == "7"
+def test_room_number_is_none_when_unit_mapping_is_empty_even_if_raw_unit_id_present():
+    """2026-08-30判明: Beds24のunitIdは客室タイプ内の1始まり連番であり、実物理客室番号
+    そのものではない。config/kiraku_room_unit_mapping.ymlのマッピングが無い(空)場合は、
+    unitIdが存在してもroom_numberはNone(推測で実物理客室番号を作らない)。"""
+    rec = extract_staff_booking(_raw(unitId="7"), TEST_ROOM_TYPES, {})
+    assert rec.room_number is None
+
+
+def test_room_number_resolves_via_room_unit_mapping_when_configured():
+    """room_unit_mappingに(room_type_key, unitId) -> 実物理客室番号の対応があれば解決する。"""
+    mapping = {"single": {"7": "401"}}
+    rec = extract_staff_booking(_raw(unitId="7"), TEST_ROOM_TYPES, mapping)
+    assert rec.room_number == "401"
+
+
+def test_room_number_stays_none_for_an_unmapped_unit_id():
+    """マッピングに対象のunitIdが無ければNone(他の客室タイプ/unitIdだけ埋まっていても
+    誤って流用しない)。"""
+    mapping = {"single": {"1": "401"}}  # unitId "7" は登録されていない
+    rec = extract_staff_booking(_raw(unitId="7"), TEST_ROOM_TYPES, mapping)
+    assert rec.room_number is None
 
 
 # ---------------- arrival_time ----------------

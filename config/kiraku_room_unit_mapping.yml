@@ -1,0 +1,30 @@
+# 喜らく: Beds24 unitId(客室タイプ内の1始まり連番) -> 実物理客室番号 の対応表。
+#
+# 2026-08-30、Beds24 API `/properties?propertyId=330695&includeAllRooms=true` を
+# 実際に照会して確認済み（推測ではない。各roomTypeのunits[].nameが実物理客室番号）。
+# roomTypes[].units[].id が予約payloadのunitId、units[].name が実物理客室番号。
+#
+# room_type_key は config/kiraku_room_types.yml のキーと一致させている。
+room_types:
+  single_toilet:   # Beds24 roomId 685761
+    "1": "607"
+    "2": "507"
+  twin_toilet:     # Beds24 roomId 686762
+    "1": "601"
+    "2": "602"
+    "3": "603"
+    "4": "604"
+    "5": "503"
+    "6": "504"
+    "7": "403"
+    "8": "404"
+    "9": "405"
+    "10": "406"
+  twin_bath:       # Beds24 roomId 686763
+    "1": "501"
+    "2": "502"
+    "3": "401"
+    "4": "402"
+  family_washitsu: # Beds24 roomId 686764
+    "1": "605"
+    "2": "505"

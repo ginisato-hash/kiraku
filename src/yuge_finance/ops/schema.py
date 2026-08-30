@@ -49,17 +49,36 @@ class StaffBookingRecord:
 
 
 @dataclass
+class CleaningGuestInfo:
+    """清掃指示書向けallow-list（住所・電話・メール・パスポート・国籍は含めない）。"""
+    booking_id: str = ""
+    guest_name: str = ""
+    adults: int = 0
+    children: int = 0
+    total_guests: int = 0
+    check_in: str = ""
+    check_out: str = ""
+    arrival_time: Optional[str] = None
+    source: str = ""  # normalize_booking_source() による正規化後のOTA表示名
+
+
+@dataclass
 class CleaningRoomState:
-    room_type_key: str = ""
-    room_type_label: str = ""
-    room_number: Optional[str] = None
-    state: str = ""  # TURNOVER / STAYOVER / CHECKIN / CHECKOUT / VACANT / CANCELLED / UNASSIGNED
-    checkout_booking_id: Optional[str] = None
-    checkin_booking_id: Optional[str] = None
-    adults: Optional[int] = None
-    children: Optional[int] = None
-    total_guests: Optional[int] = None
-    notes: Optional[str] = None
+    """日付×物理客室番号(KIRAKU_ROOM_ORDER)単位の清掃状態（canonical Cleaning DTO）。
+
+    override(instruction上書き)はCloudflare KV側でrequest時にmergeする
+    （既存アーキテクチャと同じ。Python側はsource_instructionのみ生成し、
+    effective_instruction/has_override/updated_atはWorker層の責務）。
+    """
+    date: str = ""
+    room_number: Optional[str] = None  # KIRAKU_ROOM_ORDER内の値、またはUNASSIGNEDならNone
+    status: str = ""  # CHECKIN/CHECKOUT/STAYOVER/TURNOVER/VACANT/UNASSIGNED/CANCELLED
+    departing_guest: Optional[CleaningGuestInfo] = None
+    arriving_guest: Optional[CleaningGuestInfo] = None
+    staying_guest: Optional[CleaningGuestInfo] = None
+    current_night_index: Optional[int] = None
+    total_nights: Optional[int] = None
+    source_instruction: str = ""
 
 
 def _iter_dict_values(obj):
@@ -84,3 +103,23 @@ def assert_no_financial_keys(d) -> None:
         if isinstance(k, str) and k.lower() in FINANCIAL_KEYS
     })
     assert not hits, f"財務系キーがスタッフ運用データに混入しています: {hits}"
+
+
+# 清掃指示（cleaning）出力専用の禁止キー: 財務系に加え、清掃業務に不要なPII
+# (住所/電話/メール/パスポート/国籍等)も禁止する。Daily Ops側(StaffBookingRecord)は
+# phone/addressを意図的に許可しているため、この禁止リストはCleaning DTO専用。
+CLEANING_FORBIDDEN_KEYS = FINANCIAL_KEYS | {
+    "phone", "mobile", "address", "postcode", "prefecture", "city", "rest",
+    "email", "passport", "nationality", "country", "notes", "rate", "amount",
+}
+
+
+def assert_no_forbidden_cleaning_keys(d) -> None:
+    """清掃指示データに財務キー・不要PII(住所/電話/メール/パスポート/国籍等)が
+    一切含まれないことを表明する。見つかった場合はAssertionErrorを送出する。
+    """
+    hits = sorted({
+        k for k, _ in _iter_dict_values(d)
+        if isinstance(k, str) and k.lower() in CLEANING_FORBIDDEN_KEYS
+    })
+    assert not hits, f"禁止キーが清掃データに混入しています: {hits}"

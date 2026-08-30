@@ -16,8 +16,10 @@ from .schema import StaffAddress, StaffBookingRecord
 # None/null/undefined/N/A相当の文字列表現（大小文字無視で比較する）。
 _SANITIZE_LITERALS = {"none", "null", "undefined", "n/a"}
 
-# 物理部屋番号の候補フィールド（防御的探索。config/kiraku_room_types.ymlに明記の通り、
-# 現状のBeds24物件データには物理部屋番号は存在しないため、実データでは常にNone想定）。
+# Beds24 unitId等の候補フィールド（防御的探索）。実データ確認の結果、これは
+# 「客室タイプ内の1始まり連番」であり、実物理客室番号(401等)そのものではない
+# ことが判明した(2026-08-30)。実物理客室番号への変換は
+# config/kiraku_room_unit_mapping.yml 経由でのみ行う（推測しない）。
 _UNIT_ID_KEYS = ("unitId", "roomNumber", "subRoomId", "unit")
 
 
@@ -123,12 +125,8 @@ def _extract_arrival_time(raw: dict) -> Optional[str]:
     return None
 
 
-def _extract_room_number(raw: dict) -> Optional[str]:
-    """物理部屋番号フィールドの防御的探索。config/kiraku_room_types.ymlのコメントで
-    明示されている通り、このBeds24物件データには物理部屋番号(roomNumber等)は存在せず
-    部屋タイプ単位のqtyのみが管理されている。実データでは常にNoneになる想定であり、
-    これはバグではなく既知の制約。
-    """
+def _extract_unit_index(raw: dict) -> Optional[str]:
+    """Beds24 unitId等(客室タイプ内の1始まり連番)の防御的探索。実物理客室番号ではない。"""
     for k in _UNIT_ID_KEYS:
         v = _sanitize_str(raw.get(k))
         if v is not None:
@@ -136,7 +134,25 @@ def _extract_room_number(raw: dict) -> Optional[str]:
     return None
 
 
-def extract_staff_booking(raw: dict, room_types_config: Dict) -> StaffBookingRecord:
+def load_room_unit_mapping() -> Dict[str, Dict[str, str]]:
+    return config.load_yaml("kiraku_room_unit_mapping.yml").get("room_types", {}) or {}
+
+
+def resolve_physical_room_number(room_type_key: str, unit_index: Optional[str],
+                                  room_unit_mapping: Dict) -> Optional[str]:
+    """(room_type_key, unit_index) -> 実物理客室番号(config/kiraku_room_unit_mapping.yml経由)。
+
+    マッピングが未確定/対象キーが無い場合はNoneを返す(推測で埋めない。
+    呼び出し側はNoneをUNASSIGNED相当として扱うこと)。
+    """
+    if unit_index is None:
+        return None
+    type_map = (room_unit_mapping or {}).get(room_type_key) or {}
+    return type_map.get(str(unit_index))
+
+
+def extract_staff_booking(raw: dict, room_types_config: Dict,
+                          room_unit_mapping: Optional[Dict] = None) -> StaffBookingRecord:
     """raw Beds24 予約dict -> StaffBookingRecord（許可リストの明示pick/mapのみ）。
 
     OTA判定の生値候補順は既存 api/beds24_client.normalize_booking() の channel 抽出
@@ -150,6 +166,9 @@ def extract_staff_booking(raw: dict, room_types_config: Dict) -> StaffBookingRec
     room_type_key = classify_room_type_key(room_id, room_types_config)
     room_type_label = room_types_config.get(room_type_key, {}).get("label", room_type_key)
 
+    unit_index = _extract_unit_index(raw)
+    room_number = resolve_physical_room_number(room_type_key, unit_index, room_unit_mapping or {})
+
     adults, children = _extract_guests(raw)
 
     return StaffBookingRecord(
@@ -159,7 +178,7 @@ def extract_staff_booking(raw: dict, room_types_config: Dict) -> StaffBookingRec
         booking_source_raw=booking_source_raw,
         room_type_key=room_type_key,
         room_type_label=room_type_label,
-        room_number=_extract_room_number(raw),
+        room_number=room_number,
         adults=adults,
         children=children,
         total_guests=adults + children,

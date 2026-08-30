@@ -1,143 +1,192 @@
 """ops.cleaning_classifier.classify_cleaning_for_date() の状態分類テスト。
 
-Beds24は部屋タイプ(タイプ単位のqty)のみを公開し、物理部屋番号を持たないため、
-room_numberは常にNoneのまま(既知の制約。room_type_metrics側とは無関係)。
+2026-08-31: 物理客室番号(KIRAKU_ROOM_ORDERの18室)ベースの新classifierへ全面更新。
+「予約のある客室だけ」ではなく「実在する客室すべて(18室)」が対象日1件ごとに
+必ず1行ずつ出る。room_numberがKIRAKU_ROOM_ORDERで解決できない予約は18室表に
+混ぜずUNASSIGNEDとして別途保持する。
 """
-from yuge_finance.ops.cleaning_classifier import classify_cleaning_for_date
+from yuge_finance.ops.cleaning_classifier import classify_cleaning_for_date, compute_night_progress
+from yuge_finance.ops.room_master import KIRAKU_ROOM_ORDER
 from yuge_finance.ops.schema import StaffBookingRecord
 
-ROOM_TYPES = {
-    "single": {"label": "シングル", "capacity_rooms": 2, "match": {"room_ids": ["100"]}},
-    "twin": {"label": "ツイン", "capacity_rooms": 3, "match": {"room_ids": ["200"]}},
-    "unknown": {"label": "未分類", "capacity_rooms": 0, "match": {"room_ids": []}},
-}
 
-
-def _sb(bid, room_type_key, checkin, checkout, status="confirmed", adults=2, children=0):
+def _sb(bid, room_number, checkin, checkout, status="confirmed", adults=2, children=0,
+       ota_name="じゃらん", arrival_time=None, guest_name="宿泊者"):
     return StaffBookingRecord(
-        booking_id=bid, room_type_key=room_type_key,
-        room_type_label=ROOM_TYPES.get(room_type_key, {}).get("label", room_type_key),
+        booking_id=bid, room_number=room_number, guest_name=guest_name, ota_name=ota_name,
         checkin_date=checkin, checkout_date=checkout, status=status,
         adults=adults, children=children, total_guests=adults + children,
+        arrival_time=arrival_time,
     )
 
 
-def _rows_for(room_type_key, rows):
-    return [r for r in rows if r.room_type_key == room_type_key]
+def _row_for(room_number, rows):
+    matches = [r for r in rows if r.room_number == room_number]
+    assert len(matches) == 1, f"expected exactly 1 row for room {room_number}, got {len(matches)}"
+    return matches[0]
+
+
+# ---------------- room master: always 18 rows, in KIRAKU_ROOM_ORDER order ----------------
+def test_always_emits_exactly_18_room_rows_in_canonical_order():
+    rows = classify_cleaning_for_date([], "2026-09-03")
+    room_number_rows = [r for r in rows if r.status != "UNASSIGNED"]
+    assert len(room_number_rows) == 18
+    assert [r.room_number for r in room_number_rows] == KIRAKU_ROOM_ORDER
+
+
+def test_room_with_no_bookings_is_vacant():
+    rows = classify_cleaning_for_date([_sb("1", "401", "2026-09-10", "2026-09-12")], "2026-09-03")
+    assert _row_for("402", rows).status == "VACANT"
 
 
 # ---------------- checkout-only ----------------
 def test_checkout_only_produces_checkout_state():
-    bookings = [_sb("1", "single", "2026-09-01", "2026-09-03")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "CHECKOUT"
-    assert single_rows[0].checkout_booking_id == "1"
-    assert single_rows[0].checkin_booking_id is None
+    rows = classify_cleaning_for_date([_sb("1", "401", "2026-09-01", "2026-09-03")], "2026-09-03")
+    row = _row_for("401", rows)
+    assert row.status == "CHECKOUT"
+    assert row.departing_guest.booking_id == "1"
+    assert row.arriving_guest is None
+    assert row.staying_guest is None
 
 
 # ---------------- checkin-only ----------------
 def test_checkin_only_produces_checkin_state():
-    bookings = [_sb("2", "single", "2026-09-03", "2026-09-05")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "CHECKIN"
-    assert single_rows[0].checkin_booking_id == "2"
-    assert single_rows[0].checkout_booking_id is None
+    rows = classify_cleaning_for_date([_sb("2", "401", "2026-09-03", "2026-09-05")], "2026-09-03")
+    row = _row_for("401", rows)
+    assert row.status == "CHECKIN"
+    assert row.arriving_guest.booking_id == "2"
+    assert row.departing_guest is None
 
 
 # ---------------- stayover-only ----------------
 def test_stayover_only_produces_stayover_state():
-    bookings = [_sb("3", "single", "2026-09-01", "2026-09-05")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "STAYOVER"
-    assert single_rows[0].adults == 2
+    rows = classify_cleaning_for_date([_sb("3", "401", "2026-09-01", "2026-09-05", adults=2)], "2026-09-03")
+    row = _row_for("401", rows)
+    assert row.status == "STAYOVER"
+    assert row.staying_guest.booking_id == "3"
+    assert row.staying_guest.adults == 2
 
 
-# ---------------- same-day checkout + checkin => TURNOVER ----------------
-def test_same_day_checkout_and_checkin_produces_turnover():
+# ---------------- same physical room, checkout + checkin => TURNOVER (1 row) ----------------
+def test_same_room_checkout_and_checkin_produces_turnover_as_one_row():
     bookings = [
-        _sb("4", "single", "2026-09-01", "2026-09-03"),  # checkout on 09-03
-        _sb("5", "single", "2026-09-03", "2026-09-06"),  # checkin on 09-03
+        _sb("4", "401", "2026-09-01", "2026-09-03"),  # checkout on 09-03
+        _sb("5", "401", "2026-09-03", "2026-09-06"),  # checkin on 09-03
     ]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "TURNOVER"
-    assert single_rows[0].checkout_booking_id == "4"
-    assert single_rows[0].checkin_booking_id == "5"
-    # 清掃準備の対象は「これから入居する」チェックイン側の人数を使う。
-    assert single_rows[0].adults == 2
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    row = _row_for("401", rows)
+    assert row.status == "TURNOVER"
+    assert row.departing_guest.booking_id == "4"
+    assert row.arriving_guest.booking_id == "5"
+    assert row.source_instruction == "入替"
 
 
-# ---------------- vacant (何もイベントが無い) ----------------
-def test_vacant_when_no_bookings_touch_the_date():
-    bookings = [_sb("6", "single", "2026-09-10", "2026-09-12")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "VACANT"
-
-
-# ---------------- cancelled-only-for-that-slot => CANCELLED (not VACANT) ----------------
-def test_cancelled_only_produces_cancelled_not_vacant():
-    bookings = [_sb("7", "single", "2026-09-01", "2026-09-03", status="cancelled")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    single_rows = _rows_for("single", rows)
-    assert len(single_rows) == 1
-    assert single_rows[0].state == "CANCELLED"
-    assert "7" in single_rows[0].notes
-
-
-def test_cancelled_coexisting_with_real_activity_is_ignored_not_double_counted():
-    """同タイプに実稼働(チェックアウト)とキャンセルが共存する場合、キャンセルは
-    無視され、実稼働のみが行として出力される(どの物理室がキャンセルの影響を
-    受けたか判別できないため。known limitation)。"""
+def test_turnover_is_not_split_into_separate_checkout_and_checkin_rows():
     bookings = [
-        _sb("8", "twin", "2026-09-01", "2026-09-03"),
-        _sb("9", "twin", "2026-09-01", "2026-09-03", status="cancelled"),
+        _sb("4", "401", "2026-09-01", "2026-09-03"),
+        _sb("5", "401", "2026-09-03", "2026-09-06"),
     ]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    twin_rows = _rows_for("twin", rows)
-    assert len(twin_rows) == 1
-    assert twin_rows[0].state == "CHECKOUT"
-    assert twin_rows[0].checkout_booking_id == "8"
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    matches = [r for r in rows if r.room_number == "401"]
+    assert len(matches) == 1
 
 
-# ---------------- room_type unresolvable => UNASSIGNED ----------------
-def test_unknown_room_type_produces_unassigned():
-    bookings = [_sb("10", "unknown", "2026-09-01", "2026-09-03")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    unknown_rows = _rows_for("unknown", rows)
-    assert len(unknown_rows) == 1
-    assert unknown_rows[0].state == "UNASSIGNED"
-    assert unknown_rows[0].checkout_booking_id == "10"
-
-
-# ---------------- capacity>1: 複数同時イベントは個別行に分離される ----------------
-def test_multiple_simultaneous_bookings_same_type_produce_distinct_rows():
+def test_different_rooms_do_not_turn_into_turnover():
+    """checkout at room 401 and checkin at room 402 on the same day must stay two
+    separate CHECKOUT/CHECKIN rows, never merge into a TURNOVER for either room."""
     bookings = [
-        _sb("11", "twin", "2026-09-01", "2026-09-03"),   # checkout
-        _sb("12", "twin", "2026-09-02", "2026-09-03"),   # checkout
-        _sb("13", "twin", "2026-09-03", "2026-09-05"),   # checkin
-        _sb("14", "twin", "2026-08-30", "2026-09-06"),   # stayover
+        _sb("4", "401", "2026-09-01", "2026-09-03"),  # checkout at 401
+        _sb("5", "402", "2026-09-03", "2026-09-06"),  # checkin at 402 (different room)
     ]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    twin_rows = _rows_for("twin", rows)
-    # 2 checkouts + 1 checkin => 1 TURNOVER(ペア化) + 1 CHECKOUT(余り) + 1 STAYOVER = 3行
-    assert len(twin_rows) == 3
-    states = sorted(r.state for r in twin_rows)
-    assert states == ["CHECKOUT", "STAYOVER", "TURNOVER"]
-    # 全ての物理部屋番号はNoneのまま(判別不能な既知の制約)。
-    assert all(r.room_number is None for r in twin_rows)
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    assert _row_for("401", rows).status == "CHECKOUT"
+    assert _row_for("402", rows).status == "CHECKIN"
 
 
-# ---------------- unconfigured/zero-capacity types don't appear when nothing touches them ----------------
-def test_zero_capacity_type_with_no_events_is_not_emitted():
-    bookings = [_sb("15", "single", "2026-09-01", "2026-09-03")]
-    rows = classify_cleaning_for_date(bookings, "2026-09-03", ROOM_TYPES)
-    assert _rows_for("unknown", rows) == []
+# ---------------- cancelled exclusion ----------------
+def test_cancelled_booking_does_not_occupy_the_room_leaves_it_vacant():
+    rows = classify_cleaning_for_date(
+        [_sb("7", "401", "2026-09-01", "2026-09-03", status="cancelled")], "2026-09-03")
+    row = _row_for("401", rows)
+    assert row.status == "VACANT"
+
+
+def test_cancelled_coexisting_with_real_activity_in_a_different_room_is_independent():
+    bookings = [
+        _sb("8", "401", "2026-09-01", "2026-09-03"),
+        _sb("9", "402", "2026-09-01", "2026-09-03", status="cancelled"),
+    ]
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    assert _row_for("401", rows).status == "CHECKOUT"
+    assert _row_for("402", rows).status == "VACANT"
+
+
+# ---------------- room_number unresolved => UNASSIGNED, never guessed into the 18-room grid ----------------
+def test_booking_with_no_room_number_is_unassigned_not_placed_in_any_room_row():
+    bookings = [_sb("10", None, "2026-09-01", "2026-09-03")]
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    unassigned = [r for r in rows if r.status == "UNASSIGNED"]
+    assert len(unassigned) == 1
+    assert unassigned[0].departing_guest.booking_id == "10"
+    assert unassigned[0].room_number is None
+    # UNASSIGNED行があっても18室の通常行数は変わらない(混ぜない)。
+    assert len([r for r in rows if r.status != "UNASSIGNED"]) == 18
+
+
+def test_booking_with_room_number_outside_the_canonical_18_is_unassigned():
+    """Beds24側の値が誤って旧客室番号(301等)を指していても、正しく認識しない。"""
+    bookings = [_sb("11", "301", "2026-09-01", "2026-09-03")]
+    rows = classify_cleaning_for_date(bookings, "2026-09-03")
+    assert any(r.status == "UNASSIGNED" and r.departing_guest.booking_id == "11" for r in rows)
+    assert "301" not in [r.room_number for r in rows if r.status != "UNASSIGNED"]
+
+
+# ---------------- JST boundary: date-string comparisons, no off-by-one ----------------
+def test_jst_boundary_checkin_date_exactly_on_target_is_checkin_not_stayover():
+    rows = classify_cleaning_for_date([_sb("12", "401", "2026-09-03", "2026-09-04")], "2026-09-03")
+    assert _row_for("401", rows).status == "CHECKIN"
+
+
+def test_jst_boundary_day_before_checkin_is_vacant_not_checkin():
+    rows = classify_cleaning_for_date([_sb("13", "401", "2026-09-04", "2026-09-06")], "2026-09-03")
+    assert _row_for("401", rows).status == "VACANT"
+
+
+# ---------------- night progress (泊数) ----------------
+def test_compute_night_progress_examples_from_spec():
+    assert compute_night_progress("2026-08-29", "2026-08-31", "2026-08-29") == (1, 2)
+    assert compute_night_progress("2026-08-29", "2026-08-31", "2026-08-30") == (2, 2)
+    assert compute_night_progress("2026-08-29", "2026-08-31", "2026-08-31") == (2, 2)  # checkout日
+
+
+def test_compute_night_progress_three_night_stay():
+    assert compute_night_progress("2026-08-29", "2026-09-01", "2026-08-29") == (1, 3)
+    assert compute_night_progress("2026-08-29", "2026-09-01", "2026-08-30") == (2, 3)
+    assert compute_night_progress("2026-08-29", "2026-09-01", "2026-08-31") == (3, 3)
+    assert compute_night_progress("2026-08-29", "2026-09-01", "2026-09-01") == (3, 3)  # checkout日
+
+
+def test_compute_night_progress_date_outside_range_is_none():
+    assert compute_night_progress("2026-08-29", "2026-08-31", "2026-09-05") == (None, 2)
+
+
+def test_compute_night_progress_bad_input_is_none():
+    assert compute_night_progress("not-a-date", "2026-08-31", "2026-08-30") == (None, None)
+
+
+def test_turnover_row_night_progress_reflects_the_arriving_guest_first_night():
+    bookings = [
+        _sb("4", "401", "2026-08-28", "2026-08-30"),  # departing (2 nights, ends today)
+        _sb("5", "401", "2026-08-30", "2026-09-02"),  # arriving (3 nights, starts today)
+    ]
+    rows = classify_cleaning_for_date(bookings, "2026-08-30")
+    row = _row_for("401", rows)
+    assert row.current_night_index == 1
+    assert row.total_nights == 3
+
+
+# ---------------- room master coverage: no bookings at all -> all 18 VACANT ----------------
+def test_no_bookings_at_all_yields_18_vacant_rooms():
+    rows = classify_cleaning_for_date([], "2026-09-03")
+    assert len(rows) == 18
+    assert all(r.status == "VACANT" for r in rows)

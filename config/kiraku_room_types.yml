@@ -3,6 +3,12 @@
 # roomTypes[].id / qty から実データで確認済み(2026-07-10調査)。room名は予約payload
 # (invoiceItems含む/bookings一覧)には出現せず、roomIdのみが入るため、分類はroom_idで行う。
 # capacity_rooms は同APIのqtyをそのまま使用（推測値ではない）。
+#
+# 【2026-08-30訂正】上記のroomId分類は今も正しいが、「物理客室番号がBeds24に存在しない」
+# という過去の理解は誤りだった。同じ `includeAllRooms=true` レスポンスの
+# roomTypes[].units[].name に実物理客室番号(401〜607)が入っている
+# (roomTypes[].units[].id が予約payloadのunitId)。実物理客室番号への変換は
+# config/kiraku_room_unit_mapping.yml を参照。
 room_types:
   single_toilet:
     label: "シングル｜客室トイレ付"

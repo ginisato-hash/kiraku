@@ -15,9 +15,9 @@ from typing import Dict, List, Optional
 
 from .. import config
 from .cleaning_classifier import classify_cleaning_for_date
-from .extract import extract_staff_booking, load_room_type_config
+from .extract import extract_staff_booking, load_room_type_config, load_room_unit_mapping
 from .raw_reader import load_raw_bookings_for_months, months_covering_date_range
-from .schema import StaffBookingRecord, assert_no_financial_keys
+from .schema import StaffBookingRecord, assert_no_financial_keys, assert_no_forbidden_cleaning_keys
 
 # JSTタイムゾーンはこのリポジトリの既存規約(共有ユーティリティを作らず各モジュールで
 # 独立定義する。accounting/beds24_revenue_logic.py の JST定義/jst_today()パターンに合わせる)
@@ -64,7 +64,8 @@ def _sorted_by_booking_id(records: List[StaffBookingRecord]) -> List[StaffBookin
 
 
 def load_all_staff_bookings(target_dates: List[str], data_root: Path = None,
-                            room_types_config: Dict = None) -> List[StaffBookingRecord]:
+                            room_types_config: Dict = None,
+                            room_unit_mapping: Dict = None) -> List[StaffBookingRecord]:
     """対象日の集合をカバーするのに必要な月のraw JSONを読み込み、
     StaffBookingRecordへ変換した一覧を返す(重複booking_idは除去)。"""
     if not target_dates:
@@ -74,11 +75,12 @@ def load_all_staff_bookings(target_dates: List[str], data_root: Path = None,
     months = months_covering_date_range(start, end)
     raw_bookings = load_raw_bookings_for_months(months, data_root=data_root)
     room_types_config = room_types_config if room_types_config is not None else load_room_type_config()
+    room_unit_mapping = room_unit_mapping if room_unit_mapping is not None else load_room_unit_mapping()
 
     seen_ids = set()
     records: List[StaffBookingRecord] = []
     for raw in raw_bookings:
-        rec = extract_staff_booking(raw, room_types_config)
+        rec = extract_staff_booking(raw, room_types_config, room_unit_mapping)
         if rec.booking_id in seen_ids:
             continue
         seen_ids.add(rec.booking_id)
@@ -86,8 +88,7 @@ def load_all_staff_bookings(target_dates: List[str], data_root: Path = None,
     return records
 
 
-def _build_date_bucket(records: List[StaffBookingRecord], target_date: str,
-                       room_types_config: Dict) -> Dict:
+def _build_date_bucket(records: List[StaffBookingRecord], target_date: str) -> Dict:
     arrivals = [b for b in records
                if b.checkin_date == target_date and not _is_cancelled_like(b.status)]
     departures = [b for b in records
@@ -96,13 +97,18 @@ def _build_date_bucket(records: List[StaffBookingRecord], target_date: str,
                 if b.checkin_date and b.checkout_date
                 and b.checkin_date < target_date < b.checkout_date
                 and not _is_cancelled_like(b.status)]
-    cleaning_rows = classify_cleaning_for_date(records, target_date, room_types_config)
+    cleaning_rows = classify_cleaning_for_date(records, target_date)
+    cleaning_dict = {"rooms": [_asdict(r) for r in cleaning_rows]}
+    # cleaning出力専用の禁止キー(財務系+住所/電話/メール/パスポート/国籍等)の
+    # 最終防御チェック。CleaningGuestInfoにこれらのフィールドは存在しないため
+    # 構造的に混入し得ないが、将来の変更に対する回帰防止として実行する。
+    assert_no_forbidden_cleaning_keys(cleaning_dict)
 
     return {
         "arrivals": [_asdict(b) for b in _sorted_by_booking_id(arrivals)],
         "departures": [_asdict(b) for b in _sorted_by_booking_id(departures)],
         "stayovers": [_asdict(b) for b in _sorted_by_booking_id(stayovers)],
-        "cleaning": {"rooms": [_asdict(r) for r in cleaning_rows]},
+        "cleaning": cleaning_dict,
     }
 
 
@@ -113,11 +119,13 @@ def build_staff_ops_snapshot(target_dates: List[str], data_root: Path = None) ->
     ためのオプション引数(本番実行では常にNone=config.DATA_DIRを使う)。
     """
     room_types_config = load_room_type_config()
+    room_unit_mapping = load_room_unit_mapping()
     records = load_all_staff_bookings(target_dates, data_root=data_root,
-                                      room_types_config=room_types_config)
+                                      room_types_config=room_types_config,
+                                      room_unit_mapping=room_unit_mapping)
 
     dates_out = {
-        d: _build_date_bucket(records, d, room_types_config)
+        d: _build_date_bucket(records, d)
         for d in target_dates
     }
 
