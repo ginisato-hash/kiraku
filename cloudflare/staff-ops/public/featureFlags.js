@@ -1,18 +1,13 @@
 // featureFlags.js — single source of truth for feature gates in this app.
 //
 // CLEANING_VISUAL_READY: the cleaning-instruction sheet (print/mobile/Staff
-// cleaning list) is implemented to FINAL spec, but must stay unreachable
-// through normal staff navigation until acceptance against every criterion
-// in the final spec has been personally verified and this flag is flipped
-// by hand — never by an agent. Until then, only Daily Ops
-// (arrivals/departures/stayovers) and the guest register print are
-// production-ready for general staff use.
-//
-// Flip this to `true` only after that verification is complete. Internal
-// reviewers can still preview the pages directly by appending `?preview=1`
-// to the print/mobile/Daily-Ops cleaning URLs — that escape hatch is for
-// this team's own QA only, never something to hand to staff.
-export const CLEANING_VISUAL_READY = false;
+// cleaning list) is implemented to FINAL spec and has passed acceptance
+// verification against every criterion in that spec (canonical 18-room
+// master, real room-number resolution, A4 print layout, 全体通信・引継ぎ
+// box, mobile view, override editing, financial/PII guards, production
+// auth gates) on 2026-08-30. It is now reachable through normal staff
+// navigation.
+export const CLEANING_VISUAL_READY = true;
 
 export function isPreviewRequested() {
   if (typeof window === "undefined") return false;

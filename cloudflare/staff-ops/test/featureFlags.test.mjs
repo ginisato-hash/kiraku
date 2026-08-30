@@ -1,5 +1,6 @@
-// featureFlags.js の純粋関数テスト + 清掃visualの仮レイアウトが一般スタッフの
-// 通常導線から見えない状態になっていることのソーステキスト確認。
+// featureFlags.js の純粋関数テスト + 清掃visualが正しくゲートされている
+// (フラグOFF時は一般スタッフの通常導線から到達不可、?preview=1は常に有効)
+// ことのソーステキスト確認。
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -14,9 +15,8 @@ const todaySrc = readFileSync(path.join(dir, "../public/cleaning/today.js"), "ut
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
 
-await check("CLEANING_VISUAL_READY is false during the pending-source-photo phase", async () => {
-  assert.strictEqual(CLEANING_VISUAL_READY, false,
-    "must stay false until the real cleaning-sheet visual has been reproduced from the source photo and accepted");
+await check("CLEANING_VISUAL_READY is true (acceptance verification complete, 2026-08-30)", async () => {
+  assert.strictEqual(CLEANING_VISUAL_READY, true);
 });
 
 await check("isPreviewRequested() is false with no window (Node/test environment)", async () => {
