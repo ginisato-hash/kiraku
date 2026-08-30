@@ -84,7 +84,9 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          TITLE="kiraku-staff-ops-CLEANING_OVERRIDES"
+          # wrangler(4.127.1)が実際に使うtitleは binding名そのまま(worker名prefix無し)。
+          # 2026-08-30の実行ログで確認: 'Creating namespace with title "CLEANING_OVERRIDES"'。
+          TITLE="CLEANING_OVERRIDES"
           # 既存ネームスペースをタイトルで検索（jqで抽出。無ければcreateしてstdoutからid抽出）。
           EXISTING_ID=$( (npx wrangler kv namespace list 2>/dev/null || echo "[]") | jq -r --arg t "$TITLE" '(. // []) | .[] | select(.title == $t) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING_ID" ]; then
