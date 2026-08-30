@@ -11,16 +11,24 @@
 - **Beds24 API token はこのWorkerに置かない。** Worker自身はBeds24 APIを一切呼ばない。
 - 清掃指示のroom_number/notes上書きだけは KV **`CLEANING_OVERRIDES`** に保存する
   （date+room_typeキー。Beds24 raw dataそのものは変更しない）。
+- **認証: Cloudflare Access(Zero Trust)は不採用。** スタッフ共通パスワード
+  (Worker Secret `STAFF_OPS_PASSWORD`) + 署名済みsession cookie(HMAC-SHA256,
+  Worker Secret `STAFF_OPS_SESSION_SECRET`)による、このWorker自身の認証ミドルウェアで
+  全route(`/health`, `/login`, `/login.js`, `/styles.css`, `/api/auth/*`を除く)を
+  デフォルト拒否(default-deny)保護する。詳細・Secret設定手順は
+  **[AUTH_SETUP.md](AUTH_SETUP.md)** を参照。
 
 ## 構成
 ```
 cloudflare/staff-ops/
-  wrangler.toml           # kiraku-staff-ops / [assets]ASSETS / [[r2_buckets]]OPS_DATA / [[kv_namespaces]]CLEANING_OVERRIDES
+  wrangler.toml           # kiraku-staff-ops / [assets]ASSETS / [[r2_buckets]]OPS_DATA / [[kv_namespaces]]CLEANING_OVERRIDES / [vars]AUTH_VERSION
   package.json            # dev/deploy/test scripts
-  src/worker.js           # ルーティング
+  src/worker.js           # ルーティング + 認証ミドルウェア
+  src/auth.js             # session署名/検証・パスワード比較・rate limit（純粋関数）
   src/cleaningOverrides.js
   public/
     index.html, dailyOps.js, dailyOpsViewModel.js, styles.css   # Daily Ops画面
+    login.html, login.js   # ログイン画面（未認証時のみ到達可能）
     jst.js                 # JST "今日" の唯一の定義（全ページ共通）
     financialGuard.js      # 財務キー非混入の実行時アサーション
     printUtils.js           # printField()（None等の非表示化）/ waitForPrintReady()
@@ -33,21 +41,28 @@ cloudflare/staff-ops/
 ```
 
 ## Worker ルート
-| パス | 説明 |
-|---|---|
-| `GET /health` | JSON（R2/KV読まない） |
-| `GET /api/daily-ops?date=YYYY-MM-DD` | その日の arrivals/departures/stayovers/cleaning（R2） |
-| `GET /api/cleaning?date=YYYY-MM-DD` | その日の清掃行（R2ベース + KV上書きマージ済み） |
-| `POST /api/cleaning/override` | room_number/notesの当日限定上書き（`Cf-Access-Authenticated-User-Email`ヘッダー必須・無ければ403） |
-| `GET /` | Daily Ops画面 |
-| `GET /ops/print/guest-register?date=` | 宿泊者名簿 印刷専用ページ（1予約=A4 1ページ、window.print自動発火） |
-| `GET /ops/print/cleaning?date=` | 清掃指示書 印刷専用ページ（**現在は仮レイアウト**） |
-| `GET /cleaning/today?date=` | 清掃担当者向けスマホ画面（既定=JST今日） |
+| パス | 認証 | 説明 |
+|---|---|---|
+| `GET /health` | 不要 | JSON（R2/KV読まない） |
+| `GET /login`, `GET /login.js`, `GET /styles.css` | 不要 | ログイン画面表示に必要な静的アセットのみ |
+| `POST /api/auth/login` | 不要 | `{password}` → 成功時session cookie発行 |
+| `POST /api/auth/logout` | 不要 | session cookie失効 |
+| `GET /` | **必須** | Daily Ops画面（未認証は`/login`へ302） |
+| `GET /api/daily-ops?date=YYYY-MM-DD` | **必須** | その日の arrivals/departures/stayovers/cleaning（未認証は401 JSON） |
+| `GET /api/cleaning?date=YYYY-MM-DD` | **必須** | その日の清掃行（R2ベース + KV上書きマージ済み） |
+| `POST /api/cleaning/override` | **必須 + Origin一致** | room_number/notesの当日限定上書き |
+| `GET /ops/print/guest-register?date=` | **必須** | 宿泊者名簿 印刷専用ページ（1予約=A4 1ページ、window.print自動発火） |
+| `GET /ops/print/cleaning?date=` | **必須** | 清掃指示書 印刷専用ページ（**現在は仮レイアウト**） |
+| `GET /cleaning/today?date=` | **必須** | 清掃担当者向けスマホ画面（既定=JST今日） |
 
-## アクセス制御（必須・手動設定が残っている）
-**[ACCESS_SETUP.md](ACCESS_SETUP.md) を参照。** Cloudflare Access（Zero Trust）の
-Application/Policy作成はダッシュボード操作が必要で、本リポジトリのCI/コードだけでは
-自動化できない。**本番URLをスタッフへ周知する前に必ず完了させること。**
+上記以外の未列挙パス（`/api/*`含む）もすべて同じ認証ミドルウェアでデフォルト拒否される
+（「HTMLだけ認証してAPI URLを直接叩けば取得可能」を防ぐため、判定はルーティングの
+どのハンドラよりも先に行う）。
+
+## 認証セットアップ（必須・Cloudflareダッシュボードでの2つのSecret設定が残っている）
+**[AUTH_SETUP.md](AUTH_SETUP.md) を参照。** `STAFF_OPS_PASSWORD` / `STAFF_OPS_SESSION_SECRET`
+の2つのWorker Secretを設定するまでログインは機能しない（fail-closed設計のため、
+未設定の間は全ルートが安全にログイン画面へリダイレクトされ続けるだけで、データ漏洩は起きない）。
 
 ## ローカル確認
 ```bash

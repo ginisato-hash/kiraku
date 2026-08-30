@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>喜らく STAFF ログイン</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="login-shell">
+    <div class="login-card">
+      <h1>喜らく STAFF</h1>
+      <form id="login-form" autocomplete="on">
+        <label for="password">パスワード</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" autofocus />
+        <button type="submit">ログイン</button>
+        <p class="login-error" id="login-error" role="alert"></p>
+      </form>
+    </div>
+  </div>
+  <script type="module" src="./login.js"></script>
+</body>
+</html>

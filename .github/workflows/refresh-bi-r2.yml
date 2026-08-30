@@ -98,28 +98,29 @@ jobs:
       # 既存BI(latest/bi_snapshot.json等、売上・ADR等を含む)とは完全に別バケット(kiraku-staff-ops-data)。
       # 取得元は本ジョブが直前に取得した同じBeds24生データ(data/raw/beds24/)であり、二重取得はしない。
       #
-      # ゲート: STAFF_OPS_ACCESS_CONFIRMED という repository variable が "1" になるまで、
+      # ゲート: STAFF_OPS_AUTH_CONFIRMED という repository variable が "1" になるまで、
       # 実在の宿泊者氏名・電話番号・住所を含むデータはR2へ一切書き込まない（ステップごと
       # スキップ）。kiraku-staff-ops Workerの本番URLはコード上デプロイ済みでも、
-      # Cloudflare Access（cloudflare/staff-ops/ACCESS_SETUP.md）が未設定の間は
+      # スタッフ共通パスワード認証（STAFF_OPS_PASSWORD/STAFF_OPS_SESSION_SECRET、
+      # cloudflare/staff-ops/AUTH_SETUP.md参照）が本番で実際に動作確認されるまでは、
       # 「秘密URLだけがセキュリティ」という状態になり得るため、それを避けるための
       # 明示的な運用者ゲート（このリポジトリの既存RMS authorizationパターンと同じ思想）。
       # 設定手順: GitHub → Settings → Secrets and variables → Actions → Variables タブで
-      # STAFF_OPS_ACCESS_CONFIRMED=1 を追加する（Access設定完了を確認した後に）。
+      # STAFF_OPS_AUTH_CONFIRMED=1 を追加する（パスワード認証の本番動作確認後に）。
       - name: Export Daily Ops + cleaning data (no financial fields)
-        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
         env:
           TZ: Asia/Tokyo
         run: |
           yuge-finance export-daily-ops
 
       - name: Staff Ops data gate not yet open (Cloudflare Access unconfirmed)
-        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED != '1' }}
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED != '1' }}
         run: |
-          echo "::warning::STAFF_OPS_ACCESS_CONFIRMED repository variable is not '1' — skipping Daily Ops/cleaning data export+publish. See cloudflare/staff-ops/ACCESS_SETUP.md. The kiraku-staff-ops Worker stays deployed but its R2 bucket stays empty (safe 404/empty-state) until this gate is opened."
+          echo "::warning::STAFF_OPS_AUTH_CONFIRMED repository variable is not '1' — skipping Daily Ops/cleaning data export+publish. See cloudflare/staff-ops/AUTH_SETUP.md. The kiraku-staff-ops Worker stays deployed but its R2 bucket stays empty (safe 404/empty-state) until this gate is opened."
 
       - name: Ensure staff-ops R2 bucket exists
-        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -137,7 +138,7 @@ jobs:
           fi
 
       - name: Publish Daily Ops data to R2
-        if: ${{ vars.STAFF_OPS_ACCESS_CONFIRMED == '1' }}
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -2,27 +2,39 @@ name = "kiraku-staff-ops"
 main = "src/worker.js"
 compatibility_date = "2026-07-08"
 
-# HTML/JS/CSS は Static Assets から配信（staff-ops データは同梱しない）
+# HTML/JS/CSS は Static Assets から配信（staff-ops データは同梱しない）。
+# run_worker_first = true が無いと、index.html等の実ファイルに一致するリクエストは
+# Workerのfetch()を経由せず直接配信されてしまい、認証ミドルウェアが丸ごとバイパスされる
+# （2026-08-30 ローカル検証で実際に発生・発見: GET / が認証無しで200を返した）。
+# 全リクエストを必ずWorker側で先に判定させるため、これは必須設定。
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = true
+
+# 平文で置いてよい値のみ（パスワード等の機密は絶対にここへ書かない — Worker Secretで管理）。
+# AUTH_VERSION を変更すると、発行済みの全session cookieが即座に無効化される
+# (STAFF_OPS_PASSWORDをローテーションした際に一斉ログアウトさせる手段)。
+[vars]
+AUTH_VERSION = "1"
 
 # staff_ops_snapshot.json（到着/出発/連泊/清掃データ）は R2 の latest/ から読むだけ。
-# Beds24 APIはここでは呼ばない。データパイプラインは別プロセスが15分毎に公開する。
+# Beds24 APIはここでは呼ばない。データパイプラインは別プロセスが15分毎に担う。
 [[r2_buckets]]
 binding = "OPS_DATA"
 bucket_name = "kiraku-staff-ops-data"
 
 # 清掃指示のroom_number/notes上書き（POST /api/cleaning/override）専用のKV。
-# 必須機能（任意機能ではない）。real KV namespace idはCIで自動払い出す
-# （deploy-staff-worker.yml「Ensure KV namespace exists」ステップ）ため、
-# このplaceholderのままにしておくこと。CIには現状 Workers KV Storage: Edit
-# 権限が無くこのステップ自体が失敗するため、KV権限が追加されるまでは
-# Worker全体のdeployが通らない（worker.js自体はbinding未解決でも安全に
-# 動作するよう書かれているが、wrangler deployはbinding先IDを解決できないと
-# 失敗するため、実質的にはWorkers Scripts:Edit権限の欠如と合わせて解消が必要）。
-# 状況は cloudflare/staff-ops/ACCESS_SETUP.md 参照。
+# 同じネームスペースをログイン失敗回数のレート制限にも流用する（login_fail:<ip>キー）。
+# real KV namespace idはCIで自動払い出す（deploy-staff-worker.yml
+# 「Ensure KV namespace exists」ステップ）ため、このplaceholderのままにしておくこと。
 [[kv_namespaces]]
 binding = "CLEANING_OVERRIDES"
 id = "REPLACE_WITH_REAL_KV_ID"
+
+# 必須の Worker Secrets（wrangler.tomlにもGitにも絶対に書かない。
+# `wrangler secret put STAFF_OPS_PASSWORD` / `wrangler secret put STAFF_OPS_SESSION_SECRET`
+# で設定する。詳細は cloudflare/staff-ops/AUTH_SETUP.md 参照）:
+#   STAFF_OPS_PASSWORD        — スタッフ共通ログインパスワード
+#   STAFF_OPS_SESSION_SECRET  — session cookie署名用HMAC鍵（十分に長いランダム文字列）

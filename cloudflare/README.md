@@ -19,7 +19,7 @@ cloudflare/
     wrangler.toml         # kiraku-staff-ops / 別R2バケット(kiraku-staff-ops-data) / 別KVネームスペース
     src/worker.js         # Daily Ops / 清掃指示書 / 宿泊者名簿印刷（bi-webとは完全に別デプロイ・別データ境界）
     public/               # Daily Ops画面・印刷専用ページ・清掃スマホ画面（財務情報は一切含まない）
-    ACCESS_SETUP.md        # Cloudflare Access（Zero Trust）手動設定手順（本リポジトリでは自動化できない）
+    AUTH_SETUP.md          # スタッフ共通パスワード認証のSecret設定手順（Cloudflare Access不採用）
   scripts/publish_bi.py   # ローカル公開ヘルパー（= yuge-finance publish-bi）
   wrangler.toml.example   # （旧Pages用。Workers版は bi-web/wrangler.toml が正）
 ```

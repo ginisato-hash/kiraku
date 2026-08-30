@@ -195,3 +195,79 @@ body {
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
 }
+
+/* --- ログイン画面（70歳超スタッフ含む現場従業員向け: 大きな文字・単純な1カラム） --- */
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+.login-card h1 {
+  font-size: 1.6rem;
+  margin: 0 0 var(--space-5) 0;
+  letter-spacing: 0.02em;
+}
+
+.login-card label {
+  display: block;
+  text-align: left;
+  font-size: 1.05rem;
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+}
+
+.login-card input[type="password"] {
+  width: 100%;
+  font-size: 1.3rem;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  margin-bottom: var(--space-5);
+}
+
+.login-card button {
+  width: 100%;
+  font-size: 1.25rem;
+  font-weight: 700;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--blue);
+  color: #06202f;
+  cursor: pointer;
+}
+
+.login-card button:active { opacity: 0.85; }
+
+.login-error {
+  min-height: 1.4em;
+  margin-top: var(--space-4);
+  color: var(--red);
+  font-size: 1rem;
+}
+
+.logout-link {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}

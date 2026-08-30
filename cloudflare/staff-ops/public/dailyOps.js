@@ -203,6 +203,13 @@ function attachListeners() {
   document.getElementById("show-cleaning-btn").addEventListener("click", () => {
     loadCleaningPreview();
   });
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      window.location.href = "/login";
+    }
+  });
 }
 
 async function main() {
