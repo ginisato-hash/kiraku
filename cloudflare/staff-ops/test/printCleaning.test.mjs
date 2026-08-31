@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   renderCleaningSheetTemplate, statusLabel, otaPrintShortName, cleanValue,
   guestNameFor, nightProgressFor, arrivalTimeFor, inMark, outMark, countUnassigned,
+  COLUMN_WIDTHS_MM,
 } from "../public/cleaningSheetTemplate.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
 
@@ -129,6 +130,27 @@ await check("cleaning.html declares @page size A4 portrait margin 7mm", async ()
 await check("cleaning.html declares the exact .cleaning-sheet dimensions (196mm x 283mm)", async () => {
   assert.ok(/\.cleaning-sheet\s*{[^}]*width:\s*196mm/s.test(html));
   assert.ok(/\.cleaning-sheet\s*{[^}]*height:\s*283mm/s.test(html));
+});
+
+// ---------------- RoomNo header fit + 備考・通信 inner-border removal ----------------
+
+await check("COLUMN_WIDTHS_MM still sums to 196mm (A4 one-page layout unchanged) with the RoomNo column widened", async () => {
+  assert.equal(COLUMN_WIDTHS_MM.reduce((a, b) => a + b, 0), 196);
+  assert.equal(COLUMN_WIDTHS_MM[0], 15, "RoomNo column must be wide enough for the header label to fit");
+  assert.equal(COLUMN_WIDTHS_MM[9], 54, "the 2mm added to RoomNo comes out of 備考・通信, which stays the widest column");
+});
+
+await check("cleaning.html header cells force white-space: nowrap (RoomNo must never wrap/clip)", async () => {
+  assert.ok(/\.cs-main-table th\s*{[^}]*white-space:\s*nowrap/s.test(html));
+});
+
+await check("cleaning.html's .cs-c-notes no longer overrides display away from table-cell (this broke the cell's row-height fill and looked like a stray inner border)", async () => {
+  const m = html.match(/\.cs-c-notes\s*{([^}]*)}/s);
+  assert.ok(m, "expected a .cs-c-notes rule");
+  const body = m[1];
+  assert.ok(!/display\s*:/.test(body), "must not set display on .cs-c-notes (needs the UA's table-cell)");
+  assert.ok(!/-webkit-line-clamp/.test(body));
+  assert.ok(!/-webkit-box-orient/.test(body));
 });
 
 console.log(`\n${passed} print cleaning checks passed`);

@@ -153,7 +153,10 @@ export function roomsByCanonicalOrder(rooms) {
 
 // mm単位。相対比率(客室名が広い/IN・OUTが狭い/備考・通信が最も広い)を必ず維持
 // すること。合計196mm(.cleaning-sheetの幅と一致)。
-export const COLUMN_WIDTHS_MM = [13, 38, 9, 11, 18, 8, 8, 15, 20, 56];
+// RoomNo列は見出し「RoomNo」が2.8mmフォントで確実に収まる最小幅として15mm
+// (13mmでは実測約1.1mm不足し見出しが枠内で見切れていた)。その2mm分は
+// 備考・通信列(56mm)から差し引いており、備考欄の実用上の広さには影響しない。
+export const COLUMN_WIDTHS_MM = [15, 38, 9, 11, 18, 8, 8, 15, 20, 54];
 export const COLUMN_LABELS = [
   "RoomNo", "お客様名", "人数", "泊数", "清掃区分", "IN", "OUT", "到着", "予約元", "備考・通信",
 ];
