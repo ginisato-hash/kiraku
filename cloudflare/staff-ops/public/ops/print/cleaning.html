@@ -54,9 +54,9 @@
       margin-bottom: 2mm;
     }
 
-    .cs-header-date { font-size: 4mm; }
-    .cs-header-title { font-size: 5mm; font-weight: 700; }
-    .cs-header-property { font-size: 4mm; font-weight: 700; }
+    .cs-header-date { font-size: 5.3mm; font-weight: 700; }
+    .cs-header-title { font-size: 5.3mm; font-weight: 700; }
+    .cs-header-property { font-size: 4.2mm; font-weight: 700; }
 
     .cs-unassigned-warning {
       font-size: 3.2mm;
@@ -72,18 +72,25 @@
 
     .cs-main-table th {
       background: #f3f3f3;
-      font-size: 2.8mm;
-      font-weight: 600;
+      font-size: 2.9mm;
+      font-weight: 700;
       padding: 0.8mm;
       text-align: center;
       vertical-align: middle;
       white-space: nowrap;
     }
 
+    /* RoomNoヘッダだけ他より文字が長く(6文字)、11px相当(2.9mm)/700だと列幅
+       15mmに収まりきらず再び見切れるため、ここだけ10px相当まで落とす。 */
+    .cs-h-room {
+      font-size: 2.6mm;
+    }
+
     .cs-main-table tbody tr { height: 10.5mm; }
 
     .cs-main-table td {
-      font-size: 2.8mm;
+      font-size: 3.4mm;
+      font-weight: 700;
       padding: 1mm 1.2mm;
       vertical-align: middle;
       overflow: hidden;
@@ -102,11 +109,39 @@
       text-align: center;
     }
 
+    /* お客様名：既定13px相当(3.4mm、tdの基本値をそのまま使用)/700。長い氏名は
+       guestNameSizeClass()がcs-guest-12/11を付与し段階的に縮小する。折返しで
+       行高が崩れないようnowrap+省略(はみ出し部分は既存のtd overflow:hiddenで
+       非表示)。 */
+    .cs-c-guest {
+      white-space: nowrap;
+    }
+    .cs-guest-12 { font-size: 3.2mm; }
+    .cs-guest-11 { font-size: 2.9mm; }
+
+    .cs-c-in, .cs-c-out {
+      font-size: 4mm;
+    }
+
+    .cs-c-ota {
+      font-size: 3.2mm;
+      font-weight: 600;
+    }
+
+    /* 空室行の「空室」は他ステータス(連泊/入替/IN/OUT)ほど目立たせない。 */
+    .cs-status-vacant {
+      font-size: 3.2mm;
+      font-weight: 600;
+    }
+
     /* 備考・通信セル：外枠(表全体の罫線)のみを残した無地の記入欄。かつて2行clamp用に
        display:-webkit-box を指定していたが、これは<td>に必須のdisplay:table-cellを
        上書きしてしまい、セルが行の高さいっぱいに広がらず内側に余計な罫線があるように
        見える不具合の原因だった。単純にoverflow:hiddenのみで十分。 */
     .cs-c-notes {
+      font-size: 3.2mm;
+      font-weight: 600;
+      line-height: 1.25;
       overflow: hidden;
     }
 
@@ -119,7 +154,7 @@
     }
 
     .cs-footer-title {
-      font-size: 3.4mm;
+      font-size: 3.6mm;
       font-weight: 700;
       margin-bottom: 1mm;
     }

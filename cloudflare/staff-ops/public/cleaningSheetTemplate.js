@@ -160,23 +160,60 @@ export const COLUMN_WIDTHS_MM = [15, 38, 9, 11, 18, 8, 8, 15, 20, 54];
 export const COLUMN_LABELS = [
   "RoomNo", "お客様名", "人数", "泊数", "清掃区分", "IN", "OUT", "到着", "予約元", "備考・通信",
 ];
+// ヘッダ<th>とボディ<td>で同じ列に同じキーのclassを付けるための対応表
+// (cs-h-room/cs-c-room のように接頭辞だけ変える)。CSS側がRoomNoヘッダだけ
+// 個別にfont-sizeを調整できるようにするための最小限のフック。
+const COLUMN_KEYS = ["room", "guest", "count", "nights", "status", "in", "out", "arrival", "ota", "notes"];
 
 function buildColgroup() {
   return `<colgroup>${COLUMN_WIDTHS_MM.map((w) => `<col style="width:${w}mm;">`).join("")}</colgroup>`;
 }
 
 function buildHeaderRow() {
-  return `<tr>${COLUMN_LABELS.map((label) => `<th>${escapeHtml(label)}</th>`).join("")}</tr>`;
+  return `<tr>${COLUMN_LABELS.map((label, i) => `<th class="cs-h-${COLUMN_KEYS[i]}">${escapeHtml(label)}</th>`).join("")}</tr>`;
+}
+
+// 氏名の「見た目の幅」を全角=2/半角=1で概算し、raw文字数だけでは区別できない
+// 日本語(全角)と英語(半角)の実際の表示幅の違いを反映する。通常の日本人氏名
+// (例:「山田 太郎」)は全角中心のため幅が大きく見えても実文字数は少なく、
+// 段階縮小の対象にならない。長い欧文氏名(例:"Martin Doherty")は半角文字が
+// 続くぶん幅が伸び、必要な場合だけ縮小される。
+const FULL_WIDTH_RANGES = [
+  [0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3],
+  [0xf900, 0xfaff], [0xff00, 0xff60], [0xffe0, 0xffe6],
+];
+function isFullWidthChar(codePoint) {
+  return FULL_WIDTH_RANGES.some(([lo, hi]) => codePoint >= lo && codePoint <= hi);
+}
+export function effectiveTextWidth(str) {
+  let width = 0;
+  for (const ch of String(str)) {
+    width += isFullWidthChar(ch.codePointAt(0)) ? 2 : 1;
+  }
+  return width;
+}
+
+// お客様名セルのfont-sizeクラスを返すpure helper。枠(38mm列)に収まる範囲で
+// 既定は13px相当(cs-guest-13)、実効幅が長い氏名だけ段階的に12px→11px相当へ
+// 縮小する。しきい値(10/16)は「半角のみの氏名ならlength<=10は13px」という
+// 直感的な基準をeffectiveTextWidthに適用したもの。
+export function guestNameSizeClass(name) {
+  const width = effectiveTextWidth(cleanValue(name));
+  if (width <= 10) return "cs-guest-13";
+  if (width <= 16) return "cs-guest-12";
+  return "cs-guest-11";
 }
 
 function buildRoomRow(room) {
   const instruction = cleanValue(room.effectiveInstruction);
+  const guestName = guestNameFor(room);
+  const isVacant = room.status === "VACANT" || room.status === "CANCELLED";
   return `<tr data-room-number="${escapeHtml(room.room_number)}">
     <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
-    <td class="cs-c-guest">${escapeHtml(guestNameFor(room))}</td>
+    <td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
     <td class="cs-c-count">${escapeHtml(guestCountFor(room))}</td>
     <td class="cs-c-nights">${escapeHtml(nightProgressFor(room))}</td>
-    <td class="cs-c-status">${escapeHtml(statusLabel(room.status))}</td>
+    <td class="cs-c-status${isVacant ? " cs-status-vacant" : ""}">${escapeHtml(statusLabel(room.status))}</td>
     <td class="cs-c-in">${inMark(room)}</td>
     <td class="cs-c-out">${outMark(room)}</td>
     <td class="cs-c-arrival">${escapeHtml(arrivalTimeFor(room))}</td>

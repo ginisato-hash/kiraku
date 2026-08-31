@@ -8,7 +8,7 @@ import path from "node:path";
 import {
   renderCleaningSheetTemplate, statusLabel, otaPrintShortName, cleanValue,
   guestNameFor, nightProgressFor, arrivalTimeFor, inMark, outMark, countUnassigned,
-  COLUMN_WIDTHS_MM,
+  COLUMN_WIDTHS_MM, effectiveTextWidth, guestNameSizeClass,
 } from "../public/cleaningSheetTemplate.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
 
@@ -151,6 +151,134 @@ await check("cleaning.html's .cs-c-notes no longer overrides display away from t
   assert.ok(!/display\s*:/.test(body), "must not set display on .cs-c-notes (needs the UA's table-cell)");
   assert.ok(!/-webkit-line-clamp/.test(body));
   assert.ok(!/-webkit-box-orient/.test(body));
+});
+
+// ---------------- 現場スタッフからの可読性フィードバック対応 ----------------
+// CSSの具体的なmm/px値は今後も微調整され得るため、ここでは「太さの下限」「基準サイズより
+// 明確に大きいこと」「関係性(guest-12/11がguest-13より大きくならない等)」だけを検証し、
+// 特定の数値そのものには依存しない。
+
+// selectorはCSS上で単独指定でも複合セレクタ("a, b, c { ... }")の一部でもよい。
+// 一致する規則ブロックすべてをソース順に連結して返す — 同一ファイル内・同程度の
+// 詳細度なら後勝ちのカスケードと同じ順序になるので、weightOf/sizeMmOfは最後に
+// 出現した値を採用する。
+const htmlNoComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
+function cssRule(selector) {
+  const blockRe = /([^{}]+){([^}]*)}/gs;
+  let merged = "";
+  let m;
+  while ((m = blockRe.exec(htmlNoComments))) {
+    const selectors = m[1].split(",").map((s) => s.trim());
+    if (selectors.includes(selector)) merged += m[2] + ";";
+  }
+  return merged || null;
+}
+function weightOf(ruleBody) {
+  if (!ruleBody) return null;
+  const matches = [...ruleBody.matchAll(/font-weight:\s*(\d+)/g)];
+  return matches.length ? Number(matches[matches.length - 1][1]) : null;
+}
+function sizeMmOf(ruleBody) {
+  if (!ruleBody) return null;
+  const matches = [...ruleBody.matchAll(/font-size:\s*([\d.]+)mm/g)];
+  return matches.length ? Number(matches[matches.length - 1][1]) : null;
+}
+
+await check("body text (人数/泊数/清掃区分/到着 baseline) is bold: .cs-main-table td declares font-weight >= 700", async () => {
+  const w = weightOf(cssRule(".cs-main-table td"));
+  assert.ok(w !== null && w >= 700, `expected .cs-main-table td font-weight >= 700, got ${w}`);
+});
+
+await check("column headers are bold: .cs-main-table th declares font-weight >= 700", async () => {
+  const w = weightOf(cssRule(".cs-main-table th"));
+  assert.ok(w !== null && w >= 700, `expected header font-weight >= 700, got ${w}`);
+});
+
+await check("RoomNo cell (.cs-c-room) is bold and clearly larger than the base body text size", async () => {
+  const roomWeight = weightOf(cssRule(".cs-c-room"));
+  const roomSize = sizeMmOf(cssRule(".cs-c-room"));
+  const baseSize = sizeMmOf(cssRule(".cs-main-table td"));
+  assert.ok(roomWeight >= 700, `expected .cs-c-room font-weight >= 700, got ${roomWeight}`);
+  assert.ok(roomSize >= baseSize, "RoomNo should be at least as large as the general body text");
+});
+
+await check("IN/OUT checkmarks (.cs-c-in, .cs-c-out) are sized at least as large as the base body text and inherit bold", async () => {
+  for (const cls of [".cs-c-in", ".cs-c-out"]) {
+    const size = sizeMmOf(cssRule(cls));
+    const baseSize = sizeMmOf(cssRule(".cs-main-table td"));
+    const weight = weightOf(cssRule(cls));
+    assert.ok(size >= baseSize, `${cls} must be at least as large as base body text (target: as large as RoomNo)`);
+    // must not explicitly downgrade weight below the inherited bold base
+    assert.ok(weight === null || weight >= 700);
+  }
+});
+
+await check("備考・通信 (.cs-c-notes) and 予約元 (.cs-c-ota) are at least semi-bold (>=600) per spec, and notes keeps a readable line-height", async () => {
+  const notesBody = cssRule(".cs-c-notes");
+  const otaBody = cssRule(".cs-c-ota");
+  assert.ok(weightOf(notesBody) >= 600, "備考・通信 must be font-weight >= 600");
+  assert.ok(weightOf(otaBody) >= 600, "予約元 must be font-weight >= 600");
+  assert.ok(/line-height/.test(notesBody), "備考・通信 should set an explicit line-height for legibility");
+});
+
+await check("空室 (.cs-status-vacant) stays legible (>=600) but is not larger/bolder than an occupied row's status text", async () => {
+  const vacantBody = cssRule(".cs-status-vacant");
+  const vacantWeight = weightOf(vacantBody);
+  const vacantSize = sizeMmOf(vacantBody);
+  const occupiedSize = sizeMmOf(cssRule(".cs-main-table td")); // status td falls back to this when not vacant
+  assert.ok(vacantWeight >= 600);
+  assert.ok(vacantSize <= occupiedSize, "空室 must not be emphasized more than an occupied room's status");
+});
+
+await check("guest name size classes step down (13 > 12 > 11) and never drop below semi-bold weight", async () => {
+  const base = sizeMmOf(cssRule(".cs-main-table td")); // default (cs-guest-13 tier, no override class)
+  const size12 = sizeMmOf(cssRule(".cs-guest-12"));
+  const size11 = sizeMmOf(cssRule(".cs-guest-11"));
+  assert.ok(base > size12 && size12 > size11, "each long-name tier must be strictly smaller than the previous one");
+  // neither override tier may set a weight below 600 (they should inherit the bold base, i.e. not touch weight at all, or keep it high)
+  for (const cls of [".cs-guest-12", ".cs-guest-11"]) {
+    const w = weightOf(cssRule(cls));
+    assert.ok(w === null || w >= 600, `${cls} must not weaken guest-name weight below 600`);
+  }
+});
+
+await check("page header (date / title) and 全体通信・引継ぎ heading are bold and clearly larger than before", async () => {
+  const dateWeight = weightOf(cssRule(".cs-header-date"));
+  const titleWeight = weightOf(cssRule(".cs-header-title"));
+  const footerTitleWeight = weightOf(cssRule(".cs-footer-title"));
+  assert.ok(dateWeight >= 700 && titleWeight >= 700 && footerTitleWeight >= 700);
+});
+
+// ---------------- effectiveTextWidth / guestNameSizeClass (long-name handling) ----------------
+
+await check("effectiveTextWidth counts full-width (Japanese) characters as 2 and half-width (Latin) as 1", async () => {
+  assert.equal(effectiveTextWidth("山田太郎"), 8); // 4 full-width chars
+  assert.equal(effectiveTextWidth("Doherty"), 7); // 7 half-width chars
+  assert.equal(effectiveTextWidth(""), 0);
+});
+
+await check("guestNameSizeClass keeps ordinary Japanese names (e.g. 山田 太郎) at the default 13px tier — never shrunk just for being a normal name", async () => {
+  for (const name of ["山田 太郎", "佐藤 花子", "高橋 次郎", "田中 一美"]) {
+    assert.equal(guestNameSizeClass(name), "cs-guest-13", `${name} should not be downsized`);
+  }
+});
+
+await check("guestNameSizeClass downsizes a long Latin name (Martin Doherty) without crudely using raw character count", async () => {
+  // "Martin Doherty" is 14 half-width chars; a naive same-length Japanese name
+  // (e.g. 7 full-width chars = effectiveTextWidth 14) would land in the same
+  // tier, but a genuinely short Japanese name of the same *character count*
+  // as fewer chars would not — the classification is width-based, not
+  // language-based or raw-length-based.
+  assert.equal(guestNameSizeClass("Martin Doherty"), "cs-guest-12");
+  assert.equal(guestNameSizeClass("Alexander Christopherson"), "cs-guest-11");
+});
+
+await check("buildRoomRow output: the guest name cell carries the guestNameSizeClass result as an extra CSS class", async () => {
+  const room401 = rooms.find((r) => r.room_number === "401");
+  const tampered = { ...room401, arriving_guest: { ...room401.arriving_guest, guest_name: "Martin Doherty" } };
+  const withLongName = rooms.map((r) => (r.room_number === "401" ? tampered : r));
+  const out = renderCleaningSheetTemplate(withLongName, "2026-08-30");
+  assert.ok(out.includes('class="cs-c-guest cs-guest-12"'), "expected the downsized class to be applied in the rendered row");
 });
 
 console.log(`\n${passed} print cleaning checks passed`);
