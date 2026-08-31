@@ -146,6 +146,7 @@ async function loadAndRender(date) {
     document.getElementById("departures-section").innerHTML = "";
     document.getElementById("stayovers-section").innerHTML = "";
     setPrintLinks(date, false);
+    loadCleaningStaffView();
     return;
   }
 
@@ -158,12 +159,17 @@ async function loadAndRender(date) {
   document.getElementById("stayovers-section").innerHTML =
     renderBookingSection("連泊", vm.stayovers, "連泊はありません");
   setPrintLinks(date, vm.hasArrivals);
+  loadCleaningStaffView();
 
   const freshness = formatFreshness(null, Date.now());
   document.getElementById("header-meta").textContent = freshness.text || "";
   document.getElementById("header-meta").classList.toggle("is-stale", freshness.stale);
 }
 
+// 編集可能なStaff cleaning list（override保存/reset）はこの画面上のみに存在する
+// 唯一の導線であるため、日付が変わるたびloadAndRender()から必ず自動描画する
+// （"清掃指示書を表示"ボタンは/cleaning/todayへのページ遷移専任になったため、
+// クリック待ちにするとoverride編集機能自体に到達できなくなる）。
 function loadCleaningStaffView() {
   const section = document.getElementById("cleaning-preview-section");
   if (!cleaningVisualAllowed()) {
@@ -186,7 +192,7 @@ function attachListeners() {
     loadAndRender(todayJst());
   });
   document.getElementById("show-cleaning-btn").addEventListener("click", () => {
-    loadCleaningStaffView();
+    window.location.href = `/cleaning/today?date=${encodeURIComponent(currentDate)}`;
   });
   document.getElementById("logout-btn").addEventListener("click", async () => {
     try {
