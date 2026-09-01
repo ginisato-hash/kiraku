@@ -291,8 +291,10 @@ function buildRoomRow(room) {
     <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
     <td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
     <td class="cs-c-count">
-      <div class="cs-total-guests">${escapeHtml(guestCountFor(room))}</div>
-      <div class="cs-guest-breakdown">${escapeHtml(guestBreakdownFor(room))}</div>
+      <div class="cs-guest-count-wrap">
+        <div class="cs-total-guests">${escapeHtml(guestCountFor(room))}</div>
+        <div class="cs-guest-breakdown">${escapeHtml(guestBreakdownFor(room))}</div>
+      </div>
     </td>
     <td class="cs-c-nights">${escapeHtml(nightProgressFor(room))}</td>
     <td class="cs-c-status">${escapeHtml(printStatusLabel(room.status))}</td>

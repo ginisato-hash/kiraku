@@ -81,8 +81,11 @@
     }
 
     /* RoomNoヘッダは大きくしなくてよい(仕様上の指定)。見切れないことを優先し、
-       他より文字が長い(6文字)ため個別に小さくする。 */
-    .cs-h-room {
+       他より文字が長い(6文字)ため個別に小さくする。
+       th.cs-h-room(specificity 0,1,1)で.cs-main-table th(同じく0,1,1)と揃え、
+       ソース順で後勝ちさせる — 単なる.cs-h-room(0,1,0)だと基本ルールに負けて
+       font-sizeが一切反映されない実害があった(2026-09発覚)。 */
+    th.cs-h-room {
       font-size: 2.6mm;
     }
 
@@ -102,14 +105,26 @@
       overflow: hidden;
     }
 
-    /* RoomNo: 清掃スタッフが最初に見る情報。枠内で上下に収まる最大付近まで
-       大型化する(約22-23px相当)。 */
-    .cs-c-room {
+    /* RoomNo/人数総人数/泊数: 現場から「枠ギリギリまで」の再指摘を受け、この3項目
+       だけ共通tdのpadding(1mm 1.2mm)を上書きして実際に使える面積を最大化する。
+       tdへの直接display指定は禁止(display:table-cellを壊して行高が崩れる既知の
+       不具合 — cs-c-notesの過去の修正参照)なので、中央寄せはvertical-align:middle
+       +line-heightの調整のみで行う。
+       td.cs-c-XXX(specificity 0,1,1)で.cs-main-table td(同じく0,1,1)と揃え、
+       ソース順で後勝ちさせる — 単なる.cs-c-XXX(0,1,0)だと基本ルールのpadding/
+       font-sizeに一切勝てず、指定した拡大が完全に無効化されていた
+       (2026-09、実ブラウザのgetComputedStyleで発覚。CSS文字列の存在チェックだけの
+       regression testはこの不具合を検出できなかった)。 */
+    td.cs-c-room, td.cs-c-count, td.cs-c-nights {
+      padding: 0.1mm 0.2mm;
+    }
+
+    /* RoomNo: 清掃スタッフが最初に見る情報。16mm×10.5mmセル内で上下・左右に
+       切れない最大サイズ。401/607等の3桁がすべて完全表示されること。 */
+    td.cs-c-room {
       font-weight: 800;
-      font-size: 6mm;
-      line-height: 1;
-      padding-left: 0.5mm;
-      padding-right: 0.5mm;
+      font-size: 6.6mm;
+      line-height: 0.95;
       text-align: center;
     }
 
@@ -126,34 +141,51 @@
     .cs-c-guest {
       white-space: nowrap;
     }
-    .cs-guest-12 { font-size: 3.2mm; }
-    .cs-guest-11 { font-size: 2.9mm; }
+    td.cs-guest-12 { font-size: 3.2mm; }
+    td.cs-guest-11 { font-size: 2.9mm; }
 
-    /* 人数：上段=総人数(最大サイズ)、下段=大人/子供内訳。 */
+    /* 人数：上段=総人数(この帳票内で最大級の文字)、下段=大人/子供内訳(従属・
+       コンパクトでよい)。cs-guest-count-wrapはtd自体ではなく内側のdivなので、
+       display:flexを使ってもtdのdisplay:table-cellは壊れない。 */
+    .cs-guest-count-wrap {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
     .cs-total-guests {
-      font-size: 5.5mm;
+      font-size: 7.5mm;
       font-weight: 800;
-      line-height: 1;
+      line-height: 0.78;
+      margin: 0;
+      padding: 0;
     }
     .cs-guest-breakdown {
-      font-size: 2.8mm;
+      font-size: 2.5mm;
       font-weight: 700;
-      line-height: 1.05;
+      line-height: 1;
+      margin: 0;
+      padding: 0;
       white-space: nowrap;
     }
 
-    .cs-c-nights {
-      font-size: 5mm;
+    /* 泊数: 14mm幅のセルを活かし、RoomNoに準ずる大きさまで拡大。 */
+    td.cs-c-nights {
+      font-size: 6.1mm;
       font-weight: 800;
-      line-height: 1;
+      line-height: 0.95;
+      text-align: center;
+      white-space: nowrap;
     }
 
-    .cs-c-status {
+    td.cs-c-status {
       font-size: 4.5mm;
       font-weight: 800;
     }
 
-    .cs-c-ota {
+    td.cs-c-ota {
       font-size: 3.2mm;
       font-weight: 600;
     }

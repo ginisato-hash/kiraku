@@ -273,13 +273,24 @@ await check("cleaning.html declares bold styling for the onsite label/amount (�
 // 特定の数値そのものには依存しない。
 
 const htmlNoComments = html.replace(/\/\*[\s\S]*?\*\//g, "");
+
+// selector文字列は完全一致ではなく「末尾が.className」で照合する — 実際の規則が
+// "td.cs-c-room"のようにtype selectorを前置していても、クエリ".cs-c-room"で
+// 見つけられるようにするため(このファイル自体の過去のバグ: 単なる.cs-c-room
+// (specificity 0,1,0)は基本ルール.cs-main-table td(0,1,1)に実ブラウザの
+// カスケードで負けており、宣言したfont-sizeが完全に無効化されていた。
+// 2026-09、getComputedStyleでの実測により発覚。CSS文字列の存在チェックだけの
+// このテストは当時それを検出できなかった — 以後は下のspecificity回帰テストで防ぐ)。
+function selectorMatchesClass(selectorToken, className) {
+  return selectorToken === className || selectorToken.endsWith(`.${className.slice(1)}`);
+}
 function cssRule(selector) {
   const blockRe = /([^{}]+){([^}]*)}/gs;
   let merged = "";
   let m;
   while ((m = blockRe.exec(htmlNoComments))) {
     const selectors = m[1].split(",").map((s) => s.trim());
-    if (selectors.includes(selector)) merged += m[2] + ";";
+    if (selectors.some((s) => selectorMatchesClass(s, selector))) merged += m[2] + ";";
   }
   return merged || null;
 }
@@ -294,6 +305,50 @@ function sizeMmOf(ruleBody) {
   return matches.length ? Number(matches[matches.length - 1][1]) : null;
 }
 
+// 簡易CSS specificity計算(id, class/attr/pseudo-class, type selectorの3タプル)。
+// combinator(space/>)は無視して個々のcompound selectorのトークンだけ数える —
+// このファイルで実際に使われている単純なセレクタ(class/type/クラス複合)には十分。
+function specificityOf(selectorToken) {
+  const ids = (selectorToken.match(/#[\w-]+/g) || []).length;
+  const classes = (selectorToken.match(/\.[\w-]+/g) || []).length;
+  const types = (selectorToken.match(/(^|[\s>+~])[a-z]+\b/gi) || []).length;
+  return [ids, classes, types];
+}
+function cmpSpecificity(a, b) {
+  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return a[i] - b[i]; }
+  return 0;
+}
+// selectorのうち、実際に.cs-main-table tdをspecificityで上回る(あるいは同点で
+// ソース順が後にあるため有効に上書きできる)トークンを探す。
+function findOverridingSelectorFor(className) {
+  const baseSpec = specificityOf(".cs-main-table td");
+  const blockRe = /([^{}]+){([^}]*)}/gs;
+  let m;
+  let winner = null; // 最後に見つかった、baseと同点以上のtoken
+  while ((m = blockRe.exec(htmlNoComments))) {
+    const tokens = m[1].split(",").map((s) => s.trim());
+    for (const t of tokens) {
+      if (selectorMatchesClass(t, className) && cmpSpecificity(specificityOf(t), baseSpec) >= 0) {
+        winner = t; // 後方のマッチほど実際に勝つ(同点はソース順で後勝ち)
+      }
+    }
+  }
+  return winner;
+}
+
+await check("regression: every per-column override that sets font-size/padding on a <td> has enough CSS specificity to actually beat .cs-main-table td in the real cascade", async () => {
+  // 2026-09に発覚した実害の再発防止: 単なる.cs-c-room(0,1,0)のような宣言は、
+  // .cs-main-table td(0,1,1)にspecificityで負け、ブラウザ上で完全に無視される。
+  // td.cs-c-room(0,1,1)のように揃えてソース順で後勝ちさせる必要がある。
+  for (const cls of [".cs-c-room", ".cs-c-nights", ".cs-c-status", ".cs-c-ota", ".cs-guest-12", ".cs-guest-11"]) {
+    const winner = findOverridingSelectorFor(cls);
+    assert.ok(winner, `${cls}: no selector variant found that can beat .cs-main-table td's specificity (0,1,1) — the declared font-size/weight would be silently ignored by the browser`);
+  }
+  // th側も同様(.cs-main-table th vs .cs-h-room)
+  const thWinner = findOverridingSelectorFor(".cs-h-room");
+  assert.ok(thWinner, ".cs-h-room must beat .cs-main-table th's specificity");
+});
+
 await check("body text baseline is bold: .cs-main-table td declares font-weight >= 700", async () => {
   const w = weightOf(cssRule(".cs-main-table td"));
   assert.ok(w !== null && w >= 700, `expected .cs-main-table td font-weight >= 700, got ${w}`);
@@ -304,29 +359,44 @@ await check("column headers are bold: .cs-main-table th declares font-weight >= 
   assert.ok(w !== null && w >= 700, `expected header font-weight >= 700, got ${w}`);
 });
 
-await check("RoomNo (.cs-c-room) is very bold (>=800) and clearly larger than the base body text size", async () => {
-  const roomWeight = weightOf(cssRule(".cs-c-room"));
-  const roomSize = sizeMmOf(cssRule(".cs-c-room"));
+await check("RoomNo (.cs-c-room) meets the hard floor: font-size >= 6mm, font-weight >= 800, padding <= 0.3mm (現場から2回目の指摘 — 数値で固定)", async () => {
+  const body = cssRule(".cs-c-room");
+  const roomWeight = weightOf(body);
+  const roomSize = sizeMmOf(body);
   const baseSize = sizeMmOf(cssRule(".cs-main-table td"));
   assert.ok(roomWeight >= 800, `expected .cs-c-room font-weight >= 800, got ${roomWeight}`);
+  assert.ok(roomSize >= 6, `expected .cs-c-room font-size >= 6mm, got ${roomSize}mm`);
   assert.ok(roomSize > baseSize, "RoomNo should be clearly larger than the general body text");
+  const paddingBody = cssRule(".cs-c-count"); // shared padding rule also targets .cs-c-room/.cs-c-nights
+  assert.ok(/padding:\s*0\.[0-3]mm/.test(cssRule(".cs-c-room")) || /padding:\s*0\.[0-3]mm/.test(body),
+    "RoomNo's own padding override must be present and <= 0.3mm");
 });
 
-await check("人数上段(.cs-total-guests)は非常に大きく(>=800)、下段(.cs-guest-breakdown)より明確に大きい", async () => {
+await check("人数上段(.cs-total-guests)は現場再指摘に基づく数値フロア: font-size >= 6.5mm、font-weight >= 800、下段より明確に大きい", async () => {
   const totalWeight = weightOf(cssRule(".cs-total-guests"));
   const totalSize = sizeMmOf(cssRule(".cs-total-guests"));
   const breakdownSize = sizeMmOf(cssRule(".cs-guest-breakdown"));
   assert.ok(totalWeight >= 800);
+  assert.ok(totalSize >= 6.5, `expected .cs-total-guests font-size >= 6.5mm, got ${totalSize}mm`);
   assert.ok(totalSize > breakdownSize);
 });
 
-await check("泊数(.cs-c-nights)とステータス(.cs-c-status)は太く(>=700)拡大されている", async () => {
-  const nightsWeight = weightOf(cssRule(".cs-c-nights"));
-  const nightsSize = sizeMmOf(cssRule(".cs-c-nights"));
+await check("泊数(.cs-c-nights)は数値フロア: font-size >= 5.5mm、font-weight >= 800（旧サイズへ戻すこと禁止）", async () => {
+  const nightsBody = cssRule(".cs-c-nights");
+  const nightsWeight = weightOf(nightsBody);
+  const nightsSize = sizeMmOf(nightsBody);
   const statusWeight = weightOf(cssRule(".cs-c-status"));
   const baseSize = sizeMmOf(cssRule(".cs-main-table td"));
-  assert.ok(nightsWeight >= 700 && nightsSize > baseSize);
+  assert.ok(nightsWeight >= 800, `expected .cs-c-nights font-weight >= 800, got ${nightsWeight}`);
+  assert.ok(nightsSize >= 5.5, `expected .cs-c-nights font-size >= 5.5mm, got ${nightsSize}mm`);
+  assert.ok(nightsSize > baseSize);
   assert.ok(statusWeight >= 700);
+});
+
+await check("RoomNo/人数/泊数のtd paddingは0.3mm以下まで詰められている(共通tdの1mm 1.2mmのままでは拡大が無意味になるため)", async () => {
+  const m = html.replace(/\/\*[\s\S]*?\*\//g, "").match(/td\.cs-c-room,\s*td\.cs-c-count,\s*td\.cs-c-nights\s*{([^}]*)}/s);
+  assert.ok(m, "expected a shared low-padding rule for td.cs-c-room/td.cs-c-count/td.cs-c-nights");
+  assert.ok(/padding:\s*0\.[0-3]mm/.test(m[1]), `expected padding <= 0.3mm, got: ${m[1]}`);
 });
 
 await check("備考・通信 (.cs-notice-line/.cs-instruction-line) と 予約元 (.cs-c-ota) は少なくとも semi-bold(>=600)", async () => {
