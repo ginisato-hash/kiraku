@@ -52,18 +52,20 @@ class StaffBookingRecord:
 class CleaningGuestInfo:
     """清掃指示書向けallow-list（住所・電話・メール・パスポート・国籍は含めない）。
 
-    children_age_7plus_count/children_age_data_available: extract.extract_children_age_7plus()
-    参照。2026-09、実データ調査(3回・9か月・Booking.com+子供ありの実予約10件全件)
-    ではguestCommentsが全件空文字列で年齢patternの実例が一件も無いため、現状は
-    常に(None, False)(ユーザー提示の仕様どおりparserは実装済みだが未検証)。
+    children_age_7plus_count/children_age_known_count/children_age_data_available:
+    extract.extract_children_age_7plus()/extract.extract_child_age_info()参照。
+    ソースはBeds24 v2の`comments`(2026-09-02、anchor booking 91673623ほか実データ
+    6予約7行で確認済み。実在する表記は "N child aged N" の1形のみで、子供が複数の
+    場合は1行ずつ別行に現れる)。年齢が判明していない子供の人数は
+    children - children_age_known_count で求まる(その分は布団人数へ安全側に加算)。
     bedding_guest_count: extract.compute_bedding_guest_count()参照。「清掃スタッフが
     布団を用意すべき人数」— total_guests(実宿泊人数)とは意味が異なる。Booking.com
     のみ子供の年齢で判定(7歳未満は布団人数から除外)、それ以外のOTAは常に
     adults+children。
-    guest_notice: extract.extract_guest_notice()参照。ソースはguestCommentsのみ
-    (内部メモ用のnotes/comments/groupNote/messageとは別経路)。Booking.comの
-    child-age system metadataが同じguestComments内に混在する場合はそれを除去
-    した残りだけを返す。
+    guest_notice: extract.extract_guest_notice()参照。ソースはBeds24 v2の`comments`
+    のみ(内部メモ用のnotes/groupNote/messageとは別経路)。同じ`comments`に混在する
+    Booking.comのchild-age metadataとOTA自動生成の定型行(PRE-PAID/BOOKING NOTE/
+    部屋設定コード等)を行単位で除去した残りだけを返し、残りが無ければNone。
     payment_due_at_property/amount_due_at_property: 2026-09にユーザー要件で明示的に
     許可された、Cleaning DTOで唯一許容される財務フィールド(「喜らくフロントが現地で
     ゲストから回収すべき残額」のoperational data)。extract.extract_amount_due_at_property()
@@ -86,6 +88,7 @@ class CleaningGuestInfo:
     arrival_time: Optional[str] = None
     source: str = ""  # normalize_booking_source() による正規化後のOTA表示名
     children_age_7plus_count: Optional[int] = None
+    children_age_known_count: int = 0
     children_age_data_available: bool = False
     bedding_guest_count: int = 0
     guest_notice: Optional[str] = None

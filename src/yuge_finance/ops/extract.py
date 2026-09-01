@@ -152,98 +152,194 @@ def resolve_physical_room_number(room_type_key: str, unit_index: Optional[str],
     return type_map.get(str(unit_index))
 
 
-# Booking.comの子供年齢表記("1 child aged 10"等)を抽出するpattern。
+# ゲスト入力コメントの実フィールド名は Beds24 v2 の `comments`。
 #
-# 【重要・実データ未検証】2026-09、property 330695の実データ調査(3回、9か月分
-# 664予約、Booking.com+子供ありの実予約10件全件)では、guestCommentsが全件
-# 空文字列(長さ0)であり、このpatternはおろか"aged"という単語自体が
-# guestComments/infoItems/その他全field(id/氏名等PII除く)のどこにも一件も
-# 出現しなかった。ユーザーからは「実確認済み」との説明を受けたが、本リポジトリが
-# アクセスできる実Beds24データではこの調査結果どおり一切確認できていない
-# (この矛盾はレポートで明示報告済み)。
-# よってこの実装は、ユーザーが提示した具体例("1 child aged 10"、複数児童は
-# "N children aged A, B, ...")どおりに構築したものであり、実データによる
-# 検証は現時点でできていない。一致する実データが将来現れれば自動的に
-# 有効化される安全な設計とし、一致しない限り(=現状の全実予約を含む)
-# children_age_data_availableは常にFalseのまま、既存の安全なfallback
-# (子供全員を布団人数に含める)へ通常どおり流れる — 誤動作のリスクはない。
+# 【2026-09-02 実データで確定】anchor booking 91673623(Booking.com, numAdult=2,
+# numChild=1)をBeds24 v2 APIから直接GETし、Beds24 UI「ゲストからのコメント」に
+# 表示されている "1 child aged 10" が booking record の `comments`(長さ142)に
+# 実在することを確認した。include parameterは一切不要(plain GET /bookings?id=…で
+# 取得可能)で、booking group/master経由でもない(masterId=None/bookingGroup=None)。
+# 通常の15分refresh経路(Beds24Client.fetch_raw)が返すrecordにも同じ`comments`が
+# 含まれることを同じ実行内で確認済み — 取得経路の変更は不要。
+#
+# 【前実装のバグ】この直前まで参照していた `guestComments` はBeds24 v2 payloadに
+# 存在しないキーであり(実recordの全71キーに無い)、raw.get("guestComments")は常に
+# Noneを返していた。「guestCommentsは全件空」という前回の調査結論は、存在しない
+# キーの長さを測っていたにすぎない。前回の全field走査も
+# beds24_field_probe.PII_KEYS(comments/notes/message/groupNoteを含む)をskip-listに
+# 流用していたため、値が入っている当の`comments`だけを走査対象から外していた。
+GUEST_COMMENT_FIELD = "comments"
+
+# Booking.comの子供年齢metadata。
+#
+# 【2026-09-02 実データで確定】property 330695・2026-01〜2026-12・723予約
+# (`comments`非空354件)を走査した結果、実在する表記は "N child aged N" の1形
+# のみ(7件/6予約、digitsをマスクしたtemplateは '# child aged #' の1種類だけ)。
+# 子供が2名の予約(92008803, numChild=2)は "1 child aged 6" と "1 child aged 8" の
+# 2行に分かれて出現する — 「N children aged A, B」というカンマ区切り形式は実データに
+# 一度も存在しない(前実装はこの推測形式を前提に単一matchしか見ていなかったため、
+# 複数児童の年齢を取りこぼす実バグがあった)。よってここでは finditer で全出現を
+# 収集する。楽天トラベル(12予約)・じゃらんnet(24予約)の子供あり予約には年齢表記は
+# 一件も無い(=国内OTAは年齢を見ない既存ルールと整合)。
 _CHILD_AGE_PATTERN = re.compile(
-    r"\d+\s+child(?:ren)?\s+aged\s+\d+(?:\s*(?:,|and)\s*\d+)*",
+    r"\d+\s+child(?:ren)?\s+aged\s+(\d+)",
     re.IGNORECASE,
 )
 
+# OTA(主にBooking.com)が`comments`へ自動生成する定型行。ゲスト自身が書いた
+# 「お知らせ」ではないため、清掃指示書のguest_noticeへは出さない(要件15)。
+# 2026-09-02、実データで「2予約以上に byte一致で出現する行template」だけを
+# 根拠として採用した(人間が入力した文章が別々の予約間で完全一致することは
+# 無いため、繰り返し出現 = 機械生成の証拠になる)。推測で語を増やさないこと。
+_SYSTEM_LINE_EXACT = {
+    "** this reservation has been pre-paid **",   # 実データ176予約
+    "non smoking requested",                      # 実データ139予約
+    "こちらは「スマート・フレックス予約」の対象予約です。",   # 実データ5予約
+}
+_SYSTEM_LINE_PREFIXES = (
+    "booking note",                # "BOOKING NOTE : Payment charge is JPY …" 実データ141予約
+    "approximate time of arrival:",  # Booking.com自動生成の到着時間帯 実データ46予約
+    "booked rate:",                # "booked rate: Non-refundable Rate (…)" 実データ41+18+2予約
+    "reservation has a cancellation grace period",  # 実データ26予約
+    "bed preference:",             # "BED PREFERENCE:… futon mats" 実データ8+2予約
+    "アップグレード後のポリシー：",    # 実データ5予約
+    "company:",                    # OTAの請求先会社名(定型field) 実データ2予約
+)
+# Booking.com管理画面へのリンク行(実データ5予約)。
+_SYSTEM_LINE_CONTAINS = ("admin.booking.com",)
+
+# Booking.comの部屋設定コードだけで構成される行(実データ: "NonSmoke" 9予約、
+# "LargeBed, NonSmoke" 4予約、"NonSmoke, TwinBeds" 3予約)。カンマ区切りの
+# token全てがこの集合に含まれる行だけを落とす(1つでも未知のtokenがあれば
+# ゲスト入力が混ざっている可能性があるため落とさない)。
+_ROOM_PREFERENCE_TOKENS = {
+    "nonsmoke", "smoke", "nonsmoking", "largebed", "twinbeds", "quietroom",
+    "singlebed", "doublebed",
+}
+# "NonSmoke, QuietRoom AdditionalNotes: <ゲストが書いた本文>"(実データ2予約)の形。
+# AdditionalNotes: 以降だけがゲスト入力なので、そこから後ろを残す。
+_ADDITIONAL_NOTES_RE = re.compile(r"additional\s*notes\s*:", re.IGNORECASE)
+# 楽天トラベル/じゃらんの室料prefix "[室料:12000円＝12000円]"(実データ計約110予約)。
+# prefixだけを外し、後続のゲスト記述(「禁煙かつ静かな部屋希望します。」等)は残す。
+_ROOM_CHARGE_PREFIX_RE = re.compile(r"^\[室料[^\]]*\]")
+
+
+def guest_comment_text(raw: dict) -> Optional[str]:
+    """Beds24 booking recordからゲスト入力コメント原文を取り出す(GUEST_COMMENT_FIELD)。"""
+    if not raw:
+        return None
+    return _sanitize_str(raw.get(GUEST_COMMENT_FIELD))
+
 
 def parse_booking_com_child_ages(guest_comments) -> List[int]:
-    """guestCommentsからBooking.comの子供年齢を抽出する(_CHILD_AGE_PATTERN参照。
-    実データ未検証の防御的実装)。一致しなければ空listを返す(推測しない)。
-    numChildより少ない年齢しか見つからない場合(一部の子供の年齢が不明)でも、
-    確認できた分だけをそのまま返す — 残りを7歳以上/未満どちらにも推測で
-    埋めない(要件6)。
+    """`comments`からBooking.comの子供年齢を全件抽出する(_CHILD_AGE_PATTERN参照)。
+
+    実データは1行に1名ずつ("1 child aged 6" / "1 child aged 8")現れるため、
+    finditerで全出現を収集する。一致しなければ空listを返す(推測しない)。
+    numChildより少ない年齢しか取得できない場合でも、確認できた分だけを返す —
+    残りを7歳以上/未満どちらにも推測で埋めない(要件16)。
     """
     if not guest_comments:
         return []
-    m = _CHILD_AGE_PATTERN.search(str(guest_comments))
-    if not m:
-        return []
-    ages_part = m.group(0).split("aged", 1)[-1]
-    return [int(a) for a in re.findall(r"\d+", ages_part)]
+    return [int(m.group(1)) for m in _CHILD_AGE_PATTERN.finditer(str(guest_comments))]
 
 
 def _strip_child_age_metadata(text: str) -> str:
     """guest_noticeからBooking.comのchild-age system metadata部分だけを除去する。
-    実データにこのpatternの出現例が無いため未検証(_CHILD_AGE_PATTERN参照)。
-    一致しない場合は元の文字列をそのまま返す(人間が書いた文章を誤って
-    削除しない)。
+    一致しない場合は元の文字列をそのまま返す(人間が書いた文章を誤って削除しない)。
     """
     return _CHILD_AGE_PATTERN.sub("", text).strip()
+
+
+def _is_room_preference_only(line: str) -> bool:
+    tokens = [t.strip().lower() for t in line.split(",")]
+    return bool(tokens) and all(t in _ROOM_PREFERENCE_TOKENS for t in tokens if t)
+
+
+def _clean_guest_notice_line(line: str) -> Optional[str]:
+    """`comments`の1行を、ゲスト入力部分だけへ整える。system行はNoneを返す。"""
+    s = _ROOM_CHARGE_PREFIX_RE.sub("", line).strip()
+    if not s:
+        return None
+    s = _strip_child_age_metadata(s)
+    if not s:
+        return None
+    m = _ADDITIONAL_NOTES_RE.search(s)
+    if m:
+        # 前半(部屋設定コード)は捨て、ゲストが書いた本文だけを残す。
+        s = s[m.end():].strip()
+        return s or None
+    low = s.lower()
+    if low in _SYSTEM_LINE_EXACT:
+        return None
+    if low.startswith(_SYSTEM_LINE_PREFIXES):
+        return None
+    if any(tok in low for tok in _SYSTEM_LINE_CONTAINS):
+        return None
+    if _is_room_preference_only(s):
+        return None
+    return s
 
 
 def extract_guest_notice(raw: dict) -> Optional[str]:
     """ゲスト自身が入力した「お客様からのお知らせ」を抽出する。
 
-    ソースは guestComments のみ(2026-09実データ調査で確認済み: Beds24標準の
-    ゲスト入力コメントfield。internal note/staff note/groupNote/message等の
-    内部運用メモとは完全に別fieldであり、混在させない)。_extract_notes()が集める
-    notes/comments/groupNote/messageは内部メモ用途であり、清掃指示のguest_noticeへは
-    絶対に流用しない(意図的に別関数として独立させている)。
-    Booking.comのchild-age system metadata(_CHILD_AGE_PATTERN)が同じ
-    guestComments内に混在する場合は、それを除去した残りのテキストだけを返す
-    (要件13。実データでの出現例は無く未検証 — 一致しなければ何も変更されない)。
+    ソースはBeds24 v2の`comments`(GUEST_COMMENT_FIELD)。この1フィールドに
+    「ゲストが書いた文章」と「OTAが自動生成した定型文/child-age metadata」が
+    混在するため、行単位で後者だけを取り除いた残りを返す(要件13・15)。
+    残りが無ければNone(「客:」行自体を出さない)。internal note(notes/groupNote/
+    message)は_extract_notes()の担当であり、guest_noticeへは絶対に流用しない。
     """
-    raw_comments = _sanitize_str(raw.get("guestComments"))
+    raw_comments = guest_comment_text(raw)
     if raw_comments is None:
         return None
-    stripped = _strip_child_age_metadata(raw_comments)
-    return stripped or None
+    kept = []
+    for line in raw_comments.splitlines():
+        cleaned = _clean_guest_notice_line(line)
+        if cleaned:
+            kept.append(cleaned)
+    return "\n".join(kept) or None
+
+
+def extract_child_age_info(raw: dict) -> Tuple[int, int]:
+    """(年齢が判明した子供の人数, そのうち7歳以上の人数)を返す。"""
+    ages = parse_booking_com_child_ages(guest_comment_text(raw) if raw else None)
+    return len(ages), sum(1 for age in ages if age >= 7)
 
 
 def extract_children_age_7plus(raw: dict) -> Tuple[Optional[int], bool]:
-    """7歳以上の子供人数を抽出する(parse_booking_com_child_ages参照。実データ
-    未検証の防御的実装 — 現状の全実予約ではguestCommentsが空のため常に
-    (None, False)を返し、既存の安全なfallbackへ通常どおり流れる)。
+    """7歳以上の子供人数と、年齢データが取得できたかどうかを返す。
+
+    年齢が一件も取れなければ(None, False)を返し、既存の安全なfallbackへ流す。
     """
-    ages = parse_booking_com_child_ages(raw.get("guestComments") if raw else None)
-    if not ages:
+    known_count, age_7plus = extract_child_age_info(raw)
+    if not known_count:
         return None, False
-    return sum(1 for age in ages if age >= 7), True
+    return age_7plus, True
 
 
 def compute_bedding_guest_count(ota_name: str, adults: int, children: int,
                                 children_age_7plus_count: Optional[int],
-                                children_age_data_available: bool) -> int:
-    """清掃スタッフが布団を用意すべき人数(要件2・10)。
+                                children_age_data_available: bool,
+                                children_age_known_count: Optional[int] = None) -> int:
+    """清掃スタッフが布団を用意すべき人数(要件2・10・12・16)。
 
-    Booking.comのみ、確認できた子供の年齢が7歳以上の場合だけ布団人数へ加算する。
-    年齢が一部/全く確認できない場合は、推測せず子供全員を布団人数に含める
-    安全側のfallback(布団不足より多めのほうが運用上安全なため — 前回要件の
-    「取得不能なら通常の子供総数へfallback」を踏襲)。楽天/じゃらん/Direct等
-    その他は年齢を一切参照せず常にadults+children(要件7-8、既存の安全な
-    fallbackを壊さない — OTA判定は既存のnormalize_booking_source()由来の
-    canonical nameをそのまま使い、新しい文字列判定ロジックを重複実装しない)。
+    Booking.comのみ、年齢が判明している子供については7歳以上だけを加算する
+    (0〜6歳は布団人数に含めない)。年齢が判明していない子供は推測せず、そのまま
+    布団人数に含める安全側の扱いとする(布団不足を避けるため)。年齢が一件も
+    取得できない場合は従来どおりadults+children。
+    楽天トラベル/じゃらん/Direct等はそもそも年齢を参照せず常にadults+children
+    (要件13、既存の安全なfallbackを壊さない。OTA判定は既存の
+    normalize_booking_source()由来のcanonical nameをそのまま使う)。
+
+    children_age_known_count: 年齢が判明した子供の人数。省略時は「全員分の年齢が
+    判明している」とみなす(従来の呼び出し互換)。
     """
-    if ota_name == "Booking.com" and children_age_data_available:
-        return adults + (children_age_7plus_count or 0)
-    return adults + children
+    if ota_name != "Booking.com" or not children_age_data_available:
+        return adults + children
+    known = children if children_age_known_count is None else children_age_known_count
+    unknown_age_children = max(children - known, 0)
+    return adults + (children_age_7plus_count or 0) + unknown_age_children
 
 
 # Beds24公式Info Code(予約payload内のinfoItems[].code)のうち、OTAチャネル自身が
@@ -326,6 +422,7 @@ def extract_cleaning_extra(raw: dict) -> Dict:
     (amount_due_at_property)がDaily Ops側の出力へ意図せず混入するのを構造的に
     防ぐため、Cleaning DTO専用の別経路として独立させている。
     """
+    children_age_known_count, _age_7plus = extract_child_age_info(raw)
     children_age_7plus_count, children_age_data_available = extract_children_age_7plus(raw)
     payment_due_at_property, amount_due_at_property = extract_amount_due_at_property(raw)
     adults, children = _extract_guests(raw)
@@ -333,10 +430,12 @@ def extract_cleaning_extra(raw: dict) -> Dict:
                     or raw.get("referer") or raw.get("source"))
     ota_name, _ = normalize_booking_source(source_value)
     bedding_guest_count = compute_bedding_guest_count(
-        ota_name, adults, children, children_age_7plus_count, children_age_data_available)
+        ota_name, adults, children, children_age_7plus_count, children_age_data_available,
+        children_age_known_count)
     return {
         "guest_notice": extract_guest_notice(raw),
         "children_age_7plus_count": children_age_7plus_count,
+        "children_age_known_count": children_age_known_count,
         "children_age_data_available": children_age_data_available,
         "bedding_guest_count": bedding_guest_count,
         "payment_due_at_property": payment_due_at_property,

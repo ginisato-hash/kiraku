@@ -520,8 +520,23 @@ def cmd_export_daily_ops(args) -> int:
         1 for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
         if r["status"] == "UNASSIGNED")
 
+    # 清掃指示の布団人数(bedding_guest_count)/ゲスト通知の構造カウンタ。件数のみで
+    # 個人情報は一切出さない(氏名・本文・年齢の実値はログへ出さない)。本番15分refresh後に
+    # 「Beds24 `comments`由来のchild-age判定が実際に効いているか」をActionsログだけで
+    # 確認できるようにするための恒久的な可観測性(2026-09-02、要件8/23)。
+    guests = [g for d in snapshot["dates"].values() for r in d["cleaning"]["rooms"]
+              for g in (r["departing_guest"], r["arriving_guest"], r["staying_guest"]) if g]
+    with_children = [g for g in guests if (g.get("children") or 0) > 0]
+    with_age_data = [g for g in with_children if g.get("children_age_data_available")]
+    bedding_reduced = [g for g in with_children
+                       if g.get("bedding_guest_count") != (g.get("adults") or 0) + (g.get("children") or 0)]
+    with_notice = [g for g in guests if g.get("guest_notice")]
+
     _print(f"[export-daily-ops] dates={len(target_dates)} booking_events={total_events} "
            f"cancelled_flags={cancelled_flags} unassigned_flags={unassigned_flags}")
+    _print(f"[export-daily-ops] child_age_source=comments guests_with_children={len(with_children)} "
+           f"with_child_age_data={len(with_age_data)} bedding_count_reduced={len(bedding_reduced)} "
+           f"guests_with_notice={len(with_notice)}")
     _print(f"[export-daily-ops] 出力: {out_path}")
     return 0
 

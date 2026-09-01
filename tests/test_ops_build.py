@@ -90,10 +90,10 @@ def test_build_staff_ops_snapshot_top_level_shape(tmp_path):
 
 
 def test_build_staff_ops_snapshot_cleaning_extra_flows_through_end_to_end(tmp_path):
-    """raw Beds24 dict(guestComments/invoiceItems) -> cleaning DTOのguest_notice/
+    """raw Beds24 dict(comments/invoiceItems) -> cleaning DTOのguest_notice/
     onsite_payment_*まで、実際のbuild_staff_ops_snapshot()経路で一気通貫することを確認する。"""
     booking = _raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02", unit_id=1)
-    booking["guestComments"] = "到着が遅くなります"
+    booking["comments"] = "到着が遅くなります"
     booking["price"] = 13000
     booking["invoiceItems"] = [
         {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},
@@ -114,7 +114,7 @@ def test_daily_ops_arrivals_never_carry_the_cleaning_only_extra_fields(tmp_path)
     追加していないため、Daily Ops(arrivals/departures/stayovers、宿泊者名簿の元データ)
     の出力にはそもそも一切現れない(構造的な分離の回帰確認)。"""
     booking = _raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02", unit_id=1)
-    booking["guestComments"] = "到着が遅くなります"
+    booking["comments"] = "到着が遅くなります"
     booking["price"] = 13000
     booking["invoiceItems"] = [
         {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},

@@ -61,6 +61,7 @@ def _empty_cleaning_extra(b: StaffBookingRecord) -> Dict:
     return {
         "guest_notice": None,
         "children_age_7plus_count": None,
+        "children_age_known_count": 0,
         "children_age_data_available": False,
         "bedding_guest_count": b.adults + b.children,
         "payment_due_at_property": False,
@@ -81,6 +82,7 @@ def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Di
         arrival_time=b.arrival_time,
         source=b.ota_name,
         children_age_7plus_count=extra["children_age_7plus_count"],
+        children_age_known_count=extra.get("children_age_known_count", 0),
         children_age_data_available=extra["children_age_data_available"],
         bedding_guest_count=extra["bedding_guest_count"],
         guest_notice=extra["guest_notice"],

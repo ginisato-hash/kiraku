@@ -290,6 +290,28 @@ await check("印刷ドキュメント: 人数セル上段は布団人数(bedding
   assert.ok(row401.includes('<div class="cs-guest-breakdown">大人2 子供1</div>'));
 });
 
+await check("実データ anchor booking 91673623 相当(Booking.com adults=2/children=1/age=10、OTA自動生成行のみのcomments)の印刷表示", async () => {
+  // Beds24 UI「ゲストからのコメント」= "1 child aged 10" + Booking.com自動生成行のみ。
+  // Python側(extract.extract_cleaning_extra)がbedding_guest_count=3 / guest_notice=null
+  // を返すことは tests/test_ops_cleaning_extra.py で実データ由来のcommentsに対して検証済み。
+  // ここではそのDTO値が印刷帳票へ正しく出ることだけを確認する。
+  const room401 = rooms.find((r) => r.room_number === "401");
+  const anchorRoom = {
+    ...room401,
+    status: "CHECKIN",
+    departing_guest: null,
+    arriving_guest: {
+      ...room401.arriving_guest,
+      booking_id: "91673623", source: "Booking.com", adults: 2, children: 1, total_guests: 3,
+      children_age_data_available: true, children_age_7plus_count: 1,
+      children_age_known_count: 1, bedding_guest_count: 3, guest_notice: null,
+    },
+  };
+  assert.equal(beddingCountFor(anchorRoom), "3");        // 布団3人分(10歳は7歳以上なので加算)
+  assert.equal(guestBreakdownFor(anchorRoom), "大人2 子供1");  // 実人数は常にそのまま
+  assert.equal(guestNoticeFor(anchorRoom), "");          // child-age/system行だけなので「客:」は出さない
+});
+
 // ---------------- お客様からのお知らせ (guest_notice) ----------------
 
 await check("guestNoticeFor reads guest_notice from the priority guest, cleaned via cleanValue", async () => {

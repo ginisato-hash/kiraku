@@ -15,15 +15,22 @@ extract_cleaning_extra)。
   - channel collect(BOOKINGCOMBANKTRANS)は実データで154件確認済み。
     BOOKINGCOMVIRTCARD/EXPEDIACOLLECT/AGODACOLLECT/VIRTUALCARDは防御的に実装
     したが実データに0件。HOTELCOLLECTはOTA collectではないため除外対象に含めない。
-  - 【重要・実データ未検証】Booking.comの子供年齢("1 child aged 10"等)について、
-    3回の独立した実データ調査(9か月・664予約・Booking.com+子供ありの実予約10件
-    全件)を行ったが、guestCommentsは全件空文字列(長さ0)であり、この
-    patternはおろか"aged"という単語自体がguestComments/infoItems含む全field
-    のどこにも一件も出現しなかった。ユーザーからは「実確認済み」との説明を
-    受けたが、本リポジトリがアクセスできる実Beds24データではこの調査結果どおり
-    一切確認できていない。以下のparser関連テストはユーザー提示の仕様どおりに
-    構築した合成データでのみ検証しており、実データによる検証はできていない
-    (extract.pyのparse_booking_com_child_ages docstring参照)。
+  - Booking.comの子供年齢は Beds24 v2 の `comments` に入る(2026-09-02確定)。
+    anchor booking 91673623 を直接GETし、Beds24 UI「ゲストからのコメント」の
+    "1 child aged 10" が `comments`(長さ142)に実在することを確認。include
+    parameterは不要、booking group/masterでもない(masterId=None)。通常の15分
+    refresh(fetch_raw)が返すrecordにも同じ`comments`が含まれる。
+    前実装が読んでいた `guestComments` はpayloadに存在しないキーであり
+    (実recordの全71キーに無い)、常にNoneだった。「guestCommentsは全件空」と
+    いう前回の結論は存在しないキーの長さを測っていたもので、撤回済み。
+  - 実在する年齢表記は "N child aged N" の1形のみ(723予約・`comments`非空354件を
+    走査、digitsマスク後のtemplateは '# child aged #' の1種類)。子供2名の予約
+    (92008803)は "1 child aged 6" と "1 child aged 8" の2行に分かれて出現する。
+    「N children aged A, B」というカンマ区切り形式は実データに存在しないため、
+    その前提で書かれていた旧テスト/旧実装(単一match)は撤回した。
+  - `comments`にはOTA自動生成の定型行(PRE-PAID/BOOKING NOTE/部屋設定コード/
+    booked rate/管理画面リンク等)がゲスト入力と混在する。以下のsystem行テストは
+    「2予約以上にbyte一致で出現した実template」だけを根拠にしている。
 
 これらはユーザー要件により明示的に許可されたCleaning DTO専用の財務例外
 (payment_due_at_property/amount_due_at_property)であり、StaffBookingRecord
@@ -31,8 +38,8 @@ extract_cleaning_extra)。
 """
 from yuge_finance.ops.extract import (
     CHANNEL_COLLECT_INFO_CODES, compute_bedding_guest_count, extract_amount_due_at_property,
-    extract_cleaning_extra, extract_children_age_7plus, extract_guest_notice,
-    extract_invoice_balance, parse_booking_com_child_ages,
+    extract_child_age_info, extract_cleaning_extra, extract_children_age_7plus,
+    extract_guest_notice, extract_invoice_balance, parse_booking_com_child_ages,
 )
 
 
@@ -45,49 +52,59 @@ def _raw(*, price=0, invoice_items=None, info_items=None, **overrides):
 
 # ---------------- guest_notice ----------------
 
-def test_guest_notice_reads_from_guestcomments_only():
-    raw = {"guestComments": "静かな部屋を希望します"}
-    assert extract_guest_notice(raw) == "静かな部屋を希望します"
+def test_guest_notice_reads_from_comments_field():
+    """実フィールド名は`comments`(Beds24 v2)。`guestComments`は存在しないキー。"""
+    assert extract_guest_notice({"comments": "静かな部屋を希望します"}) == "静かな部屋を希望します"
+    assert extract_guest_notice({"guestComments": "静かな部屋を希望します"}) is None
 
 
 def test_guest_notice_never_falls_back_to_internal_notes_fields():
-    """notes/comments/groupNote/messageはstaff運用メモ用途であり、guest_noticeには
-    絶対に流用しない(混在防止が本要件の核心)。"""
-    raw = {"notes": "内部メモ", "comments": "内部コメント", "groupNote": "団体メモ",
-           "message": "システムメッセージ"}
+    """notes/groupNote/messageはstaff運用メモ用途であり、guest_noticeには絶対に
+    流用しない(混在防止が本要件の核心)。"""
+    raw = {"notes": "内部メモ", "groupNote": "団体メモ", "message": "システムメッセージ"}
     assert extract_guest_notice(raw) is None
 
 
 def test_guest_notice_sanitizes_null_like_and_blank_values():
     for literal in (None, "", "   ", "None", "null"):
-        assert extract_guest_notice({"guestComments": literal}) is None
+        assert extract_guest_notice({"comments": literal}) is None
 
 
 # ---------------- children_age_7plus (常に未実装/未取得) ----------------
 
-def test_children_age_7plus_unavailable_when_no_guestcomments_or_no_pattern_match():
-    """現状の全実予約(guestComments空)を含む、patternが一切見つからない通常ケース。"""
+def test_children_age_7plus_unavailable_when_no_comments_or_no_pattern_match():
+    """`comments`が空/年齢表記が無い場合(実データでもBooking.com子供あり10件のうち
+    4件は年齢表記が無い)は(None, False)で既存の安全なfallbackへ流す。"""
     assert extract_children_age_7plus({}) == (None, False)
     assert extract_children_age_7plus({"numChild": 2, "infoItems": [{"code": "BOOKINGCOMFLAG"}]}) == (None, False)
-    assert extract_children_age_7plus({"guestComments": ""}) == (None, False)
-    assert extract_children_age_7plus({"guestComments": "We will arrive late tonight"}) == (None, False)
+    assert extract_children_age_7plus({"comments": ""}) == (None, False)
+    assert extract_children_age_7plus({"comments": "We will arrive late tonight"}) == (None, False)
 
 
-# ---------------- parse_booking_com_child_ages (合成データのみ・実データ未検証) ----------------
-# 実Beds24データにこのpatternの出現例が一件も無いため(module docstring参照)、
-# 以下は全てユーザー提示の仕様どおりに構築した合成テストである。
+# ---------------- parse_booking_com_child_ages (実データ由来のpatternのみ) ----------------
+# 実データに存在する形は "N child aged N" だけ(module docstring参照)。推測patternは
+# 追加しない。
 
-def test_parse_single_child_age_pattern():
+def test_parse_single_child_age_pattern_real_anchor_booking():
+    """実データ booking 91673623 の`comments` 1行目。"""
     assert parse_booking_com_child_ages("1 child aged 10") == [10]
 
 
-def test_parse_single_child_age_pattern_with_surrounding_text():
-    """guestCommentsに他の文章が同居していても、pattern自体は正しく抽出できる。"""
+def test_parse_child_age_with_surrounding_text():
     assert parse_booking_com_child_ages("1 child aged 6\nWe will arrive around 18:00") == [6]
 
 
-def test_parse_multiple_children_age_pattern_comma_separated():
-    assert parse_booking_com_child_ages("2 children aged 5, 10") == [5, 10]
+def test_parse_multiple_children_appear_as_separate_lines_real_booking_92008803():
+    """実データ booking 92008803(numChild=2)は1行1名で2行に分かれて出現する。
+    旧実装は単一matchしか見ておらず2人目の年齢を取りこぼしていた。"""
+    assert parse_booking_com_child_ages("1 child aged 6\n1 child aged 8") == [6, 8]
+
+
+def test_parse_child_age_lines_inside_full_real_comments_block():
+    comments = ("1 child aged 10\n\n** THIS RESERVATION HAS BEEN PRE-PAID **\n"
+                "BOOKING NOTE : Payment charge is JPY 563.753\nNonSmoke\nNonSmoke\n"
+                "Non Smoking Requested\n")
+    assert parse_booking_com_child_ages(comments) == [10]
 
 
 def test_parse_no_match_returns_empty_list():
@@ -98,21 +115,82 @@ def test_parse_no_match_returns_empty_list():
 
 def test_extract_children_age_7plus_from_matched_pattern():
     """境界: age>=7のみ7歳以上カウントへ含める(age=7ちょうどは含む、age=6は含まない)。"""
-    assert extract_children_age_7plus({"guestComments": "1 child aged 10"}) == (1, True)
-    assert extract_children_age_7plus({"guestComments": "1 child aged 7"}) == (1, True)
-    assert extract_children_age_7plus({"guestComments": "1 child aged 6"}) == (0, True)
-    assert extract_children_age_7plus({"guestComments": "2 children aged 5, 10"}) == (1, True)
+    assert extract_children_age_7plus({"comments": "1 child aged 10"}) == (1, True)
+    assert extract_children_age_7plus({"comments": "1 child aged 7"}) == (1, True)
+    assert extract_children_age_7plus({"comments": "1 child aged 6"}) == (0, True)
+    assert extract_children_age_7plus({"comments": "1 child aged 6\n1 child aged 8"}) == (1, True)
+
+
+def test_extract_child_age_info_reports_known_count_and_7plus():
+    assert extract_child_age_info({"comments": "1 child aged 6\n1 child aged 8"}) == (2, 1)
+    assert extract_child_age_info({"comments": "1 child aged 10"}) == (1, 1)
+    assert extract_child_age_info({"comments": ""}) == (0, 0)
 
 
 def test_extract_guest_notice_strips_matched_child_age_metadata_leaving_the_rest():
     """要件13: child-age metadataとguest_noticeが同居する場合、metadata部分だけ除去。"""
-    raw = {"guestComments": "1 child aged 10\nWe will arrive around 18:00"}
+    raw = {"comments": "1 child aged 10\nWe will arrive around 18:00"}
     assert extract_guest_notice(raw) == "We will arrive around 18:00"
 
 
 def test_extract_guest_notice_unaffected_when_no_child_age_pattern_present():
-    raw = {"guestComments": "We will arrive around 18:00"}
+    raw = {"comments": "We will arrive around 18:00"}
     assert extract_guest_notice(raw) == "We will arrive around 18:00"
+
+
+# ---------------- guest_notice: OTA自動生成行の分離(実データtemplateのみ) ----------------
+
+def test_guest_notice_is_none_for_real_anchor_booking_91673623():
+    """実データ booking 91673623 の`comments`全文(7行)は child-age metadata と
+    Booking.com自動生成行だけで構成される -> 「客:」行は一切出さない。"""
+    comments = ("1 child aged 10\n\n** THIS RESERVATION HAS BEEN PRE-PAID **\n"
+                "BOOKING NOTE : Payment charge is JPY 563.753\nNonSmoke\nNonSmoke\n"
+                "Non Smoking Requested\n")
+    assert extract_guest_notice({"comments": comments}) is None
+
+
+def test_guest_notice_drops_each_real_system_line_template():
+    """実データで2予約以上にbyte一致で出現したOTA自動生成行(=機械生成の証拠)。"""
+    for line in (
+        "** THIS RESERVATION HAS BEEN PRE-PAID **",
+        "BOOKING NOTE : Payment charge is JPY 563.753",
+        "Non Smoking Requested",
+        "NonSmoke",
+        "LargeBed, NonSmoke",
+        "NonSmoke, TwinBeds",
+        "Approximate time of arrival: between 15:00 and 16:00",
+        "booked rate: Non-refundable Rate (12345)",
+        "booked rate: Multiple nights Discount (12345)",
+        "Reservation has a cancellation grace period. Do not charge if cancelled before 2026-8-1 12:00:00",
+        "BED PREFERENCE:Standard Double or Twin Room: 2 futon mats",
+        "こちらは「スマート・フレックス予約」の対象予約です。",
+        "アップグレード後のポリシー：チェックインの3日前までキャンセル無料",
+        "詳細についてはhttps://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/booking.html?hotel_id=1&res_id=2をご覧ください",
+        "company: カヤバ株式会社 vat",
+    ):
+        assert extract_guest_notice({"comments": line}) is None, line
+
+
+def test_guest_notice_keeps_guest_authored_text_that_ota_merely_relays():
+    """OTA文面でもゲストの希望を伝える文はスタッフに必要なので残す。"""
+    for line in (
+        "This guest would like the rooms in this booking to be close together if possible.",
+        "You have a booker that would like free parking. (based on availability)",
+    ):
+        assert extract_guest_notice({"comments": line}) == line
+
+
+def test_guest_notice_keeps_text_after_additional_notes_marker():
+    """実データ形: 部屋設定コード + AdditionalNotes: + ゲスト本文。"""
+    raw = {"comments": "NonSmoke, QuietRoom AdditionalNotes: please do not assign me a corner room"}
+    assert extract_guest_notice(raw) == "please do not assign me a corner room"
+
+
+def test_guest_notice_strips_domestic_ota_room_charge_prefix_only():
+    """実データ形: 楽天/じゃらんの"[室料:12000円＝12000円]"prefix。prefixだけ外し本文は残す。"""
+    raw = {"comments": "[室料:12000円＝12000円]禁煙かつ静かな部屋希望します。"}
+    assert extract_guest_notice(raw) == "禁煙かつ静かな部屋希望します。"
+    assert extract_guest_notice({"comments": "[室料:12000円＝12000円]車"}) == "車"
 
 
 # ---------------- compute_bedding_guest_count ----------------
@@ -131,9 +209,19 @@ def test_bedding_count_booking_com_age_boundary_7_included():
     assert compute_bedding_guest_count("Booking.com", 2, 1, 1, True) == 3  # age=7は含む
 
 
-def test_bedding_count_booking_com_two_children_ages_5_and_10():
-    """要件22例4: adults=2, children=2, ages=[5,10] -> 7歳以上1名のみ加算 -> bedding_count=3."""
-    assert compute_bedding_guest_count("Booking.com", 2, 2, 1, True) == 3
+def test_bedding_count_booking_com_two_children_real_booking_92008803():
+    """実データ booking 92008803: adults=1, children=2, ages=[6,8] -> 7歳以上1名のみ
+    加算 -> bedding_count=2(6歳は布団人数から除外、実人数は変えない)。"""
+    assert compute_bedding_guest_count("Booking.com", 1, 2, 1, True, 2) == 2
+
+
+def test_bedding_count_booking_com_partial_age_data_never_guesses():
+    """要件16: numChild=2で年齢が1名分しか取れない場合、未知の子供の年齢を推測せず
+    そのまま布団人数へ含める(安全側)。7歳以上と分かっている子は通常どおり加算。"""
+    # ages=[10] のみ判明 -> adults2 + 7歳以上1 + 年齢不明1 = 4
+    assert compute_bedding_guest_count("Booking.com", 2, 2, 1, True, 1) == 4
+    # ages=[3] のみ判明 -> adults2 + 7歳以上0 + 年齢不明1 = 3
+    assert compute_bedding_guest_count("Booking.com", 2, 2, 0, True, 1) == 3
 
 
 def test_bedding_count_booking_com_no_age_data_falls_back_to_full_children():
@@ -308,14 +396,15 @@ def test_amount_due_no_longer_depends_on_onsite_payment_marker():
 
 # ---------------- extract_cleaning_extra (bundling) ----------------
 
-def test_extract_cleaning_extra_bundles_all_six_fields_with_new_names():
+def test_extract_cleaning_extra_bundles_all_fields_with_new_names():
     raw = _raw(price=18000, invoice_items=[
         {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 18000},
-    ], guestComments="到着が遅くなります", numAdult=2, numChild=0)
+    ], comments="到着が遅くなります", numAdult=2, numChild=0)
     extra = extract_cleaning_extra(raw)
     assert extra == {
         "guest_notice": "到着が遅くなります",
         "children_age_7plus_count": None,
+        "children_age_known_count": 0,
         "children_age_data_available": False,
         "bedding_guest_count": 2,
         "payment_due_at_property": True,
@@ -323,21 +412,35 @@ def test_extract_cleaning_extra_bundles_all_six_fields_with_new_names():
     }
 
 
-def test_extract_cleaning_extra_end_to_end_booking_com_child_age():
-    """raw dict(guestComments含む) -> bedding_guest_count/guest_noticeまで一気通貫。
-    OTA判定は既存normalize_booking_source()経由(refererEditable)。合成データのみ
-    (実データ未検証。module docstring参照)。"""
+def test_extract_cleaning_extra_end_to_end_real_anchor_booking_91673623():
+    """実データ booking 91673623(Beds24 UI「ゲストからのコメント」= "1 child aged 10")
+    のraw dict -> bedding_guest_count=3 / guest_notice=Noneまで一気通貫。
+    OTA判定は既存normalize_booking_source()経由(refererEditable)。"""
     raw = _raw(
         price=16000,
         invoice_items=[{"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 16000}],
-        refererEditable="Booking.com", numAdult=2, numChild=1,
-        guestComments="1 child aged 10\nWe will arrive around 18:00",
+        refererEditable="Booking.com", apiSource="Booking.com",
+        numAdult=2, numChild=1,
+        comments=("1 child aged 10\n\n** THIS RESERVATION HAS BEEN PRE-PAID **\n"
+                  "BOOKING NOTE : Payment charge is JPY 563.753\nNonSmoke\nNonSmoke\n"
+                  "Non Smoking Requested\n"),
     )
     extra = extract_cleaning_extra(raw)
-    assert extra["bedding_guest_count"] == 3  # adults2 + confirmed-7plus 1
+    assert extra["bedding_guest_count"] == 3  # adults2 + age10(7歳以上)1
     assert extra["children_age_7plus_count"] == 1
+    assert extra["children_age_known_count"] == 1
     assert extra["children_age_data_available"] is True
-    assert extra["guest_notice"] == "We will arrive around 18:00"  # metadata部分は除去済み
+    assert extra["guest_notice"] is None  # 全行がmetadata/OTA自動生成行
+
+
+def test_extract_cleaning_extra_end_to_end_child_age_with_guest_text():
+    raw = _raw(
+        refererEditable="Booking.com", numAdult=2, numChild=1,
+        comments="1 child aged 10\nWe will arrive around 18:00",
+    )
+    extra = extract_cleaning_extra(raw)
+    assert extra["bedding_guest_count"] == 3
+    assert extra["guest_notice"] == "We will arrive around 18:00"
 
 
 def test_extract_cleaning_extra_domestic_ota_bedding_count_ignores_age():
