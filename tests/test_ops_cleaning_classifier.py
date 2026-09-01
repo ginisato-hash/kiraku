@@ -190,3 +190,51 @@ def test_no_bookings_at_all_yields_18_vacant_rooms():
     rows = classify_cleaning_for_date([], "2026-09-03")
     assert len(rows) == 18
     assert all(r.status == "VACANT" for r in rows)
+
+
+# ---------------- 2026-09: cleaning_extra_by_booking_id threading ----------------
+# (guest_notice/children_age_*/onsite_payment_*はStaffBookingRecordではなく別経路
+# extract_cleaning_extra()から来るため、_guest_info()が正しく反映することを確認する)
+
+def test_guest_info_defaults_new_fields_when_no_extra_map_given():
+    bookings = [_sb("1", "401", "2026-08-30", "2026-09-01")]
+    rows = classify_cleaning_for_date(bookings, "2026-08-30")
+    row = _row_for("401", rows)
+    guest = row.arriving_guest
+    assert guest.guest_notice is None
+    assert guest.children_age_7plus_count is None
+    assert guest.children_age_data_available is False
+    assert guest.onsite_payment_required is False
+    assert guest.onsite_payment_amount is None
+
+
+def test_guest_info_picks_up_cleaning_extra_by_booking_id():
+    bookings = [_sb("1", "401", "2026-08-30", "2026-09-01")]
+    extra = {"1": {
+        "guest_notice": "静かな部屋希望",
+        "children_age_7plus_count": None,
+        "children_age_data_available": False,
+        "onsite_payment_required": True,
+        "onsite_payment_amount": 18000,
+    }}
+    rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
+    guest = _row_for("401", rows).arriving_guest
+    assert guest.guest_notice == "静かな部屋希望"
+    assert guest.onsite_payment_required is True
+    assert guest.onsite_payment_amount == 18000
+
+
+def test_guest_info_extra_lookup_is_scoped_to_the_matching_booking_id_only():
+    """複数予約が混在しても、無関係なbooking_idのextraを誤って拾わない。"""
+    bookings = [
+        _sb("1", "401", "2026-08-30", "2026-09-01"),
+        _sb("2", "402", "2026-08-30", "2026-09-01"),
+    ]
+    extra = {"1": {
+        "guest_notice": "401専用のお知らせ",
+        "children_age_7plus_count": None, "children_age_data_available": False,
+        "onsite_payment_required": False, "onsite_payment_amount": None,
+    }}
+    rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
+    assert _row_for("401", rows).arriving_guest.guest_notice == "401専用のお知らせ"
+    assert _row_for("402", rows).arriving_guest.guest_notice is None

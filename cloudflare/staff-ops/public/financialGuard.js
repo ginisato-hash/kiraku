@@ -47,6 +47,13 @@ export function assertNoFinancialKeys(value, path = "$") {
 // lets every page that consumes /api/cleaning assert it at runtime too,
 // exactly like assertNoFinancialKeys is already called after /api/daily-ops
 // fetches.
+//
+// 2026-09 exception (explicitly approved): onsite_payment_required /
+// onsite_payment_amount are the only financial fields allowed in the
+// Cleaning DTO ("amount owed on-site" as operational data). They do not
+// collide with any entry in this list (different vocabulary from
+// revenue/ADR/RevPAR/commission/invoice detail etc.), so no change to the
+// list itself was required — recorded here for auditability.
 export const CLEANING_FORBIDDEN_KEYS = [
   ...FORBIDDEN_FINANCIAL_KEYS,
   "phone",

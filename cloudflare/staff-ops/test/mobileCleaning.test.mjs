@@ -1,7 +1,11 @@
-// モバイル清掃ビュー(/cleaning/today, FINAL設計)のテスト：
+// モバイル清掃ビュー(/cleaning/today)のテスト：
 // renderMobileRoomBlock/renderMobileCleaningBody(cleaningSheetTemplate.js、DOM非依存の
 // 純粋関数) + today.html/today.jsのソース内容チェック（viewport meta / font-size /
 // today-JST default / ボタン無し）。
+//
+// 2026-09改訂: 印刷側と合わせOUT表示を削除、statusはIN/連泊のみ(printStatusLabel
+// を共有)。guest_notice/大人子供内訳は表示するが、現地決済金額は今回モバイルへ
+// 追加しない(spec項目30: 清掃担当者に金額情報を見せる必要は今回指定されていない)。
 //
 // today.js自体はmain()をトップレベルで即時実行し window/document を参照するため、
 // Node環境で直接importするとクラッシュする — 実データを扱う描画ロジックは
@@ -38,12 +42,29 @@ await check("renderMobileCleaningBody never includes an UNASSIGNED block (room_n
   assert.ok(!out.includes("中村 光"));
 });
 
-await check("occupied room block (TURNOVER, 401) shows the guest name and 入替 label prominently", async () => {
+await check("occupied room block (TURNOVER, 401) shows the guest name and an IN status badge (not 入替/OUT)", async () => {
   const room = rooms.find((r) => r.room_number === "401");
   const out = renderMobileRoomBlock(room);
   assert.ok(out.includes("mc-room-block"));
   assert.ok(out.includes("山田 太郎"));
-  assert.ok(out.includes("入替"));
+  const badgeMatch = out.match(/<div class="mc-status-badge[^"]*">([^<]*)<\/div>/);
+  assert.ok(badgeMatch, "expected a status badge");
+  assert.equal(badgeMatch[1], "IN", "TURNOVER must show as IN on mobile, matching the print sheet");
+  assert.ok(!out.includes(">OUT<"));
+  assert.ok(!/status-badge[^>]*>入替/.test(out));
+});
+
+await check("STAYOVER room (404) shows a 連泊 status badge", async () => {
+  const room = rooms.find((r) => r.room_number === "404");
+  const out = renderMobileRoomBlock(room);
+  const badgeMatch = out.match(/<div class="mc-status-badge[^"]*">([^<]*)<\/div>/);
+  assert.equal(badgeMatch[1], "連泊");
+});
+
+await check("CHECKOUT room (403) shows no status badge at all (printStatusLabel is blank for CHECKOUT)", async () => {
+  const room = rooms.find((r) => r.room_number === "403");
+  const out = renderMobileRoomBlock(room);
+  assert.ok(!out.includes("mc-status-badge"));
 });
 
 await check("vacant room block (405) renders compactly: room number + 空室 only, no guest/detail lines", async () => {
@@ -58,7 +79,7 @@ await check("vacant room block (405) renders compactly: room number + 空室 onl
 await check("renderMobileRoomBlock omits the instruction line entirely when effectiveInstruction is empty (not a blank line)", async () => {
   const room = rooms.find((r) => r.room_number === "404"); // STAYOVER, source_instruction ""
   const out = renderMobileRoomBlock(room);
-  assert.ok(!out.includes("mc-instruction"));
+  assert.ok(!out.includes("指:"));
 });
 
 await check("a VACANT room with an override instruction still shows it (never silently hidden just because the room is empty)", async () => {
@@ -68,6 +89,32 @@ await check("a VACANT room with an override instruction still shows it (never si
   assert.ok(out.includes("mc-room-vacant"));
   assert.ok(out.includes("空室"));
   assert.ok(out.includes("電球交換予定"));
+});
+
+await check("occupied room block shows guest_notice as a '客:' line when present", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // has guest_notice in the fixture
+  const out = renderMobileRoomBlock(room);
+  assert.ok(out.includes("客: 到着が少し遅れます"));
+});
+
+await check("occupied room block shows the effectiveInstruction as a '指:' line when present", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // source_instruction="入替"
+  const out = renderMobileRoomBlock(room);
+  assert.ok(out.includes("指: 入替"));
+});
+
+await check("occupied room block never shows onsite payment amount (out of scope for mobile per spec)", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // onsite_payment_amount=18000 in the fixture
+  const out = renderMobileRoomBlock(room);
+  assert.ok(!out.includes("18,000"));
+  assert.ok(!out.includes("¥"));
+  assert.ok(!out.includes("現地"));
+});
+
+await check("occupied room block includes the 大人/子供 breakdown alongside the guest count", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // adults=2, children=1
+  const out = renderMobileRoomBlock(room);
+  assert.ok(out.includes("大2 子1"));
 });
 
 await check("today.html declares a viewport meta tag", async () => {

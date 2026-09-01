@@ -80,13 +80,19 @@
       white-space: nowrap;
     }
 
-    /* RoomNoヘッダだけ他より文字が長く(6文字)、11px相当(2.9mm)/700だと列幅
-       15mmに収まりきらず再び見切れるため、ここだけ10px相当まで落とす。 */
+    /* RoomNoヘッダは大きくしなくてよい(仕様上の指定)。見切れないことを優先し、
+       他より文字が長い(6文字)ため個別に小さくする。 */
     .cs-h-room {
       font-size: 2.6mm;
     }
 
     .cs-main-table tbody tr { height: 10.5mm; }
+
+    /* 4F(401-406)/5F(501-507)/6F(601-607)の階境界。501/601の行の上辺だけ
+       通常罫線(1px)より明確に太くする。背景色は使わず罫線のみで区切る。 */
+    tr.cs-floor-start > td {
+      border-top: 0.7mm solid #111111;
+    }
 
     .cs-main-table td {
       font-size: 3.4mm;
@@ -96,16 +102,20 @@
       overflow: hidden;
     }
 
+    /* RoomNo: 清掃スタッフが最初に見る情報。枠内で上下に収まる最大付近まで
+       大型化する(約22-23px相当)。 */
     .cs-c-room {
-      font-weight: 700;
-      font-size: 4mm;
+      font-weight: 800;
+      font-size: 6mm;
+      line-height: 1;
+      padding-left: 0.5mm;
+      padding-right: 0.5mm;
       text-align: center;
     }
 
     .cs-c-guest, .cs-c-notes { text-align: left; }
 
-    .cs-c-count, .cs-c-nights, .cs-c-status,
-    .cs-c-in, .cs-c-out, .cs-c-arrival, .cs-c-ota {
+    .cs-c-count, .cs-c-nights, .cs-c-status, .cs-c-arrival, .cs-c-ota, .cs-c-onsite {
       text-align: center;
     }
 
@@ -119,8 +129,28 @@
     .cs-guest-12 { font-size: 3.2mm; }
     .cs-guest-11 { font-size: 2.9mm; }
 
-    .cs-c-in, .cs-c-out {
-      font-size: 4mm;
+    /* 人数：上段=総人数(最大サイズ)、下段=大人/子供内訳。 */
+    .cs-total-guests {
+      font-size: 5.5mm;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .cs-guest-breakdown {
+      font-size: 2.8mm;
+      font-weight: 700;
+      line-height: 1.05;
+      white-space: nowrap;
+    }
+
+    .cs-c-nights {
+      font-size: 5mm;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .cs-c-status {
+      font-size: 4.5mm;
+      font-weight: 800;
     }
 
     .cs-c-ota {
@@ -128,21 +158,36 @@
       font-weight: 600;
     }
 
-    /* 空室行の「空室」は他ステータス(連泊/入替/IN/OUT)ほど目立たせない。 */
-    .cs-status-vacant {
-      font-size: 3.2mm;
-      font-weight: 600;
+    /* 現地決済：見落とし防止のため太字。対象外は空セルのまま。line-height:1を
+       明示しないとブラウザ既定行高(約1.2倍)で他セルより行高が膨らんでしまう
+       (人数の2段組セル等と揃えるため必須)。 */
+    .cs-onsite-label {
+      font-size: 2.8mm;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .cs-onsite-amount {
+      font-size: 3.5mm;
+      font-weight: 800;
+      line-height: 1;
     }
 
     /* 備考・通信セル：外枠(表全体の罫線)のみを残した無地の記入欄。かつて2行clamp用に
-       display:-webkit-box を指定していたが、これは<td>に必須のdisplay:table-cellを
-       上書きしてしまい、セルが行の高さいっぱいに広がらず内側に余計な罫線があるように
-       見える不具合の原因だった。単純にoverflow:hiddenのみで十分。 */
+       display:-webkit-box をtd自体に指定していたが、これは<td>に必須の
+       display:table-cellを上書きしてしまい、セルが行の高さいっぱいに広がらず
+       内側に余計な罫線があるように見える不具合の原因だった。tdへは何のdisplayも
+       指定せず、内部に「客:」「指:」それぞれ1行(nowrap+ellipsis)のdivを最大2つ
+       置くだけにする — td自体は通常のtable-cellのまま、外枠だけの記入欄を維持する。 */
     .cs-c-notes {
+      overflow: hidden;
+    }
+    .cs-notice-line, .cs-instruction-line {
       font-size: 3.2mm;
       font-weight: 600;
       line-height: 1.25;
+      white-space: nowrap;
       overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .cs-footer-box {

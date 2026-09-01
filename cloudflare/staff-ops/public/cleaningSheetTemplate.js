@@ -1,10 +1,12 @@
 // cleaningSheetTemplate.js — 清掃・客室指示表（印刷用A4シート）のHTML生成、および
 // 印刷ページ/モバイルページ/スタッフ清掃リストの3画面が共有する純粋ヘルパー関数群。
 //
-// これはFINAL・確定仕様の実装であり、以前のPLACEHOLDER(原本写真待ち)版は廃止された。
-// 列構成・寸法・文言はすべて仕様書通りに固定。ここにあるガード/選択ロジック
-// (cleanValue/priorityGuestFor/nightProgressFor等)は3画面すべてが必ずこのファイル
-// から import して使うこと — 個別に再実装して食い違いを生まないため。
+// 2026-09改訂: 現場フィードバックに基づき、表示項目・列構成・Cleaning DTOを更新。
+// 変更点: OUT列削除、ステータス1列化(IN/連泊のみ、印刷/モバイル専用)、人数の
+// 大人/子供内訳表示、お客様からのお知らせ(guest_notice)、現地決済列を追加。
+// Staff cleaning list(cleaningStaffView.js)側のフル情報表示(statusLabel/inMark/
+// outMark、IN/OUT/連泊/入替/空室/未割当)は意図的に変更しない — printStatusLabel()は
+// 印刷/モバイル専用の別関数として新設した。
 //
 // KIRAKU_ROOM_ORDER は src/roomMaster.js が唯一の実体。この相対import
 // ("../src/roomMaster.js")は、Node実行時(このファイルからの相対ファイルパス解決)と
@@ -18,8 +20,8 @@ import { KIRAKU_ROOM_ORDER } from "../src/roomMaster.js";
 import { escapeHtml } from "./printUtils.js";
 import { formatJapaneseDateWithWeekdayParen } from "./jst.js";
 
-// ステータス(英語enum) -> 表示用の日本語ラベル。CANCELLEDはVACANTと同一表示
-// (仕様上「特別なUIなし、VACANT同様に扱う」)。
+// ステータス(英語enum) -> 表示用の日本語ラベル(フル表示)。Staff cleaning list
+// (cleaningStaffView.js)専用 — CANCELLEDはVACANTと同一表示。
 export const STATUS_LABELS_JP = {
   CHECKIN: "IN",
   CHECKOUT: "OUT",
@@ -32,6 +34,23 @@ export const STATUS_LABELS_JP = {
 
 export function statusLabel(status) {
   return STATUS_LABELS_JP[status] || "";
+}
+
+// 印刷/モバイル専用の簡略ステータス表示。紙面の視認性優先でIN/連泊の2種類のみに
+// 単純化する。TURNOVERは「当日次の客が入る」ことが重要なのでINとして扱う。
+// OUT/入替/空室/未割当は紙面には出さない(空欄)。
+export const PRINT_STATUS_LABELS = {
+  CHECKIN: "IN",
+  TURNOVER: "IN",
+  STAYOVER: "連泊",
+  CHECKOUT: "",
+  VACANT: "",
+  CANCELLED: "",
+  UNASSIGNED: "",
+};
+
+export function printStatusLabel(status) {
+  return PRINT_STATUS_LABELS[status] || "";
 }
 
 // None/null/プレースホルダー文字列("None"/"null"/"undefined"/"N/A")を空文字へ
@@ -91,6 +110,26 @@ export function guestCountFor(room) {
   return String(g.total_guests);
 }
 
+// 人数セル下段の「大人/子供」内訳。子供0名なら「子0」は表示しない(「大2」のみ)。
+// children_age_data_available && children_age_7plus_count!=null の場合のみ
+// (現状はBeds24に年齢データが存在しないため常にfalse/null。将来field追加時に
+// 自動的に有効化される) 「子7+N」表記にする — 7歳未満の人数は下段に含めない
+// (ただし上段のtotal_guestsには当然含まれている)。
+export function guestBreakdownFor(room) {
+  const g = priorityGuestFor(room);
+  if (!g) return "";
+  const parts = [];
+  if (g.adults != null) parts.push(`大${g.adults}`);
+  if (g.children > 0) {
+    if (g.children_age_data_available && g.children_age_7plus_count != null) {
+      parts.push(`子7+${g.children_age_7plus_count}`);
+    } else {
+      parts.push(`子${g.children}`);
+    }
+  }
+  return parts.join(" ");
+}
+
 // "idx/total" 形式。current_night_index/total_nightsはPython側で既に計算済み
 // (compute_night_progress) — ここで再計算しない。
 export function nightProgressFor(room) {
@@ -112,6 +151,25 @@ export function arrivalTimeFor(room) {
 export function otaFor(room) {
   const g = priorityGuestFor(room);
   return g ? cleanValue(g.source) : "";
+}
+
+// お客様からのお知らせ(guest_notice)。内部メモ(override/effectiveInstruction)とは
+// 完全に別データ。
+export function guestNoticeFor(room) {
+  const g = priorityGuestFor(room);
+  return g ? cleanValue(g.guest_notice) : "";
+}
+
+// 現地決済表示。onsite_payment_required && onsite_payment_amountが正の有限数の
+// 場合のみ表示対象とする(不確実な金額を「?」等で誤表示するくらいなら完全空欄)。
+export function onsiteInfoFor(room) {
+  const g = priorityGuestFor(room);
+  if (!g || !g.onsite_payment_required) return { show: false, amountText: "" };
+  const amount = g.onsite_payment_amount;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return { show: false, amountText: "" };
+  }
+  return { show: true, amountText: `¥${Math.round(amount).toLocaleString("ja-JP")}` };
 }
 
 export function inMark(room) {
@@ -149,21 +207,25 @@ export function roomsByCanonicalOrder(rooms) {
   });
 }
 
+// 4F(401-406)/5F(501-507)/6F(601-607)の階境界。5F/6Fの最初の部屋の上辺だけ
+// 太罫線にする。room number基準で判定する(index位置からの推測はしない)。
+const FLOOR_START_ROOMS = new Set(["501", "601"]);
+export function isFloorStartRoom(roomNumber) {
+  return FLOOR_START_ROOMS.has(String(roomNumber));
+}
+
 // ---------------- 印刷ページ（/ops/print/cleaning）本体 ----------------
 
-// mm単位。相対比率(客室名が広い/IN・OUTが狭い/備考・通信が最も広い)を必ず維持
-// すること。合計196mm(.cleaning-sheetの幅と一致)。
-// RoomNo列は見出し「RoomNo」が2.8mmフォントで確実に収まる最小幅として15mm
-// (13mmでは実測約1.1mm不足し見出しが枠内で見切れていた)。その2mm分は
-// 備考・通信列(56mm)から差し引いており、備考欄の実用上の広さには影響しない。
-export const COLUMN_WIDTHS_MM = [15, 38, 9, 11, 18, 8, 8, 15, 20, 54];
+// mm単位。RoomNo/人数/泊数は縮小方向への調整禁止(現場フィードバックで拡大した列)。
+// 合計196mm(.cleaning-sheetの幅と一致)。
+export const COLUMN_WIDTHS_MM = [16, 36, 21, 14, 16, 14, 18, 24, 37];
 export const COLUMN_LABELS = [
-  "RoomNo", "お客様名", "人数", "泊数", "清掃区分", "IN", "OUT", "到着", "予約元", "備考・通信",
+  "RoomNo", "お客様名", "人数", "泊数", "ステータス", "到着", "予約元", "現地決済", "備考・通信",
 ];
 // ヘッダ<th>とボディ<td>で同じ列に同じキーのclassを付けるための対応表
 // (cs-h-room/cs-c-room のように接頭辞だけ変える)。CSS側がRoomNoヘッダだけ
 // 個別にfont-sizeを調整できるようにするための最小限のフック。
-const COLUMN_KEYS = ["room", "guest", "count", "nights", "status", "in", "out", "arrival", "ota", "notes"];
+const COLUMN_KEYS = ["room", "guest", "count", "nights", "status", "arrival", "ota", "onsite", "notes"];
 
 function buildColgroup() {
   return `<colgroup>${COLUMN_WIDTHS_MM.map((w) => `<col style="width:${w}mm;">`).join("")}</colgroup>`;
@@ -193,7 +255,7 @@ export function effectiveTextWidth(str) {
   return width;
 }
 
-// お客様名セルのfont-sizeクラスを返すpure helper。枠(38mm列)に収まる範囲で
+// お客様名セルのfont-sizeクラスを返すpure helper。枠(36mm列)に収まる範囲で
 // 既定は13px相当(cs-guest-13)、実効幅が長い氏名だけ段階的に12px→11px相当へ
 // 縮小する。しきい値(10/16)は「半角のみの氏名ならlength<=10は13px」という
 // 直感的な基準をeffectiveTextWidthに適用したもの。
@@ -204,21 +266,40 @@ export function guestNameSizeClass(name) {
   return "cs-guest-11";
 }
 
-function buildRoomRow(room) {
+function buildNotesCell(room) {
+  const notice = guestNoticeFor(room);
   const instruction = cleanValue(room.effectiveInstruction);
+  const lines = [];
+  if (notice) lines.push(`<div class="cs-notice-line" title="${escapeHtml(notice)}">客: ${escapeHtml(notice)}</div>`);
+  if (instruction) lines.push(`<div class="cs-instruction-line" title="${escapeHtml(instruction)}">指: ${escapeHtml(instruction)}</div>`);
+  return `<td class="cs-c-notes">${lines.join("")}</td>`;
+}
+
+function buildOnsiteCell(room) {
+  const onsite = onsiteInfoFor(room);
+  if (!onsite.show) return `<td class="cs-c-onsite"></td>`;
+  return `<td class="cs-c-onsite">
+    <div class="cs-onsite-label">現地</div>
+    <div class="cs-onsite-amount">${escapeHtml(onsite.amountText)}</div>
+  </td>`;
+}
+
+function buildRoomRow(room) {
   const guestName = guestNameFor(room);
-  const isVacant = room.status === "VACANT" || room.status === "CANCELLED";
-  return `<tr data-room-number="${escapeHtml(room.room_number)}">
+  const trClass = isFloorStartRoom(room.room_number) ? ` class="cs-floor-start"` : "";
+  return `<tr data-room-number="${escapeHtml(room.room_number)}"${trClass}>
     <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
     <td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
-    <td class="cs-c-count">${escapeHtml(guestCountFor(room))}</td>
+    <td class="cs-c-count">
+      <div class="cs-total-guests">${escapeHtml(guestCountFor(room))}</div>
+      <div class="cs-guest-breakdown">${escapeHtml(guestBreakdownFor(room))}</div>
+    </td>
     <td class="cs-c-nights">${escapeHtml(nightProgressFor(room))}</td>
-    <td class="cs-c-status${isVacant ? " cs-status-vacant" : ""}">${escapeHtml(statusLabel(room.status))}</td>
-    <td class="cs-c-in">${inMark(room)}</td>
-    <td class="cs-c-out">${outMark(room)}</td>
+    <td class="cs-c-status">${escapeHtml(printStatusLabel(room.status))}</td>
     <td class="cs-c-arrival">${escapeHtml(arrivalTimeFor(room))}</td>
     <td class="cs-c-ota">${escapeHtml(otaPrintShortName(otaFor(room)))}</td>
-    <td class="cs-c-notes" title="${escapeHtml(instruction)}">${escapeHtml(instruction)}</td>
+    ${buildOnsiteCell(room)}
+    ${buildNotesCell(room)}
   </tr>`;
 }
 
@@ -229,6 +310,9 @@ function buildRoomRow(room) {
 // 印刷ページと完全に同じ上記ヘルパーを再利用し、食い違いを生まない。
 // today.js内にDOM非依存で置くとmain()の即時実行(window参照)によりNode環境の
 // テストからimportできなくなるため、副作用の無いこのファイルに置く。
+// 2026-09: 印刷側と合わせ、OUT表示を削除しstatusはIN/連泊のみにした
+// (printStatusLabel()を共有)。現地決済金額は今回モバイルへは追加しない
+// (清掃担当者に金額情報を見せる必要は今回指定されていないため)。
 export function renderMobileRoomBlock(room) {
   if (room.status === "VACANT" || room.status === "CANCELLED") {
     // 空室でも、指示(override)が付いていれば必ず表示する — 印刷ページの
@@ -242,32 +326,29 @@ export function renderMobileRoomBlock(room) {
     </div>`;
   }
 
-  const label = statusLabel(room.status);
+  const label = printStatusLabel(room.status);
   const guestName = guestNameFor(room);
   const count = guestCountFor(room);
+  const breakdown = guestBreakdownFor(room);
   const nights = nightProgressFor(room);
   const arrival = arrivalTimeFor(room);
   const ota = cleanValue(otaFor(room));
+  const notice = guestNoticeFor(room);
   const instruction = cleanValue(room.effectiveInstruction);
 
-  const inOutParts = [];
-  if (inMark(room)) inOutParts.push("IN");
-  if (outMark(room)) inOutParts.push("OUT");
-  const inOutText = inOutParts.join(" / ");
-
   const countNightsParts = [];
-  if (count) countNightsParts.push(`人数 ${count}名`);
+  if (count) countNightsParts.push(`人数 ${count}名${breakdown ? `（${breakdown}）` : ""}`);
   if (nights) countNightsParts.push(`泊数 ${nights}`);
 
   return `<div class="mc-room-block">
     <div class="mc-room-number">${escapeHtml(room.room_number)}号室</div>
-    <div class="mc-status-badge mc-status-${room.status}">${escapeHtml(label)}</div>
+    ${label ? `<div class="mc-status-badge mc-status-${room.status}">${escapeHtml(label)}</div>` : ""}
     ${guestName ? `<div class="mc-guest-name">${escapeHtml(guestName)}</div>` : ""}
     ${countNightsParts.length ? `<div class="mc-detail-line">${escapeHtml(countNightsParts.join("　"))}</div>` : ""}
-    ${inOutText ? `<div class="mc-detail-line">${escapeHtml(inOutText)}</div>` : ""}
     ${arrival ? `<div class="mc-detail-line">到着 ${escapeHtml(arrival)}</div>` : ""}
     ${ota ? `<div class="mc-detail-line">予約元 ${escapeHtml(ota)}</div>` : ""}
-    ${instruction ? `<div class="mc-instruction">${escapeHtml(instruction)}</div>` : ""}
+    ${notice ? `<div class="mc-instruction">客: ${escapeHtml(notice)}</div>` : ""}
+    ${instruction ? `<div class="mc-instruction">指: ${escapeHtml(instruction)}</div>` : ""}
   </div>`;
 }
 

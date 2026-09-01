@@ -8,8 +8,8 @@
 // テストできる。renderStaffCleaningTable/validateInstructionInput/
 // buildOverrideSaveBody/buildOverrideDeleteBody は完全に純粋でDOM非依存。
 import {
-  statusLabel, guestNameFor, guestCountFor, nightProgressFor, arrivalTimeFor,
-  otaFor, cleanValue, inMark, outMark, roomsByCanonicalOrder,
+  statusLabel, guestNameFor, guestCountFor, guestBreakdownFor, nightProgressFor, arrivalTimeFor,
+  otaFor, guestNoticeFor, onsiteInfoFor, cleanValue, inMark, outMark, roomsByCanonicalOrder,
 } from "./cleaningSheetTemplate.js";
 import { escapeHtml } from "./printUtils.js";
 import { assertNoFinancialKeys, assertNoForbiddenCleaningKeys } from "./financialGuard.js";
@@ -37,10 +37,15 @@ export function buildOverrideDeleteBody(date, roomNumber) {
   return { date, roomNumber };
 }
 
+// override編集機能は既存(RoomNo/guest/status/人数/泊数/IN/OUT/arrival/source/指示)
+// を一切変更せず、大人/子供内訳・お客様からのお知らせ・現地決済のみを追加した
+// 総14列(編集ボタン列含む)。colspanもこれに合わせる。
+const STAFF_TABLE_COLSPAN = 14;
+
 function buildEditPanelRow(room, errorText) {
   const instruction = cleanValue(room.effectiveInstruction);
   return `<tr class="csv-edit-row" data-room-number="${escapeHtml(room.room_number)}">
-    <td colspan="11">
+    <td colspan="${STAFF_TABLE_COLSPAN}">
       <div class="csv-edit-panel">
         <div class="csv-edit-title">${escapeHtml(room.room_number)}号室</div>
         <label class="csv-edit-label" for="csv-edit-input-${escapeHtml(room.room_number)}">追加・変更指示</label>
@@ -58,16 +63,21 @@ function buildEditPanelRow(room, errorText) {
 
 function buildRoomTableRow(room, editingRoom, errorText) {
   const instruction = cleanValue(room.effectiveInstruction);
+  const notice = guestNoticeFor(room);
+  const onsite = onsiteInfoFor(room);
   const baseRow = `<tr data-room-number="${escapeHtml(room.room_number)}">
     <td>${escapeHtml(room.room_number)}</td>
     <td>${escapeHtml(guestNameFor(room))}</td>
     <td>${escapeHtml(statusLabel(room.status))}</td>
     <td>${escapeHtml(guestCountFor(room))}</td>
+    <td>${escapeHtml(guestBreakdownFor(room))}</td>
     <td>${escapeHtml(nightProgressFor(room))}</td>
     <td>${inMark(room)}</td>
     <td>${outMark(room)}</td>
     <td>${escapeHtml(arrivalTimeFor(room))}</td>
     <td>${escapeHtml(cleanValue(otaFor(room)))}</td>
+    <td title="${escapeHtml(notice)}">${escapeHtml(notice)}</td>
+    <td>${onsite.show ? `現地 ${escapeHtml(onsite.amountText)}` : ""}</td>
     <td>${escapeHtml(instruction)}</td>
     <td><button type="button" class="csv-edit-btn" data-action="edit" data-room="${escapeHtml(room.room_number)}">指示を編集</button></td>
   </tr>`;
@@ -88,8 +98,9 @@ export function renderStaffCleaningTable(rooms, editingRoom, errorText) {
   return `<table class="csv-table">
     <thead>
       <tr>
-        <th>RoomNo</th><th>guest</th><th>status</th><th>人数</th><th>泊数</th>
-        <th>IN</th><th>OUT</th><th>arrival</th><th>source</th><th>指示</th><th></th>
+        <th>RoomNo</th><th>guest</th><th>status</th><th>人数</th><th>大人/子供</th><th>泊数</th>
+        <th>IN</th><th>OUT</th><th>arrival</th><th>source</th><th>お知らせ</th><th>現地決済</th>
+        <th>指示</th><th></th>
       </tr>
     </thead>
     <tbody>${bodyRows}</tbody>

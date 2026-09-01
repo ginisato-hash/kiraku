@@ -11,11 +11,13 @@ import dataclasses
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .. import config
 from .cleaning_classifier import classify_cleaning_for_date
-from .extract import extract_staff_booking, load_room_type_config, load_room_unit_mapping
+from .extract import (
+    extract_cleaning_extra, extract_staff_booking, load_room_type_config, load_room_unit_mapping,
+)
 from .raw_reader import load_raw_bookings_for_months, months_covering_date_range
 from .schema import StaffBookingRecord, assert_no_financial_keys, assert_no_forbidden_cleaning_keys
 
@@ -65,11 +67,18 @@ def _sorted_by_booking_id(records: List[StaffBookingRecord]) -> List[StaffBookin
 
 def load_all_staff_bookings(target_dates: List[str], data_root: Path = None,
                             room_types_config: Dict = None,
-                            room_unit_mapping: Dict = None) -> List[StaffBookingRecord]:
+                            room_unit_mapping: Dict = None) -> Tuple[List[StaffBookingRecord], Dict]:
     """対象日の集合をカバーするのに必要な月のraw JSONを読み込み、
-    StaffBookingRecordへ変換した一覧を返す(重複booking_idは除去)。"""
+    StaffBookingRecordへ変換した一覧を返す(重複booking_idは除去)。
+
+    第2戻り値 cleaning_extra_by_booking_id は、Cleaning DTO専用の追加項目
+    (guest_notice/children_age_7plus_count/onsite_payment_*)をbooking_idで
+    indexしたdict。StaffBookingRecord自体には追加しない
+    (Daily Ops/宿泊者名簿の出力へ意図せず混入するのを防ぐため。extract.extract_cleaning_extra
+    のdocstring参照)。
+    """
     if not target_dates:
-        return []
+        return [], {}
     start = min(target_dates)
     end = max(target_dates)
     months = months_covering_date_range(start, end)
@@ -79,16 +88,19 @@ def load_all_staff_bookings(target_dates: List[str], data_root: Path = None,
 
     seen_ids = set()
     records: List[StaffBookingRecord] = []
+    cleaning_extra_by_booking_id: Dict = {}
     for raw in raw_bookings:
         rec = extract_staff_booking(raw, room_types_config, room_unit_mapping)
         if rec.booking_id in seen_ids:
             continue
         seen_ids.add(rec.booking_id)
         records.append(rec)
-    return records
+        cleaning_extra_by_booking_id[rec.booking_id] = extract_cleaning_extra(raw)
+    return records, cleaning_extra_by_booking_id
 
 
-def _build_date_bucket(records: List[StaffBookingRecord], target_date: str) -> Dict:
+def _build_date_bucket(records: List[StaffBookingRecord], target_date: str,
+                       cleaning_extra_by_booking_id: Optional[Dict] = None) -> Dict:
     arrivals = [b for b in records
                if b.checkin_date == target_date and not _is_cancelled_like(b.status)]
     departures = [b for b in records
@@ -97,7 +109,7 @@ def _build_date_bucket(records: List[StaffBookingRecord], target_date: str) -> D
                 if b.checkin_date and b.checkout_date
                 and b.checkin_date < target_date < b.checkout_date
                 and not _is_cancelled_like(b.status)]
-    cleaning_rows = classify_cleaning_for_date(records, target_date)
+    cleaning_rows = classify_cleaning_for_date(records, target_date, cleaning_extra_by_booking_id)
     cleaning_dict = {"rooms": [_asdict(r) for r in cleaning_rows]}
     # cleaning出力専用の禁止キー(財務系+住所/電話/メール/パスポート/国籍等)の
     # 最終防御チェック。CleaningGuestInfoにこれらのフィールドは存在しないため
@@ -120,12 +132,13 @@ def build_staff_ops_snapshot(target_dates: List[str], data_root: Path = None) ->
     """
     room_types_config = load_room_type_config()
     room_unit_mapping = load_room_unit_mapping()
-    records = load_all_staff_bookings(target_dates, data_root=data_root,
-                                      room_types_config=room_types_config,
-                                      room_unit_mapping=room_unit_mapping)
+    records, cleaning_extra_by_booking_id = load_all_staff_bookings(
+        target_dates, data_root=data_root,
+        room_types_config=room_types_config,
+        room_unit_mapping=room_unit_mapping)
 
     dates_out = {
-        d: _build_date_bucket(records, d)
+        d: _build_date_bucket(records, d, cleaning_extra_by_booking_id)
         for d in target_dates
     }
 

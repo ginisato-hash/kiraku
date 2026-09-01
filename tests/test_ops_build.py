@@ -89,6 +89,45 @@ def test_build_staff_ops_snapshot_top_level_shape(tmp_path):
         "arrivals", "departures", "stayovers", "cleaning"}
 
 
+def test_build_staff_ops_snapshot_cleaning_extra_flows_through_end_to_end(tmp_path):
+    """raw Beds24 dict(guestComments/invoiceItems) -> cleaning DTOのguest_notice/
+    onsite_payment_*まで、実際のbuild_staff_ops_snapshot()経路で一気通貫することを確認する。"""
+    booking = _raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02", unit_id=1)
+    booking["guestComments"] = "到着が遅くなります"
+    booking["price"] = 13000
+    booking["invoiceItems"] = [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},
+        {"type": "payment", "description": "現地支払い", "lineTotal": 0},
+    ]
+    _write_month(tmp_path, "2026-09", [booking])
+    snapshot = ops_build.build_staff_ops_snapshot(["2026-09-01"], data_root=tmp_path)
+    rooms = snapshot["dates"]["2026-09-01"]["cleaning"]["rooms"]
+    room_607 = [r for r in rooms if r["room_number"] == "607"][0]
+    guest = room_607["arriving_guest"]
+    assert guest["guest_notice"] == "到着が遅くなります"
+    assert guest["onsite_payment_required"] is True
+    assert guest["onsite_payment_amount"] == 13000
+
+
+def test_daily_ops_arrivals_never_carry_the_cleaning_only_extra_fields(tmp_path):
+    """guest_notice/onsite_payment_*はCleaning DTO専用 — StaffBookingRecord自体には
+    追加していないため、Daily Ops(arrivals/departures/stayovers、宿泊者名簿の元データ)
+    の出力にはそもそも一切現れない(構造的な分離の回帰確認)。"""
+    booking = _raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02", unit_id=1)
+    booking["guestComments"] = "到着が遅くなります"
+    booking["price"] = 13000
+    booking["invoiceItems"] = [
+        {"type": "charge", "description": "[ROOMNAME1]", "lineTotal": 13000},
+        {"type": "payment", "description": "現地支払い", "lineTotal": 0},
+    ]
+    _write_month(tmp_path, "2026-09", [booking])
+    snapshot = ops_build.build_staff_ops_snapshot(["2026-09-01"], data_root=tmp_path)
+    arrival = snapshot["dates"]["2026-09-01"]["arrivals"][0]
+    for forbidden_key in ("guest_notice", "onsite_payment_required", "onsite_payment_amount",
+                          "children_age_7plus_count", "children_age_data_available"):
+        assert forbidden_key not in arrival, f"{forbidden_key} must not leak into Daily Ops arrivals"
+
+
 def test_build_staff_ops_snapshot_recursively_passes_financial_key_guard(tmp_path):
     bookings = [_raw("A", SINGLE_TOILET_ROOM_ID, "2026-09-01", "2026-09-02")]
     _write_month(tmp_path, "2026-09", bookings)

@@ -53,7 +53,17 @@ def compute_night_progress(checkin: str, checkout: str,
     return None, total
 
 
-def _guest_info(b: StaffBookingRecord) -> CleaningGuestInfo:
+_EMPTY_CLEANING_EXTRA = {
+    "guest_notice": None,
+    "children_age_7plus_count": None,
+    "children_age_data_available": False,
+    "onsite_payment_required": False,
+    "onsite_payment_amount": None,
+}
+
+
+def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Dict] = None) -> CleaningGuestInfo:
+    extra = (cleaning_extra_by_booking_id or {}).get(b.booking_id, _EMPTY_CLEANING_EXTRA)
     return CleaningGuestInfo(
         booking_id=b.booking_id,
         guest_name=b.guest_name,
@@ -64,13 +74,21 @@ def _guest_info(b: StaffBookingRecord) -> CleaningGuestInfo:
         check_out=b.checkout_date,
         arrival_time=b.arrival_time,
         source=b.ota_name,
+        children_age_7plus_count=extra["children_age_7plus_count"],
+        children_age_data_available=extra["children_age_data_available"],
+        guest_notice=extra["guest_notice"],
+        onsite_payment_required=extra["onsite_payment_required"],
+        onsite_payment_amount=extra["onsite_payment_amount"],
     )
 
 
-def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
-                               target_date: str) -> List[CleaningRoomState]:
+def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: str,
+                               cleaning_extra_by_booking_id: Optional[Dict] = None) -> List[CleaningRoomState]:
     """target_date(YYYY-MM-DD, Asia/Tokyo基準)について、KIRAKU_ROOM_ORDERの18室
     それぞれの清掃状態を1行ずつ、かつ解決できなかった予約をUNASSIGNED行として返す。
+
+    cleaning_extra_by_booking_id: extract.extract_cleaning_extra()の結果を
+    booking_idでindexしたdict(省略時は全項目None/False相当のデフォルト)。
     """
     cancelled_statuses = _cancelled_statuses()
 
@@ -113,7 +131,8 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
             idx, total = compute_night_progress(arriving.checkin_date, arriving.checkout_date, target_date)
             rows.append(CleaningRoomState(
                 date=target_date, room_number=room_number, status="TURNOVER",
-                departing_guest=_guest_info(departing), arriving_guest=_guest_info(arriving),
+                departing_guest=_guest_info(departing, cleaning_extra_by_booking_id),
+                arriving_guest=_guest_info(arriving, cleaning_extra_by_booking_id),
                 staying_guest=None, current_night_index=idx, total_nights=total,
                 source_instruction="入替",
             ))
@@ -122,7 +141,7 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
             idx, total = compute_night_progress(departing.checkin_date, departing.checkout_date, target_date)
             rows.append(CleaningRoomState(
                 date=target_date, room_number=room_number, status="CHECKOUT",
-                departing_guest=_guest_info(departing), arriving_guest=None, staying_guest=None,
+                departing_guest=_guest_info(departing, cleaning_extra_by_booking_id), arriving_guest=None, staying_guest=None,
                 current_night_index=idx, total_nights=total, source_instruction="",
             ))
         elif checkins:
@@ -130,7 +149,7 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
             idx, total = compute_night_progress(arriving.checkin_date, arriving.checkout_date, target_date)
             rows.append(CleaningRoomState(
                 date=target_date, room_number=room_number, status="CHECKIN",
-                departing_guest=None, arriving_guest=_guest_info(arriving), staying_guest=None,
+                departing_guest=None, arriving_guest=_guest_info(arriving, cleaning_extra_by_booking_id), staying_guest=None,
                 current_night_index=idx, total_nights=total, source_instruction="",
             ))
         elif stayovers:
@@ -138,7 +157,7 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
             idx, total = compute_night_progress(staying.checkin_date, staying.checkout_date, target_date)
             rows.append(CleaningRoomState(
                 date=target_date, room_number=room_number, status="STAYOVER",
-                departing_guest=None, arriving_guest=None, staying_guest=_guest_info(staying),
+                departing_guest=None, arriving_guest=None, staying_guest=_guest_info(staying, cleaning_extra_by_booking_id),
                 current_night_index=idx, total_nights=total, source_instruction="",
             ))
         else:
@@ -149,9 +168,9 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord],
     for b in unassigned:
         rows.append(CleaningRoomState(
             date=target_date, room_number=None, status="UNASSIGNED",
-            arriving_guest=_guest_info(b) if b.checkin_date == target_date else None,
-            departing_guest=_guest_info(b) if b.checkout_date == target_date else None,
-            staying_guest=_guest_info(b) if (b.checkin_date and b.checkout_date
+            arriving_guest=_guest_info(b, cleaning_extra_by_booking_id) if b.checkin_date == target_date else None,
+            departing_guest=_guest_info(b, cleaning_extra_by_booking_id) if b.checkout_date == target_date else None,
+            staying_guest=_guest_info(b, cleaning_extra_by_booking_id) if (b.checkin_date and b.checkout_date
                                              and b.checkin_date < target_date < b.checkout_date) else None,
         ))
 

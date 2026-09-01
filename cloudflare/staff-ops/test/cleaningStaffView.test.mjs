@@ -61,6 +61,38 @@ await check("an inline error for the editing room is shown inside its own edit p
   assert.ok(out.includes("指示を入力してください"));
 });
 
+// ---------------- 2026-09追加: 大人/子供内訳・お知らせ・現地決済（override編集機能は不変）----------------
+
+await check("staff table adds 大人/子供 breakdown, お知らせ, 現地決済 columns without touching the existing 10 columns", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  assert.ok(out.includes(">大人/子供<"));
+  assert.ok(out.includes(">お知らせ<"));
+  assert.ok(out.includes(">現地決済<"));
+  // existing columns (guest edit workflow) still present and unchanged
+  assert.ok(out.includes(">RoomNo<"));
+  assert.ok(out.includes(">IN<"));
+  assert.ok(out.includes(">OUT<"), "Staff cleaning list keeps its own full IN/OUT display (only print/mobile simplify status)");
+  assert.ok(out.includes(">指示<"));
+});
+
+await check("a room with guest_notice/onsite payment shows both in its row (401 from the fixture)", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  assert.ok(out.includes("到着が少し遅れます"));
+  assert.ok(out.includes("現地 ¥18,000"));
+  assert.ok(out.includes("大2 子1"));
+});
+
+await check("a room with no guest_notice/onsite payment shows blank cells for those columns (402)", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  const row402 = out.match(/<tr data-room-number="402">[\s\S]*?<\/tr>/)[0];
+  assert.ok(!row402.includes("現地"));
+});
+
+await check("the edit panel's colspan matches the new total column count (14) so it still spans the full row", async () => {
+  const out = renderStaffCleaningTable(rooms, "402", "");
+  assert.ok(out.includes('colspan="14"'));
+});
+
 // ---------------- validateInstructionInput / body builders ----------------
 
 await check("validateInstructionInput rejects empty and whitespace-only values", async () => {

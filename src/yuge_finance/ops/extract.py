@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 from .. import config
-from ..accounting.beds24_revenue_logic import normalize_booking_source
+from ..accounting.beds24_revenue_logic import ONSITE_PAYMENT_TOKENS, normalize_booking_source
 from .schema import StaffAddress, StaffBookingRecord
 
 # None/null/undefined/N/A相当の文字列表現（大小文字無視で比較する）。
@@ -149,6 +149,98 @@ def resolve_physical_room_number(room_type_key: str, unit_index: Optional[str],
         return None
     type_map = (room_unit_mapping or {}).get(room_type_key) or {}
     return type_map.get(str(unit_index))
+
+
+def extract_guest_notice(raw: dict) -> Optional[str]:
+    """ゲスト自身が入力した「お客様からのお知らせ」を抽出する。
+
+    ソースは guestComments のみ(2026-09実データ調査で確認済み: Beds24標準の
+    ゲスト入力コメントfield。internal note/staff note/groupNote/system message等の
+    内部運用メモとは完全に別fieldであり、混在させない)。_extract_notes()が集める
+    notes/comments/groupNote/messageは内部メモ用途であり、清掃指示のguest_noticeへは
+    絶対に流用しない(意図的に別関数として独立させている)。
+    """
+    return _sanitize_str(raw.get("guestComments"))
+
+
+def extract_children_age_7plus(raw: dict) -> Tuple[Optional[int], bool]:
+    """7歳以上の子供人数を抽出する。
+
+    2026-09、property 330695、直近9か月657予約（Booking.com+子供ありの実予約10件を
+    個別調査）の実データ調査結果: 予約payload・infoItems・guestCommentsのいずれにも
+    子供の年齢を示すfieldは一切存在しなかった(全キーを再帰的に走査して'age'/'child'を
+    含むキーを確認したが、'age'ヒットは'apiMessage'/'message'の部分一致のみで年齢データ
+    ではなく、'child'ヒットは合計人数のnumChildのみ)。よって現時点では常に
+    (None, False)を返す(推測しない)。将来Beds24側に年齢fieldが追加された場合のみ、
+    ここを更新する。
+    """
+    return None, False
+
+
+def _has_onsite_marker(item: dict) -> bool:
+    desc = str(item.get("description", "") or "").lower()
+    return any(tok.lower() in desc for tok in ONSITE_PAYMENT_TOKENS)
+
+
+def extract_onsite_payment(raw: dict) -> Tuple[bool, Optional[int]]:
+    """現地決済が必要か、現地で回収すべき残額はいくらかを判定する。
+
+    ONSITE_PAYMENT_TOKENS(accounting/beds24_revenue_logic.py、既存の売上ロジックで
+    実証済みのトークン一覧)を再利用し、新しい判定器を独自に作らない。
+
+    2026-09、property 330695、直近9か月657予約の実データ調査結果: 現地決済markerを
+    持つ予約は2件のみ(いずれも非キャンセル)。両方とも「現地支払い」invoiceItemが
+    type=payment/lineTotal=0のマーカー行として存在し、他のpayment行は一切無く、
+    charge合計(=price)がそのまま未収残高だった(13,000円/14,500円で実証)。
+    トップレベルにbalance/paid/due相当のfieldも存在しなかった。よって:
+
+        outstanding = sum(type=charge の lineTotal) - sum(marker以外のtype=payment の |lineTotal|)
+
+    を残高とする。marker以外に実際の支払い行があるケース(一部前払い等)は実データに
+    存在しなかったため未実証だが、その金額の符号(絶対値として扱う)は既存の
+    extract_beds24_coupon_discount()等と同じ確立済み規約を踏襲しており、新規に
+    推測したものではない。
+
+    表示条件(呼び出し側で使う想定): 明示的なonsite signalがあり、かつ
+    outstanding > 0 の場合のみ (True, outstanding) を返す。signalが無ければ
+    (False, None)。signalはあるが残高が0以下なら (False, None)(現地決済表示しない)。
+    """
+    if not raw:
+        return False, None
+    items = raw.get("invoiceItems") or []
+    onsite_items = [it for it in items if _has_onsite_marker(it)]
+    if not onsite_items:
+        return False, None
+
+    charge_sum = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
+                     for it in items if it.get("type") == "charge")
+    payment_sum_excl_marker = sum(
+        abs(float(it.get("lineTotal", it.get("amount", 0)) or 0))
+        for it in items if it.get("type") == "payment" and it not in onsite_items)
+    outstanding = round(charge_sum - payment_sum_excl_marker)
+
+    if outstanding <= 0:
+        return False, None
+    return True, outstanding
+
+
+def extract_cleaning_extra(raw: dict) -> Dict:
+    """清掃指示DTO専用の追加項目(guest_notice/children_age_7plus_count/
+    children_age_data_available/onsite_payment_required/onsite_payment_amount)を
+    まとめて抽出する。StaffBookingRecord(Daily Ops/宿泊者名簿でも使う共有dataclass)
+    には一切追加しない — 財務フィールド(onsite_payment_amount)がDaily Ops側の
+    出力へ意図せず混入するのを構造的に防ぐため、Cleaning DTO専用の別経路として
+    独立させている。
+    """
+    children_age_7plus_count, children_age_data_available = extract_children_age_7plus(raw)
+    onsite_payment_required, onsite_payment_amount = extract_onsite_payment(raw)
+    return {
+        "guest_notice": extract_guest_notice(raw),
+        "children_age_7plus_count": children_age_7plus_count,
+        "children_age_data_available": children_age_data_available,
+        "onsite_payment_required": onsite_payment_required,
+        "onsite_payment_amount": onsite_payment_amount,
+    }
 
 
 def extract_staff_booking(raw: dict, room_types_config: Dict,

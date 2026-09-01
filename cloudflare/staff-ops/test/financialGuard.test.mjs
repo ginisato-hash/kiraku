@@ -87,4 +87,35 @@ await check("CLEANING_FORBIDDEN_KEYS is FORBIDDEN_FINANCIAL_KEYS plus the agreed
   }
 });
 
+// ---------------- 2026-09: onsite_payment_* だけを明示的に許可した例外 ----------------
+
+await check("onsite_payment_required/onsite_payment_amount are explicitly NOT rejected (the one approved financial exception)", async () => {
+  const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
+  const rooms = mergeCleaningOverrides(rawRooms, {});
+  // the real fixture (room 401) already carries onsite_payment_required=true /
+  // onsite_payment_amount=18000 nested inside arriving_guest — confirm both guards
+  // pass without throwing.
+  const room401 = rooms.find((r) => r.room_number === "401");
+  assert.equal(room401.arriving_guest.onsite_payment_required, true);
+  assert.equal(room401.arriving_guest.onsite_payment_amount, 18000);
+  assert.doesNotThrow(() => assertNoFinancialKeys({ date: "2026-08-30", rooms }));
+  assert.doesNotThrow(() => assertNoForbiddenCleaningKeys({ date: "2026-08-30", rooms }));
+});
+
+await check("every OTHER financial key is still rejected even inside a guest object that also carries onsite_payment_amount", async () => {
+  const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
+  const rooms = mergeCleaningOverrides(rawRooms, {});
+  const room401 = rooms.find((r) => r.room_number === "401");
+  for (const forbidden of ["gross_revenue", "net_revenue", "commission", "adr", "revpar", "invoiceItems"]) {
+    const tampered = {
+      date: "2026-08-30",
+      rooms: rooms.map((r) => (r.room_number === "401"
+        ? { ...r, arriving_guest: { ...room401.arriving_guest, [forbidden]: 1 } }
+        : r)),
+    };
+    assert.throws(() => assertNoForbiddenCleaningKeys(tampered), new RegExp(forbidden, "i"),
+      `${forbidden} must still be rejected`);
+  }
+});
+
 console.log(`\n${passed} financialGuard checks passed`);
