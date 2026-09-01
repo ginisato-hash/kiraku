@@ -78,7 +78,9 @@ def test_same_room_checkout_and_checkin_produces_turnover_as_one_row():
     assert row.status == "TURNOVER"
     assert row.departing_guest.booking_id == "4"
     assert row.arriving_guest.booking_id == "5"
-    assert row.source_instruction == "入替"
+    # 2026-09撤回: TURNOVERの自動instruction「入替」は生成しない(ステータス列で
+    # IN表示すれば十分。「指: 入替」は冗長だった)。手動overrideのみ表示する。
+    assert row.source_instruction == ""
 
 
 def test_turnover_is_not_split_into_separate_checkout_and_checkin_rows():
@@ -197,13 +199,15 @@ def test_no_bookings_at_all_yields_18_vacant_rooms():
 # extract_cleaning_extra()から来るため、_guest_info()が正しく反映することを確認する)
 
 def test_guest_info_defaults_new_fields_when_no_extra_map_given():
-    bookings = [_sb("1", "401", "2026-08-30", "2026-09-01")]
+    bookings = [_sb("1", "401", "2026-08-30", "2026-09-01")]  # default adults=2, children=0
     rows = classify_cleaning_for_date(bookings, "2026-08-30")
     row = _row_for("401", rows)
     guest = row.arriving_guest
     assert guest.guest_notice is None
     assert guest.children_age_7plus_count is None
     assert guest.children_age_data_available is False
+    # extraが無い場合のfallbackはadults+children(布団不足より多めが安全)。
+    assert guest.bedding_guest_count == 2
     assert guest.payment_due_at_property is False
     assert guest.amount_due_at_property is None
 
@@ -214,12 +218,14 @@ def test_guest_info_picks_up_cleaning_extra_by_booking_id():
         "guest_notice": "静かな部屋希望",
         "children_age_7plus_count": None,
         "children_age_data_available": False,
+        "bedding_guest_count": 3,
         "payment_due_at_property": True,
         "amount_due_at_property": 18000,
     }}
     rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
     guest = _row_for("401", rows).arriving_guest
     assert guest.guest_notice == "静かな部屋希望"
+    assert guest.bedding_guest_count == 3
     assert guest.payment_due_at_property is True
     assert guest.amount_due_at_property == 18000
 
@@ -233,6 +239,7 @@ def test_guest_info_extra_lookup_is_scoped_to_the_matching_booking_id_only():
     extra = {"1": {
         "guest_notice": "401専用のお知らせ",
         "children_age_7plus_count": None, "children_age_data_available": False,
+        "bedding_guest_count": 2,
         "payment_due_at_property": False, "amount_due_at_property": None,
     }}
     rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)

@@ -53,17 +53,23 @@ def compute_night_progress(checkin: str, checkout: str,
     return None, total
 
 
-_EMPTY_CLEANING_EXTRA = {
-    "guest_notice": None,
-    "children_age_7plus_count": None,
-    "children_age_data_available": False,
-    "payment_due_at_property": False,
-    "amount_due_at_property": None,
-}
+def _empty_cleaning_extra(b: StaffBookingRecord) -> Dict:
+    # cleaning_extra_by_booking_idにbooking_idが見つからない場合(通常起こらない
+    # はずの取りこぼしケース)専用のfallback。bedding_guest_countだけはadults+
+    # childrenで安全側に埋める(0のままでは「布団不要」と誤って伝わってしまう —
+    # compute_bedding_guest_count()の安全側fallbackと同じ考え方)。
+    return {
+        "guest_notice": None,
+        "children_age_7plus_count": None,
+        "children_age_data_available": False,
+        "bedding_guest_count": b.adults + b.children,
+        "payment_due_at_property": False,
+        "amount_due_at_property": None,
+    }
 
 
 def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Dict] = None) -> CleaningGuestInfo:
-    extra = (cleaning_extra_by_booking_id or {}).get(b.booking_id, _EMPTY_CLEANING_EXTRA)
+    extra = (cleaning_extra_by_booking_id or {}).get(b.booking_id) or _empty_cleaning_extra(b)
     return CleaningGuestInfo(
         booking_id=b.booking_id,
         guest_name=b.guest_name,
@@ -76,6 +82,7 @@ def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Di
         source=b.ota_name,
         children_age_7plus_count=extra["children_age_7plus_count"],
         children_age_data_available=extra["children_age_data_available"],
+        bedding_guest_count=extra["bedding_guest_count"],
         guest_notice=extra["guest_notice"],
         payment_due_at_property=extra["payment_due_at_property"],
         amount_due_at_property=extra["amount_due_at_property"],
@@ -127,6 +134,11 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: 
         if checkouts and checkins:
             # 同一物理客室でのTURNOVER: CHECKOUT行+CHECKIN行に分割せず1行に統合する。
             # 複数該当は想定外(物理1室=同時1予約のはず)だが、防御的に先頭のみ使用。
+            # source_instructionは自動生成しない(2026-09撤回): 印刷/モバイルの
+            # ステータス列で既にIN表示されるため「指: 入替」は冗長かつ不要。
+            # 手動override(Staff Opsでスタッフが入力した指示)は別経路
+            # (Cloudflare KV、mergeCleaningOverrides)でeffectiveInstructionへ
+            # 上書きされるため、この空文字化には一切影響しない。
             departing, arriving = checkouts[0], checkins[0]
             idx, total = compute_night_progress(arriving.checkin_date, arriving.checkout_date, target_date)
             rows.append(CleaningRoomState(
@@ -134,7 +146,7 @@ def classify_cleaning_for_date(bookings: List[StaffBookingRecord], target_date: 
                 departing_guest=_guest_info(departing, cleaning_extra_by_booking_id),
                 arriving_guest=_guest_info(arriving, cleaning_extra_by_booking_id),
                 staying_guest=None, current_night_index=idx, total_nights=total,
-                source_instruction="入替",
+                source_instruction="",
             ))
         elif checkouts:
             departing = checkouts[0]

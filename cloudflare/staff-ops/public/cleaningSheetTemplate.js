@@ -104,29 +104,33 @@ export function guestNameFor(room) {
   return g ? cleanValue(g.guest_name) : "";
 }
 
+// 実宿泊人数(total_guests)。Staff cleaning list/mobileの「人数」表示用
+// (2026-09: 印刷帳票の大きい数字はbeddingCountForに置き換わった — 意味が
+// 異なる別関数として分離している。こちらは変更しない)。
 export function guestCountFor(room) {
   const g = priorityGuestFor(room);
   if (!g || g.total_guests == null) return "";
   return String(g.total_guests);
 }
 
-// 人数セル下段の「大人/子供」内訳。子供0名なら「子0」は表示しない(「大2」のみ)。
-// children_age_data_available && children_age_7plus_count!=null の場合のみ
-// (現状はBeds24に年齢データが存在しないため常にfalse/null。将来field追加時に
-// 自動的に有効化される) 「子7+N」表記にする — 7歳未満の人数は下段に含めない
-// (ただし上段のtotal_guestsには当然含まれている)。
+// 印刷帳票の人数セル上段(最大サイズの数字)専用: 「布団を敷く必要がある人数」
+// (bedding_guest_count、extract.compute_bedding_guest_count()参照)。
+// 実宿泊人数(total_guests)とは意味が異なる — 混同しないこと。
+export function beddingCountFor(room) {
+  const g = priorityGuestFor(room);
+  if (!g || g.bedding_guest_count == null) return "";
+  return String(g.bedding_guest_count);
+}
+
+// 人数セル下段の「大人/子供」実人数内訳。常にBeds24のnumAdult/numChildをそのまま
+// 表示する — 上段(bedding count)がBooking.comの年齢判定で子供を除外していても、
+// 下段の実人数からは絶対に消さない(要件11)。子供0名なら「子供0」は表示しない。
 export function guestBreakdownFor(room) {
   const g = priorityGuestFor(room);
   if (!g) return "";
   const parts = [];
-  if (g.adults != null) parts.push(`大${g.adults}`);
-  if (g.children > 0) {
-    if (g.children_age_data_available && g.children_age_7plus_count != null) {
-      parts.push(`子7+${g.children_age_7plus_count}`);
-    } else {
-      parts.push(`子${g.children}`);
-    }
-  }
+  if (g.adults != null) parts.push(`大人${g.adults}`);
+  if (g.children > 0) parts.push(`子供${g.children}`);
   return parts.join(" ");
 }
 
@@ -211,35 +215,22 @@ export function roomsByCanonicalOrder(rooms) {
   });
 }
 
-// 印刷帳票に表示するroomのcanonical filter。2026-09改訂: 印刷は
-// CHECKIN/TURNOVER/STAYOVERのみをrow表示し、CHECKOUT/VACANT/CANCELLED(氏名だけ
-// 残った意味不明な行の原因だった)はrow自体を出さない。18室固定表示自体は
-// classifier/room master側の内部データとして維持されており、この関数は
-// print rendererでのみ使う1箇所の共通filterとする(各所で別々にfilterしない)。
+// 印刷帳票のrow内容表示判定。2026-09改訂(撤回→再確定): 18室のroom rowは常に
+// 全室出力する(前回試みたrow自体の間引きは撤回)。CHECKIN/TURNOVER/STAYOVER
+// だけが「操作対象データ(氏名/人数/泊数/ステータス/到着/予約元/現地決済/備考)」
+// を表示し、それ以外(CHECKOUT/VACANT/CANCELLED)はRoomNo以外を完全空欄にする —
+// 「CHECKOUT客の情報がステータスなしで残る」問題を、rowを消さずに解消する。
 const PRINTABLE_STATUSES = new Set(["CHECKIN", "TURNOVER", "STAYOVER"]);
 export function isPrintableRoomStatus(status) {
   return PRINTABLE_STATUSES.has(status);
 }
-export function printableRoomsForSheet(rooms) {
-  return roomsByCanonicalOrder(rooms).filter((r) => isPrintableRoomStatus(r.status));
-}
 
-// 4F(401-406)/5F(501-507)/6F(601-607)の階境界。行を間引いた後でも、5F・6Fの
-// 「最初に実際に表示されるrow」の上辺だけ太罫線にする(固定のroom numberでは
-// 判定しない — 501/601が表示対象でない日もあるため)。room number先頭桁で
-// floorを判定し、直前に表示されたrowと異なるfloorへ切り替わった箇所のうち
-// 4F以外(5F/6F)だけを対象にする。
-function floorOf(roomNumber) {
-  return String(roomNumber)[0];
-}
-export function floorSeparatorFlags(printableRooms) {
-  let prevFloor = null;
-  return printableRooms.map((room) => {
-    const floor = floorOf(room.room_number);
-    const isSeparator = floor !== prevFloor && (floor === "5" || floor === "6");
-    prevFloor = floor;
-    return isSeparator;
-  });
+// 4F(401-406)/5F(501-507)/6F(601-607)の階境界。18室固定rowへ戻したため、
+// 501/601の物理room番号で固定判定する(表示された最初のrowを探すdynamic版は
+// 不要になった)。
+const FLOOR_START_ROOMS = new Set(["501", "601"]);
+export function isFloorStartRoom(roomNumber) {
+  return FLOOR_START_ROOMS.has(String(roomNumber));
 }
 
 // ---------------- 印刷ページ（/ops/print/cleaning）本体 ----------------
@@ -312,15 +303,26 @@ function buildOnsiteCell(room) {
   </td>`;
 }
 
-function buildRoomRow(room, isFloorSeparator) {
+// 操作対象データ(氏名/人数/泊数/ステータス/到着/予約元/現地決済/備考)を出さない
+// 空欄row(RoomNoだけ)。CHECKOUT/VACANT/CANCELLEDが対象(要件16 — CHECKOUT客の
+// guest name/instruction等が一切残らないよう、9セルすべてを構造的に空にする)。
+function buildBlankOperationalCells() {
+  return `<td class="cs-c-guest"></td>
+    <td class="cs-c-count"></td>
+    <td class="cs-c-nights"></td>
+    <td class="cs-c-status"></td>
+    <td class="cs-c-arrival"></td>
+    <td class="cs-c-ota"></td>
+    <td class="cs-c-onsite"></td>
+    <td class="cs-c-notes"></td>`;
+}
+
+function buildOperationalCells(room) {
   const guestName = guestNameFor(room);
-  const trClass = isFloorSeparator ? ` class="cs-floor-start"` : "";
-  return `<tr data-room-number="${escapeHtml(room.room_number)}"${trClass}>
-    <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
-    <td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
+  return `<td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
     <td class="cs-c-count">
       <div class="cs-guest-count-wrap">
-        <div class="cs-total-guests">${escapeHtml(guestCountFor(room))}</div>
+        <div class="cs-total-guests">${escapeHtml(beddingCountFor(room))}</div>
         <div class="cs-guest-breakdown">${escapeHtml(guestBreakdownFor(room))}</div>
       </div>
     </td>
@@ -329,7 +331,17 @@ function buildRoomRow(room, isFloorSeparator) {
     <td class="cs-c-arrival">${escapeHtml(arrivalTimeFor(room))}</td>
     <td class="cs-c-ota">${escapeHtml(otaPrintShortName(otaFor(room)))}</td>
     ${buildOnsiteCell(room)}
-    ${buildNotesCell(room)}
+    ${buildNotesCell(room)}`;
+}
+
+function buildRoomRow(room) {
+  const trClass = isFloorStartRoom(room.room_number) ? ` class="cs-floor-start"` : "";
+  const cells = isPrintableRoomStatus(room.status)
+    ? buildOperationalCells(room)
+    : buildBlankOperationalCells();
+  return `<tr data-room-number="${escapeHtml(room.room_number)}"${trClass}>
+    <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
+    ${cells}
   </tr>`;
 }
 
@@ -393,8 +405,7 @@ export function renderMobileCleaningBody(cleaningRooms) {
 // UNASSIGNED行)。date: "YYYY-MM-DD"。
 export function renderCleaningSheetTemplate(cleaningRooms, date) {
   const list = Array.isArray(cleaningRooms) ? cleaningRooms : [];
-  const printableRows = printableRoomsForSheet(list);
-  const separatorFlags = floorSeparatorFlags(printableRows);
+  const canonicalRows = roomsByCanonicalOrder(list); // 18室固定(要件14 — 前回のrow間引きは撤回)
   const unassignedCount = countUnassigned(list);
   const dateLabel = formatJapaneseDateWithWeekdayParen(date);
 
@@ -412,7 +423,7 @@ export function renderCleaningSheetTemplate(cleaningRooms, date) {
     <table class="cs-main-table">
       ${buildColgroup()}
       <thead>${buildHeaderRow()}</thead>
-      <tbody>${printableRows.map((room, i) => buildRoomRow(room, separatorFlags[i])).join("")}</tbody>
+      <tbody>${canonicalRows.map(buildRoomRow).join("")}</tbody>
     </table>
     <div class="cs-footer-box">
       <div class="cs-footer-title">全体通信・引継ぎ</div>

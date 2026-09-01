@@ -223,7 +223,8 @@ await check("authenticated GET /api/cleaning?date=2026-08-30 returns 18 canonica
   assert.equal(j.rooms.length, 19);
   assert.equal(j.rooms[0].room_number, "401");
   assert.equal(j.rooms[0].hasOverride, false);
-  assert.equal(j.rooms[0].effectiveInstruction, "入替");
+  // 2026-09撤回: TURNOVERの自動instruction「入替」は生成しない(fixture更新済み)。
+  assert.equal(j.rooms[0].effectiveInstruction, "");
   const unassigned = j.rooms.find((r2) => r2.room_number === null);
   assert.equal(unassigned.status, "UNASSIGNED");
 });

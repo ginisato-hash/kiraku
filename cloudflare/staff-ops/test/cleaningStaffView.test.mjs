@@ -79,7 +79,7 @@ await check("a room with guest_notice/onsite payment shows both in its row (401 
   const out = renderStaffCleaningTable(rooms, null, "");
   assert.ok(out.includes("到着が少し遅れます"));
   assert.ok(out.includes("現地 ¥18,000"));
-  assert.ok(out.includes("大2 子1"));
+  assert.ok(out.includes("大人2 子供1"));
 });
 
 await check("a room with no guest_notice/onsite payment shows blank cells for those columns (402)", async () => {

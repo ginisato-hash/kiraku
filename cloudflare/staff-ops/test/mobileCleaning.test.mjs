@@ -97,10 +97,18 @@ await check("occupied room block shows guest_notice as a '客:' line when presen
   assert.ok(out.includes("客: 到着が少し遅れます"));
 });
 
-await check("occupied room block shows the effectiveInstruction as a '指:' line when present", async () => {
-  const room = rooms.find((r) => r.room_number === "401"); // source_instruction="入替"
+await check("occupied room block shows the effectiveInstruction as a '指:' line when present (manual override — TURNOVER no longer auto-generates one)", async () => {
+  const room = rooms.find((r) => r.room_number === "401");
+  const withOverride = { ...room, effectiveInstruction: "ベッド分け", hasOverride: true };
+  const out = renderMobileRoomBlock(withOverride);
+  assert.ok(out.includes("指: ベッド分け"));
+});
+
+await check("TURNOVER room (401) shows no '指:' line at all when there is no manual override (2026-09撤回: 自動生成の「入替」廃止)", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // effectiveInstruction="" in the updated fixture
   const out = renderMobileRoomBlock(room);
-  assert.ok(out.includes("指: 入替"));
+  assert.ok(!out.includes("指:"));
+  assert.ok(!out.includes("入替"));
 });
 
 await check("occupied room block never shows onsite payment amount (out of scope for mobile per spec)", async () => {
@@ -114,7 +122,7 @@ await check("occupied room block never shows onsite payment amount (out of scope
 await check("occupied room block includes the 大人/子供 breakdown alongside the guest count", async () => {
   const room = rooms.find((r) => r.room_number === "401"); // adults=2, children=1
   const out = renderMobileRoomBlock(room);
-  assert.ok(out.includes("大2 子1"));
+  assert.ok(out.includes("大人2 子供1"));
 });
 
 await check("today.html declares a viewport meta tag", async () => {

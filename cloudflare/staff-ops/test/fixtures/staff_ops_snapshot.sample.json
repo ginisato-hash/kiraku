@@ -116,7 +116,8 @@
               "children_age_data_available": false,
               "guest_notice": null,
               "payment_due_at_property": false,
-              "amount_due_at_property": null
+              "amount_due_at_property": null,
+              "bedding_guest_count": 2
             },
             "arriving_guest": {
               "booking_id": "89381508",
@@ -132,12 +133,13 @@
               "children_age_data_available": false,
               "guest_notice": "到着が少し遅れます",
               "payment_due_at_property": true,
-              "amount_due_at_property": 18000
+              "amount_due_at_property": 18000,
+              "bedding_guest_count": 3
             },
             "staying_guest": null,
             "current_night_index": 1,
             "total_nights": 2,
-            "source_instruction": "入替"
+            "source_instruction": ""
           },
           {
             "date": "2026-08-30",
@@ -158,7 +160,8 @@
               "children_age_data_available": false,
               "guest_notice": null,
               "payment_due_at_property": false,
-              "amount_due_at_property": null
+              "amount_due_at_property": null,
+              "bedding_guest_count": 1
             },
             "staying_guest": null,
             "current_night_index": 1,
@@ -183,7 +186,8 @@
               "children_age_data_available": false,
               "guest_notice": "部屋に忘れ物をしたかもしれません",
               "payment_due_at_property": false,
-              "amount_due_at_property": null
+              "amount_due_at_property": null,
+              "bedding_guest_count": 1
             },
             "arriving_guest": null,
             "staying_guest": null,
@@ -211,7 +215,8 @@
               "children_age_data_available": false,
               "guest_notice": null,
               "payment_due_at_property": true,
-              "amount_due_at_property": 7800
+              "amount_due_at_property": 7800,
+              "bedding_guest_count": 3
             },
             "current_night_index": 2,
             "total_nights": 4,
@@ -390,7 +395,8 @@
               "children_age_data_available": false,
               "guest_notice": null,
               "payment_due_at_property": false,
-              "amount_due_at_property": null
+              "amount_due_at_property": null,
+              "bedding_guest_count": 1
             },
             "staying_guest": null,
             "current_night_index": null,

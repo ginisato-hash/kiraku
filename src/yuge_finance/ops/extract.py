@@ -7,7 +7,8 @@ raw dictから直接抽出する。OTA正規化のみ accounting/beds24_revenue_
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+import re
+from typing import Dict, List, Optional, Tuple
 
 from .. import config
 from ..accounting.beds24_revenue_logic import normalize_booking_source
@@ -151,30 +152,98 @@ def resolve_physical_room_number(room_type_key: str, unit_index: Optional[str],
     return type_map.get(str(unit_index))
 
 
+# Booking.comの子供年齢表記("1 child aged 10"等)を抽出するpattern。
+#
+# 【重要・実データ未検証】2026-09、property 330695の実データ調査(3回、9か月分
+# 664予約、Booking.com+子供ありの実予約10件全件)では、guestCommentsが全件
+# 空文字列(長さ0)であり、このpatternはおろか"aged"という単語自体が
+# guestComments/infoItems/その他全field(id/氏名等PII除く)のどこにも一件も
+# 出現しなかった。ユーザーからは「実確認済み」との説明を受けたが、本リポジトリが
+# アクセスできる実Beds24データではこの調査結果どおり一切確認できていない
+# (この矛盾はレポートで明示報告済み)。
+# よってこの実装は、ユーザーが提示した具体例("1 child aged 10"、複数児童は
+# "N children aged A, B, ...")どおりに構築したものであり、実データによる
+# 検証は現時点でできていない。一致する実データが将来現れれば自動的に
+# 有効化される安全な設計とし、一致しない限り(=現状の全実予約を含む)
+# children_age_data_availableは常にFalseのまま、既存の安全なfallback
+# (子供全員を布団人数に含める)へ通常どおり流れる — 誤動作のリスクはない。
+_CHILD_AGE_PATTERN = re.compile(
+    r"\d+\s+child(?:ren)?\s+aged\s+\d+(?:\s*(?:,|and)\s*\d+)*",
+    re.IGNORECASE,
+)
+
+
+def parse_booking_com_child_ages(guest_comments) -> List[int]:
+    """guestCommentsからBooking.comの子供年齢を抽出する(_CHILD_AGE_PATTERN参照。
+    実データ未検証の防御的実装)。一致しなければ空listを返す(推測しない)。
+    numChildより少ない年齢しか見つからない場合(一部の子供の年齢が不明)でも、
+    確認できた分だけをそのまま返す — 残りを7歳以上/未満どちらにも推測で
+    埋めない(要件6)。
+    """
+    if not guest_comments:
+        return []
+    m = _CHILD_AGE_PATTERN.search(str(guest_comments))
+    if not m:
+        return []
+    ages_part = m.group(0).split("aged", 1)[-1]
+    return [int(a) for a in re.findall(r"\d+", ages_part)]
+
+
+def _strip_child_age_metadata(text: str) -> str:
+    """guest_noticeからBooking.comのchild-age system metadata部分だけを除去する。
+    実データにこのpatternの出現例が無いため未検証(_CHILD_AGE_PATTERN参照)。
+    一致しない場合は元の文字列をそのまま返す(人間が書いた文章を誤って
+    削除しない)。
+    """
+    return _CHILD_AGE_PATTERN.sub("", text).strip()
+
+
 def extract_guest_notice(raw: dict) -> Optional[str]:
     """ゲスト自身が入力した「お客様からのお知らせ」を抽出する。
 
     ソースは guestComments のみ(2026-09実データ調査で確認済み: Beds24標準の
-    ゲスト入力コメントfield。internal note/staff note/groupNote/system message等の
+    ゲスト入力コメントfield。internal note/staff note/groupNote/message等の
     内部運用メモとは完全に別fieldであり、混在させない)。_extract_notes()が集める
     notes/comments/groupNote/messageは内部メモ用途であり、清掃指示のguest_noticeへは
     絶対に流用しない(意図的に別関数として独立させている)。
+    Booking.comのchild-age system metadata(_CHILD_AGE_PATTERN)が同じ
+    guestComments内に混在する場合は、それを除去した残りのテキストだけを返す
+    (要件13。実データでの出現例は無く未検証 — 一致しなければ何も変更されない)。
     """
-    return _sanitize_str(raw.get("guestComments"))
+    raw_comments = _sanitize_str(raw.get("guestComments"))
+    if raw_comments is None:
+        return None
+    stripped = _strip_child_age_metadata(raw_comments)
+    return stripped or None
 
 
 def extract_children_age_7plus(raw: dict) -> Tuple[Optional[int], bool]:
-    """7歳以上の子供人数を抽出する。
-
-    2026-09、property 330695、直近9か月657予約（Booking.com+子供ありの実予約10件を
-    個別調査）の実データ調査結果: 予約payload・infoItems・guestCommentsのいずれにも
-    子供の年齢を示すfieldは一切存在しなかった(全キーを再帰的に走査して'age'/'child'を
-    含むキーを確認したが、'age'ヒットは'apiMessage'/'message'の部分一致のみで年齢データ
-    ではなく、'child'ヒットは合計人数のnumChildのみ)。よって現時点では常に
-    (None, False)を返す(推測しない)。将来Beds24側に年齢fieldが追加された場合のみ、
-    ここを更新する。
+    """7歳以上の子供人数を抽出する(parse_booking_com_child_ages参照。実データ
+    未検証の防御的実装 — 現状の全実予約ではguestCommentsが空のため常に
+    (None, False)を返し、既存の安全なfallbackへ通常どおり流れる)。
     """
-    return None, False
+    ages = parse_booking_com_child_ages(raw.get("guestComments") if raw else None)
+    if not ages:
+        return None, False
+    return sum(1 for age in ages if age >= 7), True
+
+
+def compute_bedding_guest_count(ota_name: str, adults: int, children: int,
+                                children_age_7plus_count: Optional[int],
+                                children_age_data_available: bool) -> int:
+    """清掃スタッフが布団を用意すべき人数(要件2・10)。
+
+    Booking.comのみ、確認できた子供の年齢が7歳以上の場合だけ布団人数へ加算する。
+    年齢が一部/全く確認できない場合は、推測せず子供全員を布団人数に含める
+    安全側のfallback(布団不足より多めのほうが運用上安全なため — 前回要件の
+    「取得不能なら通常の子供総数へfallback」を踏襲)。楽天/じゃらん/Direct等
+    その他は年齢を一切参照せず常にadults+children(要件7-8、既存の安全な
+    fallbackを壊さない — OTA判定は既存のnormalize_booking_source()由来の
+    canonical nameをそのまま使い、新しい文字列判定ロジックを重複実装しない)。
+    """
+    if ota_name == "Booking.com" and children_age_data_available:
+        return adults + (children_age_7plus_count or 0)
+    return adults + children
 
 
 # Beds24公式Info Code(予約payload内のinfoItems[].code)のうち、OTAチャネル自身が
@@ -251,18 +320,25 @@ def extract_amount_due_at_property(raw: dict) -> Tuple[bool, Optional[int]]:
 
 def extract_cleaning_extra(raw: dict) -> Dict:
     """清掃指示DTO専用の追加項目(guest_notice/children_age_7plus_count/
-    children_age_data_available/payment_due_at_property/amount_due_at_property)を
-    まとめて抽出する。StaffBookingRecord(Daily Ops/宿泊者名簿でも使う共有dataclass)
-    には一切追加しない — 財務フィールド(amount_due_at_property)がDaily Ops側の
-    出力へ意図せず混入するのを構造的に防ぐため、Cleaning DTO専用の別経路として
-    独立させている。
+    children_age_data_available/bedding_guest_count/payment_due_at_property/
+    amount_due_at_property)をまとめて抽出する。StaffBookingRecord(Daily Ops/
+    宿泊者名簿でも使う共有dataclass)には一切追加しない — 財務フィールド
+    (amount_due_at_property)がDaily Ops側の出力へ意図せず混入するのを構造的に
+    防ぐため、Cleaning DTO専用の別経路として独立させている。
     """
     children_age_7plus_count, children_age_data_available = extract_children_age_7plus(raw)
     payment_due_at_property, amount_due_at_property = extract_amount_due_at_property(raw)
+    adults, children = _extract_guests(raw)
+    source_value = (raw.get("refererEditable") or raw.get("channel") or raw.get("apiSource")
+                    or raw.get("referer") or raw.get("source"))
+    ota_name, _ = normalize_booking_source(source_value)
+    bedding_guest_count = compute_bedding_guest_count(
+        ota_name, adults, children, children_age_7plus_count, children_age_data_available)
     return {
         "guest_notice": extract_guest_notice(raw),
         "children_age_7plus_count": children_age_7plus_count,
         "children_age_data_available": children_age_data_available,
+        "bedding_guest_count": bedding_guest_count,
         "payment_due_at_property": payment_due_at_property,
         "amount_due_at_property": amount_due_at_property,
     }
