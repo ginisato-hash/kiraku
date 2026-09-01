@@ -16,7 +16,7 @@ import {
   guestNameFor, guestBreakdownFor, guestNoticeFor, onsiteInfoFor, beddingCountFor,
   nightProgressFor, arrivalTimeFor, countUnassigned,
   isPrintableRoomStatus, isFloorStartRoom,
-  COLUMN_WIDTHS_MM, COLUMN_LABELS, effectiveTextWidth, guestNameSizeClass,
+  COLUMN_WIDTHS_MM, COLUMN_LABELS, effectiveTextWidth, guestNameSizeClass, arrivalSizeClass,
 } from "../public/cleaningSheetTemplate.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
 
@@ -310,6 +310,68 @@ await check("実データ anchor booking 91673623 相当(Booking.com adults=2/ch
   assert.equal(beddingCountFor(anchorRoom), "3");        // 布団3人分(10歳は7歳以上なので加算)
   assert.equal(guestBreakdownFor(anchorRoom), "大人2 子供1");  // 実人数は常にそのまま
   assert.equal(guestNoticeFor(anchorRoom), "");          // child-age/system行だけなので「客:」は出さない
+});
+
+// ---------------- 到着列: commentsからの時間帯fallback表示 (要件7-9・14・19) ----------------
+
+await check("arrivalSizeClass: 明示値は既定サイズ、時間帯rangeだけ段階的に縮小(1行表示維持)", async () => {
+  assert.equal(arrivalSizeClass("15:00"), "");            // Beds24明示値
+  assert.equal(arrivalSizeClass("17:00-18:00"), "cs-arrival-range");
+  assert.equal(arrivalSizeClass("15:00:00"), "cs-arrival-9");
+  assert.equal(arrivalSizeClass(""), "");
+  assert.equal(arrivalSizeClass(null), "");
+});
+
+// 実データ相当: Booking.com、adults2/children1/age10、comments には child-age +
+// arrival window + Guest name + 実要望が同居 -> Python側が解決した後のDTO値。
+const rangeRooms = rooms.map((r) => (r.room_number !== "401" ? r : ({
+  ...r,
+  status: "CHECKIN",
+  departing_guest: null,
+  arriving_guest: {
+    ...r.arriving_guest,
+    booking_id: "91673623", source: "Booking.com", adults: 2, children: 1, total_guests: 3,
+    children_age_data_available: true, children_age_7plus_count: 1,
+    children_age_known_count: 1, bedding_guest_count: 3,
+    arrival_time: "17:00-18:00",
+    guest_notice: "Please prepare two pillows",
+  },
+})));
+const rangeDocumentHtml = renderCleaningSheetTemplate(rangeRooms, "2026-09-03");
+const rangeRow401 = rangeDocumentHtml.match(/<tr data-room-number="401">[\s\S]*?<\/tr>/)[0];
+
+await check("到着セル: '17:00-18:00' が1行でそのまま出力され、縮小classが付く", async () => {
+  assert.ok(rangeRow401.includes('<td class="cs-c-arrival cs-arrival-range">17:00-18:00</td>'),
+    rangeRow401);
+});
+
+await check("到着セル: 明示値(5文字)には縮小classを付けない", async () => {
+  const row402 = documentHtml.match(/<tr data-room-number="402">[\s\S]*?<\/tr>/)[0];
+  assert.ok(row402.includes('<td class="cs-c-arrival">15:00</td>'), row402);
+});
+
+await check("備考セル: 実際のゲスト要望は「客: …」として残る", async () => {
+  assert.ok(rangeRow401.includes("客: Please prepare two pillows"), rangeRow401);
+});
+
+await check("印刷HTMLにOTA/system metadata文字列が一切出ない", async () => {
+  for (const forbidden of ["Guest name:", "Approximate time of arrival:", "1 child aged",
+                           "THIS RESERVATION HAS BEEN PRE-PAID", "BOOKING NOTE",
+                           "NonSmoke", "Non Smoking Requested"]) {
+    assert.ok(!rangeDocumentHtml.includes(forbidden), `leaked: ${forbidden}`);
+    assert.ok(!documentHtml.includes(forbidden), `leaked in base fixture: ${forbidden}`);
+  }
+});
+
+await check("到着列の縮小CSSがcleaning.htmlに存在し、基本ルールより後ろに置かれている", async () => {
+  assert.ok(html.includes("td.cs-arrival-range"));
+  assert.ok(html.includes(".cs-c-arrival { white-space: nowrap; }"));
+  // .cs-main-table td(同specificity)より後 = ソース順で後勝ちすること
+  assert.ok(html.indexOf("td.cs-arrival-range") > html.indexOf(".cs-main-table td"));
+});
+
+await check("到着列は3行折返しにしない(nowrap指定)", async () => {
+  assert.ok(html.includes(".cs-c-arrival { white-space: nowrap; }"));
 });
 
 // ---------------- お客様からのお知らせ (guest_notice) ----------------

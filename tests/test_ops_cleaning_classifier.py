@@ -245,3 +245,47 @@ def test_guest_info_extra_lookup_is_scoped_to_the_matching_booking_id_only():
     rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
     assert _row_for("401", rows).arriving_guest.guest_notice == "401専用のお知らせ"
     assert _row_for("402", rows).arriving_guest.guest_notice is None
+
+
+# ---------------- 到着時刻: 明示値優先 + commentsからのfallback (要件9・13) ----------------
+# Cleaning DTO専用の解決。StaffBookingRecord.arrival_time(Daily Ops/宿泊者名簿が
+# 使う共有schema)は一切変更していない。
+
+def _extra(**overrides):
+    base = {
+        "guest_notice": None, "arrival_time_fallback": None,
+        "children_age_7plus_count": None, "children_age_known_count": 0,
+        "children_age_data_available": False, "bedding_guest_count": 2,
+        "payment_due_at_property": False, "amount_due_at_property": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_arrival_time_falls_back_to_comment_window_when_explicit_is_empty():
+    """実データ46予約が該当(comments に時間帯があり、明示arrivalTimeは全件空)。"""
+    bookings = [_sb("1", "401", "2026-09-03", "2026-09-04", arrival_time=None)]
+    extra = {"1": _extra(arrival_time_fallback="17:00-18:00")}
+    rows = classify_cleaning_for_date(bookings, "2026-09-03", extra)
+    assert _row_for("401", rows).arriving_guest.arrival_time == "17:00-18:00"
+
+
+def test_explicit_arrival_time_always_wins_over_the_comment_window():
+    """要件13: 明示値をcommentsで上書きしない。"""
+    bookings = [_sb("1", "401", "2026-09-03", "2026-09-04", arrival_time="17:30")]
+    extra = {"1": _extra(arrival_time_fallback="17:00-18:00")}
+    rows = classify_cleaning_for_date(bookings, "2026-09-03", extra)
+    assert _row_for("401", rows).arriving_guest.arrival_time == "17:30"
+
+
+def test_arrival_time_stays_none_when_neither_source_has_a_value():
+    bookings = [_sb("1", "401", "2026-09-03", "2026-09-04", arrival_time=None)]
+    rows = classify_cleaning_for_date(bookings, "2026-09-03", {"1": _extra()})
+    assert _row_for("401", rows).arriving_guest.arrival_time is None
+
+
+def test_missing_extra_entry_falls_back_safely_without_arrival_or_crash():
+    """extraにbooking_idが無い取りこぼしケースでも例外にならず、明示値だけを使う。"""
+    bookings = [_sb("1", "401", "2026-09-03", "2026-09-04", arrival_time="16:00")]
+    rows = classify_cleaning_for_date(bookings, "2026-09-03", {})
+    assert _row_for("401", rows).arriving_guest.arrival_time == "16:00"

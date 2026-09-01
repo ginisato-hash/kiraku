@@ -534,9 +534,22 @@ def cmd_export_daily_ops(args) -> int:
 
     _print(f"[export-daily-ops] dates={len(target_dates)} booking_events={total_events} "
            f"cancelled_flags={cancelled_flags} unassigned_flags={unassigned_flags}")
+    # 到着列: Booking.com commentsからの時間帯fallback("HH:MM-HH:MM")件数と、
+    # guest_noticeにfield-label型のOTA metadataが残っていないかの常設ガード
+    # (期待値は notice_with_label_metadata=0。1以上ならfilterの取りこぼし)。
+    import re as _re
+    arrival_window = [g for g in guests
+                      if _re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", str(g.get("arrival_time") or ""))]
+    label_leak = [g for g in with_notice
+                  if any(_re.match(r"^\s*(guest name|booking note|booked rate|bed preference|company|電話番号)\s*[::]",
+                                   line, _re.IGNORECASE)
+                         for line in str(g.get("guest_notice")).splitlines())]
+
     _print(f"[export-daily-ops] child_age_source=comments guests_with_children={len(with_children)} "
            f"with_child_age_data={len(with_age_data)} bedding_count_reduced={len(bedding_reduced)} "
            f"guests_with_notice={len(with_notice)}")
+    _print(f"[export-daily-ops] arrival_window_fallback={len(arrival_window)} "
+           f"notice_with_label_metadata={len(label_leak)}")
     _print(f"[export-daily-ops] 出力: {out_path}")
     return 0
 

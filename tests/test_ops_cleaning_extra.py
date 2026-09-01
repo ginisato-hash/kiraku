@@ -28,6 +28,14 @@ extract_cleaning_extra)。
     (92008803)は "1 child aged 6" と "1 child aged 8" の2行に分かれて出現する。
     「N children aged A, B」というカンマ区切り形式は実データに存在しないため、
     その前提で書かれていた旧テスト/旧実装(単一match)は撤回した。
+  - 2026-09-03 再監査(724予約/`comments`非空355件): 当時のfilterを通り抜けていた
+    label形式の行は "Guest name: <氏名>" だけ(59予約、全てBooking.com、variantは
+    1形のみ)。本番帳票の備考欄に「客: Guest name: U…」と出ていた原因。あわせて
+    OTA収集の "電話番号:" 行(3予約)もfield-label型metadataとして除外対象に加えた。
+  - Booking.comの到着予定時間帯は "Approximate time of arrival: between HH:MM and
+    HH:MM" の1形のみ(46予約、全てBooking.com、windowは14:00〜22:00の毎正時8種)。
+    46予約すべてBeds24のarrivalTimeが空 = fallbackが必要な母集団、明示値との
+    衝突は実データ0件。明示arrivalTimeは345/724予約で非空("##:##"/"##：##")。
   - `comments`にはOTA自動生成の定型行(PRE-PAID/BOOKING NOTE/部屋設定コード/
     booked rate/管理画面リンク等)がゲスト入力と混在する。以下のsystem行テストは
     「2予約以上にbyte一致で出現した実template」だけを根拠にしている。
@@ -38,7 +46,8 @@ extract_cleaning_extra)。
 """
 from yuge_finance.ops.extract import (
     CHANNEL_COLLECT_INFO_CODES, compute_bedding_guest_count, extract_amount_due_at_property,
-    extract_child_age_info, extract_cleaning_extra, extract_children_age_7plus,
+    extract_booking_comment_arrival_window, extract_child_age_info, extract_cleaning_extra,
+    extract_children_age_7plus,
     extract_guest_notice, extract_invoice_balance, parse_booking_com_child_ages,
 )
 
@@ -244,6 +253,94 @@ def test_bedding_count_direct_uses_existing_safe_fallback_unchanged():
     assert compute_bedding_guest_count("未知OTA", 3, 0, None, False) == 3
 
 
+# ---------------- guest_notice: Guest name / 電話番号 のfield-label型metadata ----------------
+
+def test_guest_notice_drops_booking_com_guest_name_metadata_line():
+    """実データ59予約(全てBooking.com)。本番帳票に「客: Guest name: U…」として
+    出ていた行。氏名は清掃・客室準備の要望ではないため表示しない。"""
+    assert extract_guest_notice({"comments": "Guest name: TEST USER"}) is None
+
+
+def test_guest_notice_keeps_real_request_when_guest_name_metadata_precedes_it():
+    raw = {"comments": "Guest name: TEST USER\nPlease prepare two pillows"}
+    assert extract_guest_notice(raw) == "Please prepare two pillows"
+
+
+def test_guest_notice_guest_name_match_is_prefix_exact_not_word_contains():
+    """「name」という単語を含むだけのゲスト文章は絶対に落とさない(過剰削除防止)。"""
+    for line in (
+        "My name is Tanaka and I would like a quiet room",
+        "Please write our names on the welcome card",
+        "guest names: we are 2 adults",   # "guest name:" ではない(sが入る)
+    ):
+        assert extract_guest_notice({"comments": line}) == line, line
+
+
+def test_guest_notice_drops_ota_collected_phone_number_label_line():
+    """実データ3予約。OTAが収集した連絡先fieldで、要望ではない(半角/全角コロン両方)。"""
+    assert extract_guest_notice({"comments": "電話番号：090-0000-0000"}) is None
+    assert extract_guest_notice({"comments": "電話番号:090-0000-0000"}) is None
+
+
+# ---------------- Booking.com 到着予定時間帯 (comments -> 到着列fallback) ----------------
+
+def test_arrival_window_parses_the_only_real_form():
+    """実データに存在する唯一の形式(46予約)。返り値は "HH:MM-HH:MM"。"""
+    raw = {"comments": "Approximate time of arrival: between 17:00 and 18:00"}
+    assert extract_booking_comment_arrival_window(raw) == "17:00-18:00"
+
+
+def test_arrival_window_parses_every_real_window_observed():
+    """実データで観測された8つのwindowすべて(14:00〜22:00の毎正時)。"""
+    for start, end in [("14:00", "15:00"), ("15:00", "16:00"), ("16:00", "17:00"),
+                       ("17:00", "18:00"), ("18:00", "19:00"), ("19:00", "20:00"),
+                       ("20:00", "21:00"), ("21:00", "22:00")]:
+        raw = {"comments": f"Approximate time of arrival: between {start} and {end}"}
+        assert extract_booking_comment_arrival_window(raw) == f"{start}-{end}"
+
+
+def test_arrival_window_found_inside_a_full_mixed_comments_block():
+    raw = {"comments": ("1 child aged 10\n"
+                        "Approximate time of arrival: between 17:00 and 18:00\n"
+                        "Guest name: TEST USER\n"
+                        "Please prepare two pillows")}
+    assert extract_booking_comment_arrival_window(raw) == "17:00-18:00"
+
+
+def test_arrival_window_returns_none_for_absent_or_unknown_forms():
+    """実データに無い書式は解釈しない(推測しない)。"""
+    assert extract_booking_comment_arrival_window({}) is None
+    assert extract_booking_comment_arrival_window({"comments": ""}) is None
+    assert extract_booking_comment_arrival_window(
+        {"comments": "We will arrive around 18:00"}) is None
+    assert extract_booking_comment_arrival_window(
+        {"comments": "Approximate time of arrival: 17:00"}) is None
+
+
+def test_arrival_window_line_is_never_shown_as_guest_notice():
+    raw = {"comments": "Approximate time of arrival: between 17:00 and 18:00"}
+    assert extract_guest_notice(raw) is None
+
+
+def test_extract_cleaning_extra_requirement_12_full_mixed_comments():
+    """要件12: child age / arrival window / Guest name / 実要望 が同居するcomments。"""
+    raw = _raw(refererEditable="Booking.com", numAdult=2, numChild=1,
+               comments=("1 child aged 10\n"
+                         "Approximate time of arrival: between 17:00 and 18:00\n"
+                         "Guest name: TEST USER\n"
+                         "Please prepare two pillows"))
+    extra = extract_cleaning_extra(raw)
+    assert extra["bedding_guest_count"] == 3
+    assert extra["arrival_time_fallback"] == "17:00-18:00"
+    assert extra["guest_notice"] == "Please prepare two pillows"
+
+
+def test_extract_cleaning_extra_arrival_fallback_is_none_without_the_metadata():
+    extra = extract_cleaning_extra(_raw(refererEditable="Booking.com", comments="静かな部屋希望"))
+    assert extra["arrival_time_fallback"] is None
+    assert extra["guest_notice"] == "静かな部屋希望"
+
+
 # ---------------- extract_invoice_balance (Beds24公式 Invoice Balance 相当) ----------------
 
 def test_invoice_balance_no_payments_equals_full_charge():
@@ -403,6 +500,7 @@ def test_extract_cleaning_extra_bundles_all_fields_with_new_names():
     extra = extract_cleaning_extra(raw)
     assert extra == {
         "guest_notice": "到着が遅くなります",
+        "arrival_time_fallback": None,
         "children_age_7plus_count": None,
         "children_age_known_count": 0,
         "children_age_data_available": False,

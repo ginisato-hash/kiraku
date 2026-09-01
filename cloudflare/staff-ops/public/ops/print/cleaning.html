@@ -144,6 +144,19 @@
     td.cs-guest-12 { font-size: 3.2mm; }
     td.cs-guest-11 { font-size: 2.9mm; }
 
+    /* 到着：明示値"15:00"は既定サイズ。Booking.com commentsからの時間帯fallback
+       "17:00-18:00"(11文字)は14mm列に既定3.4mmでは入らないため、この列だけ
+       段階的に縮小して1行で収める(要件14。折返し3行表示は禁止)。
+       td.cs-XXX(0,1,1)で .cs-main-table td(0,1,1)と同specificityにし、
+       ソース順で後勝ちさせる(過去のfont-size無効化バグと同じ対策)。 */
+    .cs-c-arrival { white-space: nowrap; }
+    td.cs-arrival-9 { font-size: 2.7mm; padding: 0.2mm 0.3mm; }
+    td.cs-arrival-range {
+      font-size: 1.95mm;
+      padding: 0.1mm 0.1mm;
+      letter-spacing: -0.04em;
+    }
+
     /* 人数：上段=総人数(この帳票内で最大級の文字)、下段=大人/子供内訳(従属・
        コンパクトでよい)。cs-guest-count-wrapはtd自体ではなく内側のdivなので、
        display:flexを使ってもtdのdisplay:table-cellは壊れない。 */

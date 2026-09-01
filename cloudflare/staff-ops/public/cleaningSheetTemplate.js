@@ -152,6 +152,18 @@ export function arrivalTimeFor(room) {
   return g ? cleanValue(g.arrival_time) : "";
 }
 
+// 到着セルのfont-size段階。Beds24の明示arrival_timeは "15:00"(5文字)だが、
+// Booking.com commentsからのfallbackは "17:00-18:00"(11文字)になり、14mm幅の
+// 到着列には基本font-size(3.4mm)では収まらない。要件14どおり1行表示を優先し、
+// この列だけ段階的に縮小する(3行に折り返す表示にはしない)。
+// 判定は表示文字数のみ(到着時刻は半角数字/コロン/ハイフンのみのため全角幅換算は不要)。
+export function arrivalSizeClass(text) {
+  const v = typeof text === "string" ? text.trim() : "";
+  if (v.length <= 5) return "";            // "15:00" 等: 既定サイズのまま
+  if (v.length <= 8) return "cs-arrival-9";
+  return "cs-arrival-range";               // "17:00-18:00" 等
+}
+
 export function otaFor(room) {
   const g = priorityGuestFor(room);
   return g ? cleanValue(g.source) : "";
@@ -328,10 +340,17 @@ function buildOperationalCells(room) {
     </td>
     <td class="cs-c-nights">${escapeHtml(nightProgressFor(room))}</td>
     <td class="cs-c-status">${escapeHtml(printStatusLabel(room.status))}</td>
-    <td class="cs-c-arrival">${escapeHtml(arrivalTimeFor(room))}</td>
+    ${buildArrivalCell(room)}
     <td class="cs-c-ota">${escapeHtml(otaPrintShortName(otaFor(room)))}</td>
     ${buildOnsiteCell(room)}
     ${buildNotesCell(room)}`;
+}
+
+function buildArrivalCell(room) {
+  const arrival = arrivalTimeFor(room);
+  const sizeClass = arrivalSizeClass(arrival);
+  const cls = sizeClass ? `cs-c-arrival ${sizeClass}` : "cs-c-arrival";
+  return `<td class="${cls}">${escapeHtml(arrival)}</td>`;
 }
 
 function buildRoomRow(room) {

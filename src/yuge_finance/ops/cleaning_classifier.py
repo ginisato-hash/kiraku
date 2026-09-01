@@ -60,6 +60,7 @@ def _empty_cleaning_extra(b: StaffBookingRecord) -> Dict:
     # compute_bedding_guest_count()の安全側fallbackと同じ考え方)。
     return {
         "guest_notice": None,
+        "arrival_time_fallback": None,
         "children_age_7plus_count": None,
         "children_age_known_count": 0,
         "children_age_data_available": False,
@@ -79,7 +80,12 @@ def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Di
         total_guests=b.total_guests,
         check_in=b.checkin_date,
         check_out=b.checkout_date,
-        arrival_time=b.arrival_time,
+        # 到着時刻: Beds24の明示arrivalTimeが最優先。空のときだけ、Booking.comが
+        # `comments`へ自動生成する到着予定時間帯("17:00-18:00")へfallbackする
+        # (extract.extract_booking_comment_arrival_window参照、要件9・13)。
+        # 明示値をcommentsで上書きしない。この解決はCleaning DTO専用であり、
+        # StaffBookingRecord(Daily Ops/宿泊者名簿)のarrival_timeは一切変えない。
+        arrival_time=b.arrival_time or extra.get("arrival_time_fallback"),
         source=b.ota_name,
         children_age_7plus_count=extra["children_age_7plus_count"],
         children_age_known_count=extra.get("children_age_known_count", 0),

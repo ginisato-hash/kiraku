@@ -197,6 +197,14 @@ _SYSTEM_LINE_EXACT = {
     "こちらは「スマート・フレックス予約」の対象予約です。",   # 実データ5予約
 }
 _SYSTEM_LINE_PREFIXES = (
+    # 2026-09-03 再監査で判明: 現行filterを通り抜けていた唯一のlabel形式が
+    # "Guest name: <氏名>"(実データ59予約、全てBooking.com、variantは1形のみ)。
+    # 本番帳票の備考欄に「客: Guest name: U…」として出ていた原因。colonまで含めた
+    # prefix一致で判定する — ゲストが本文中で "name" と書いただけの行は落とさない。
+    "guest name:",
+    # OTAが収集した連絡先field(実データ3予約)。清掃・客室準備の要望ではなく、
+    # 印刷物へ電話番号を載せる必要も無いため落とす(半角/全角コロン両方)。
+    "電話番号:", "電話番号：",
     "booking note",                # "BOOKING NOTE : Payment charge is JPY …" 実データ141予約
     "approximate time of arrival:",  # Booking.com自動生成の到着時間帯 実データ46予約
     "booked rate:",                # "booked rate: Non-refundable Rate (…)" 実データ41+18+2予約
@@ -299,6 +307,36 @@ def extract_guest_notice(raw: dict) -> Optional[str]:
         if cleaned:
             kept.append(cleaned)
     return "\n".join(kept) or None
+
+
+# Booking.comが`comments`へ自動生成する到着予定時間帯。
+# 【2026-09-03 実データで確定】実在する形は
+#   "Approximate time of arrival: between HH:MM and HH:MM"
+# の1形のみ(46予約、全てBooking.com、windowは14:00〜22:00の毎正時8種)。この行は
+# guest_noticeからはsystem行として除外されるが(_SYSTEM_LINE_PREFIXES)、対象46予約は
+# 全件Beds24のarrivalTimeが空であり、除外するとこの情報がどこにも出なくなる。よって
+# 清掃指示表の「到着」列へのfallback source として別途取り出す(要件7-9)。
+# 推測形式には対応しない — 実データに存在しない書式は解釈しない。
+_APPROX_ARRIVAL_RE = re.compile(
+    r"^approximate time of arrival\s*:\s*between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2})$",
+    re.IGNORECASE,
+)
+
+
+def extract_booking_comment_arrival_window(raw: dict) -> Optional[str]:
+    """`comments`のBooking.com到着予定時間帯を "HH:MM-HH:MM" 形式で返す。
+
+    Beds24のarrivalTime(明示値)より優先度は低い — 呼び出し側で
+    「明示値 or このfallback」の順に解決すること(要件9・13)。一致しなければNone。
+    """
+    comments = guest_comment_text(raw)
+    if not comments:
+        return None
+    for line in comments.splitlines():
+        m = _APPROX_ARRIVAL_RE.match(line.strip())
+        if m:
+            return f"{m.group(1)}-{m.group(2)}"
+    return None
 
 
 def extract_child_age_info(raw: dict) -> Tuple[int, int]:
@@ -415,7 +453,7 @@ def extract_amount_due_at_property(raw: dict) -> Tuple[bool, Optional[int]]:
 
 
 def extract_cleaning_extra(raw: dict) -> Dict:
-    """清掃指示DTO専用の追加項目(guest_notice/children_age_7plus_count/
+    """清掃指示DTO専用の追加項目(guest_notice/arrival_time_fallback/children_age_7plus_count/
     children_age_data_available/bedding_guest_count/payment_due_at_property/
     amount_due_at_property)をまとめて抽出する。StaffBookingRecord(Daily Ops/
     宿泊者名簿でも使う共有dataclass)には一切追加しない — 財務フィールド
@@ -434,6 +472,7 @@ def extract_cleaning_extra(raw: dict) -> Dict:
         children_age_known_count)
     return {
         "guest_notice": extract_guest_notice(raw),
+        "arrival_time_fallback": extract_booking_comment_arrival_window(raw),
         "children_age_7plus_count": children_age_7plus_count,
         "children_age_known_count": children_age_known_count,
         "children_age_data_available": children_age_data_available,
