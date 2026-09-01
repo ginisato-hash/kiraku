@@ -1,175 +1,115 @@
-"""ONE-TIME diagnostic (temporary; removed after the investigation).
+"""ONE-TIME diagnostic round 2 (temporary; removed after the investigation).
 
-Anchor booking: Beds24 booking 91673623 (Booking.com, numAdult=2, numChild=1).
-The Beds24 UI shows, under 「ゲストからのコメント」:  "1 child aged 10".
+Round 1 proved: Beds24 v2 booking field `comments` (individual booking record,
+NO extra include parameter) carries the Booking.com child-age metadata
+("1 child aged 10") for anchor booking 91673623, and the normal 15-min
+fetch_raw() path already retrieves it. `guestComments` does not exist in the
+payload at all.
 
-Goal: prove WHICH API request + WHICH booking record + WHICH field carries that
-text, instead of concluding "the data does not exist" (the previous round's
-wrong conclusion).
+Round 2 answers the two remaining implementation questions with real data:
+  (A) which real child-age text shapes exist (so parser tests use ACTUAL
+      patterns, not invented ones), and
+  (B) which `comments` lines are OTA/system-generated boilerplate that must
+      never be shown as a guest notice.
 
-Privacy rules enforced here:
-  * The Beds24 token is never printed.
-  * Identity fields (name/email/phone/address/...) are never read or printed.
-  * Free-text fields are NEVER printed in full. For every string field only
-    (field path, length, matched?) is printed; content is printed ONLY as a
-    bounded window around a child-age metadata match.
+Privacy design for (B): guest-authored free text is never printed. Each line is
+reduced to a template (every digit run -> '#') and counted by DISTINCT booking.
+Only templates appearing in 2+ different bookings are printed — machine-
+generated boilerplate by definition; human-typed text is not byte-identical
+across separate bookings. Singleton templates are reported as length + hash
+prefix only. The token is never printed; identity fields are never read.
 """
 from __future__ import annotations
 
+import hashlib
 import re
-import sys
-
-import requests
+from collections import defaultdict
 
 from yuge_finance.api.beds24_client import Beds24Client
 
-BOOKING_ID = "91673623"
+ANCHOR = "91673623"
+MONTHS = ["2026-%02d" % m for m in range(1, 13)]
 
-# Never scanned, never printed. (Deliberately does NOT include comments/notes/
-# message/groupNote — excluding those is exactly what made the previous
-# diagnostic blind.)
-IDENTITY_KEYS = {
-    "firstname", "lastname", "title", "email", "phone", "mobile", "fax",
-    "address", "city", "state", "postcode", "country", "country2", "company",
-    "guestname", "pcibookingtoken", "stripetoken",
-}
-
-# Bounded child-age metadata match only.
 CHILD_RE = re.compile(r"aged?\b|child(?:ren)?\b", re.IGNORECASE)
-WINDOW = 40
-
-VARIANTS = [
-    ("plain", {}),
-    ("infoItems", {"includeInfoItems": "true"}),
-    ("infoItemsConverted", {"includeInfoItems": "true", "includeInfoItemsConverted": "true"}),
-    ("bookingGroup", {"includeBookingGroup": "true"}),
-    ("guests", {"includeGuests": "true"}),
-    ("invoiceItems", {"includeInvoiceItems": "true"}),
-    ("all", {"includeInfoItems": "true", "includeInfoItemsConverted": "true",
-             "includeBookingGroup": "true", "includeInvoiceItems": "true",
-             "includeGuests": "true"}),
-]
-
-
-def walk_strings(node, path, out):
-    """Collect (path, value) for every string leaf, skipping identity keys."""
-    if isinstance(node, str):
-        out.append((path, node))
-    elif isinstance(node, dict):
-        for k, v in node.items():
-            if str(k).lower() in IDENTITY_KEYS:
-                continue
-            walk_strings(v, f"{path}.{k}" if path else str(k), out)
-    elif isinstance(node, list):
-        for i, item in enumerate(node[:50]):
-            walk_strings(item, f"{path}[{i}]", out)
-
-
-def report_record(label, rec):
-    bid = rec.get("id")
-    print(f"  record booking_id={bid} status={rec.get('status')} "
-          f"numAdult={rec.get('numAdult')} numChild={rec.get('numChild')} "
-          f"referer_editable={rec.get('refererEditable')!r} apiSource={rec.get('apiSource')!r}")
-    print(f"  key inventory (names only): {sorted(rec.keys())}")
-
-    # group/master/linked structure
-    group_keys = [k for k in rec.keys()
-                  if re.search(r"group|master|linked|sub", str(k), re.IGNORECASE)]
-    for k in group_keys:
-        v = rec.get(k)
-        if isinstance(v, str):
-            print(f"  group-ish key {k}: type=str len={len(v)} (content withheld)")
-        else:
-            print(f"  group-ish key {k}: {v!r}")
-
-    leaves = []
-    walk_strings(rec, "", leaves)
-    nonempty = [(p, v) for p, v in leaves if v.strip()]
-    print(f"  string leaves: total={len(leaves)} nonempty={len(nonempty)}")
-    for p, v in nonempty:
-        matches = list(CHILD_RE.finditer(v))
-        flag = "MATCH" if matches else "-"
-        print(f"    field={p} len={len(v)} {flag}")
-        for m in matches:
-            s = max(0, m.start() - WINDOW)
-            e = min(len(v), m.end() + WINDOW)
-            print(f"      child_pattern_window={v[s:e]!r}")
-    return [p for p, v in nonempty if CHILD_RE.search(v)]
+WINDOW = 45
 
 
 def main():
     client = Beds24Client()
-    headers = client._headers()
-    base = client.base
 
-    print("=== ANCHOR BOOKING DIAGNOSTIC ===")
-    print(f"booking_id={BOOKING_ID}")
+    bookings = []
+    for month in MONTHS:
+        bookings.extend(client.fetch_raw(month))
+    print(f"total bookings fetched ({MONTHS[0]}..{MONTHS[-1]}): {len(bookings)}")
 
-    matched_fields_by_variant = {}
-    group_ids = set()
+    with_comments = [b for b in bookings if str(b.get("comments") or "").strip()]
+    print(f"bookings with non-empty `comments`: {len(with_comments)}")
 
-    for label, extra in VARIANTS:
-        params = {"id": BOOKING_ID}
-        params.update(extra)
-        # status must be explicit or some statuses are filtered out
-        params["status"] = ["new", "request", "confirmed", "cancelled", "black"]
-        resp = requests.get(f"{base}/bookings", headers=headers, params=params, timeout=30)
-        print(f"\n--- variant={label} params={sorted(extra.keys())} http={resp.status_code}")
-        if resp.status_code != 200:
-            print(f"  ERROR body (first 200 chars, no token): {resp.text[:200]!r}")
+    # ---- (A) real child-age shapes ----
+    print("\n=== (A) child-age metadata occurrences in `comments` ===")
+    shapes = defaultdict(int)
+    per_ota = defaultdict(lambda: [0, 0])  # ota -> [with children, with child-age text]
+    for b in bookings:
+        ota = str(b.get("refererEditable") or b.get("apiSource") or "?")
+        nchild = int(float(b.get("numChild") or 0))
+        comments = str(b.get("comments") or "")
+        has_age = bool(re.search(r"child(?:ren)?\s+aged", comments, re.IGNORECASE))
+        if nchild > 0:
+            per_ota[ota][0] += 1
+            if has_age:
+                per_ota[ota][1] += 1
+        if not has_age:
             continue
-        body = resp.json()
-        if isinstance(body, dict):
-            print(f"  envelope keys: {sorted(body.keys())} success={body.get('success')}")
-            data = body.get("data", [])
-        else:
-            data = body
-        print(f"  records returned: {len(data)}")
-        hits = []
-        for rec in data:
-            hits += report_record(label, rec)
-            bg = rec.get("bookingGroup")
-            if isinstance(bg, dict):
-                print(f"  bookingGroup detail: {bg!r}")
-                for k in ("master", "masterId", "ids", "bookingIds", "roomIds"):
-                    v = bg.get(k)
-                    if isinstance(v, list):
-                        group_ids.update(str(x) for x in v)
-                    elif v not in (None, ""):
-                        group_ids.add(str(v))
-        matched_fields_by_variant[label] = hits
+        for m in re.finditer(r"\d+\s+child(?:ren)?\s+aged[^\n]*", comments, re.IGNORECASE):
+            text = m.group(0).strip()
+            shapes[re.sub(r"\d+", "#", text)] += 1
+            print(f"  booking_id={b.get('id')} ota={ota} numAdult={b.get('numAdult')} "
+                  f"numChild={nchild} child_match={text!r}")
+    print(f"\n  distinct child-age line templates (digits masked): {dict(shapes)}")
+    print("  per-OTA [bookings with numChild>0, of which carrying child-age text]:")
+    for ota, (a, c) in sorted(per_ota.items()):
+        print(f"    {ota}: {a}, {c}")
 
-    print("\n=== child-pattern matching fields per variant ===")
-    for label, hits in matched_fields_by_variant.items():
-        print(f"  {label}: {hits}")
+    # ---- (B) line composition of `comments` ----
+    print("\n=== (B) `comments` line templates (only 2+ distinct bookings printed) ===")
+    tmpl_bookings = defaultdict(set)
+    for b in with_comments:
+        for line in str(b.get("comments")).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            tmpl_bookings[re.sub(r"\d+", "#", line)].add(str(b.get("id")))
+    repeated = {t: len(ids) for t, ids in tmpl_bookings.items() if len(ids) >= 2}
+    singles = {t: len(ids) for t, ids in tmpl_bookings.items() if len(ids) < 2}
+    print(f"  distinct line templates: {len(tmpl_bookings)} "
+          f"(repeated={len(repeated)}, singleton={len(singles)})")
+    for t, n in sorted(repeated.items(), key=lambda kv: -kv[1]):
+        print(f"  bookings={n:4d} template={t!r}")
+    print(f"\n  singleton lines (content withheld — length + hash prefix only): {len(singles)}")
+    for t in sorted(singles):
+        h = hashlib.sha1(t.encode("utf-8")).hexdigest()[:8]
+        print(f"    len={len(t)} ascii={t.isascii()} sha1={h}")
 
-    print(f"\n=== related group/master booking ids discovered: {sorted(group_ids)} ===")
-    for gid in sorted(group_ids - {BOOKING_ID}):
-        resp = requests.get(f"{base}/bookings", headers=headers,
-                            params={"id": gid, "includeInfoItems": "true",
-                                    "includeBookingGroup": "true",
-                                    "status": ["new", "request", "confirmed",
-                                               "cancelled", "black"]},
-                            timeout=30)
-        print(f"\n--- related booking {gid} http={resp.status_code}")
-        if resp.status_code == 200:
-            body = resp.json()
-            data = body.get("data", []) if isinstance(body, dict) else body
-            for rec in data:
-                report_record(f"group:{gid}", rec)
-
-    # --- what the NORMAL 15-min refresh path currently retrieves ---
-    print("\n=== NORMAL fetch_raw('2026-08') path check ===")
-    raw = client.fetch_raw("2026-08")
-    print(f"  bookings fetched: {len(raw)}")
-    target = [b for b in raw if str(b.get("id")) == BOOKING_ID]
-    print(f"  anchor booking present in normal fetch: {bool(target)}")
-    for rec in target:
-        hits = report_record("normal_fetch", rec)
-        print(f"  normal_fetch child-pattern fields: {hits}")
+    # ---- anchor booking line-by-line ----
+    print(f"\n=== anchor booking {ANCHOR}: line classification ===")
+    for b in bookings:
+        if str(b.get("id")) != ANCHOR:
+            continue
+        comments = str(b.get("comments") or "")
+        print(f"  comments length={len(comments)} lines={len(comments.splitlines())}")
+        for i, line in enumerate(comments.splitlines()):
+            s = line.strip()
+            if not s:
+                print(f"    line{i}: (blank)")
+                continue
+            t = re.sub(r"\d+", "#", s)
+            n = len(tmpl_bookings.get(t, ()))
+            child = bool(CHILD_RE.search(s))
+            shown = repr(s) if (n >= 2 or child) else f"(withheld, len={len(s)})"
+            print(f"    line{i}: bookings_with_same_template={n} child_pattern={child} {shown}")
 
     print("\n=== END DIAGNOSTIC ===")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
