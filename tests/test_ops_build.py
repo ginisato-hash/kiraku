@@ -105,8 +105,8 @@ def test_build_staff_ops_snapshot_cleaning_extra_flows_through_end_to_end(tmp_pa
     room_607 = [r for r in rooms if r["room_number"] == "607"][0]
     guest = room_607["arriving_guest"]
     assert guest["guest_notice"] == "到着が遅くなります"
-    assert guest["onsite_payment_required"] is True
-    assert guest["onsite_payment_amount"] == 13000
+    assert guest["payment_due_at_property"] is True
+    assert guest["amount_due_at_property"] == 13000
 
 
 def test_daily_ops_arrivals_never_carry_the_cleaning_only_extra_fields(tmp_path):
@@ -123,7 +123,7 @@ def test_daily_ops_arrivals_never_carry_the_cleaning_only_extra_fields(tmp_path)
     _write_month(tmp_path, "2026-09", [booking])
     snapshot = ops_build.build_staff_ops_snapshot(["2026-09-01"], data_root=tmp_path)
     arrival = snapshot["dates"]["2026-09-01"]["arrivals"][0]
-    for forbidden_key in ("guest_notice", "onsite_payment_required", "onsite_payment_amount",
+    for forbidden_key in ("guest_notice", "payment_due_at_property", "amount_due_at_property",
                           "children_age_7plus_count", "children_age_data_available"):
         assert forbidden_key not in arrival, f"{forbidden_key} must not leak into Daily Ops arrivals"
 

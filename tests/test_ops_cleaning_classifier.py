@@ -204,8 +204,8 @@ def test_guest_info_defaults_new_fields_when_no_extra_map_given():
     assert guest.guest_notice is None
     assert guest.children_age_7plus_count is None
     assert guest.children_age_data_available is False
-    assert guest.onsite_payment_required is False
-    assert guest.onsite_payment_amount is None
+    assert guest.payment_due_at_property is False
+    assert guest.amount_due_at_property is None
 
 
 def test_guest_info_picks_up_cleaning_extra_by_booking_id():
@@ -214,14 +214,14 @@ def test_guest_info_picks_up_cleaning_extra_by_booking_id():
         "guest_notice": "静かな部屋希望",
         "children_age_7plus_count": None,
         "children_age_data_available": False,
-        "onsite_payment_required": True,
-        "onsite_payment_amount": 18000,
+        "payment_due_at_property": True,
+        "amount_due_at_property": 18000,
     }}
     rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
     guest = _row_for("401", rows).arriving_guest
     assert guest.guest_notice == "静かな部屋希望"
-    assert guest.onsite_payment_required is True
-    assert guest.onsite_payment_amount == 18000
+    assert guest.payment_due_at_property is True
+    assert guest.amount_due_at_property == 18000
 
 
 def test_guest_info_extra_lookup_is_scoped_to_the_matching_booking_id_only():
@@ -233,7 +233,7 @@ def test_guest_info_extra_lookup_is_scoped_to_the_matching_booking_id_only():
     extra = {"1": {
         "guest_notice": "401専用のお知らせ",
         "children_age_7plus_count": None, "children_age_data_available": False,
-        "onsite_payment_required": False, "onsite_payment_amount": None,
+        "payment_due_at_property": False, "amount_due_at_property": None,
     }}
     rows = classify_cleaning_for_date(bookings, "2026-08-30", extra)
     assert _row_for("401", rows).arriving_guest.guest_notice == "401専用のお知らせ"

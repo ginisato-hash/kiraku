@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 from .. import config
-from ..accounting.beds24_revenue_logic import ONSITE_PAYMENT_TOKENS, normalize_booking_source
+from ..accounting.beds24_revenue_logic import normalize_booking_source
 from .schema import StaffAddress, StaffBookingRecord
 
 # None/null/undefined/N/A相当の文字列表現（大小文字無視で比較する）。
@@ -177,69 +177,94 @@ def extract_children_age_7plus(raw: dict) -> Tuple[Optional[int], bool]:
     return None, False
 
 
-def _has_onsite_marker(item: dict) -> bool:
-    desc = str(item.get("description", "") or "").lower()
-    return any(tok.lower() in desc for tok in ONSITE_PAYMENT_TOKENS)
+# Beds24公式Info Code(予約payload内のinfoItems[].code)のうち、OTAチャネル自身が
+# 顧客から代金を回収済み/回収するため「喜らくフロントでは回収しない」ことを示す
+# ものだけを列挙する。2026-09、property 330695・5か月分の実データ調査で
+# BOOKINGCOMBANKTRANS(154件)のみ実在を確認済み。他は同ユーザー要件で明示された
+# Beds24公式のchannel-collect系Info Codeを防御的に含めるが、この物件の実データには
+# 一度も出現していない(将来出現した場合に備えるのみで、推測で追加した挙動はしない
+# — あくまでコード名の一致判定のみで金額計算には一切関与しない)。
+# HOTELCOLLECTはExpediaのhotel collect(施設側が回収する)を意味し、OTA collectでは
+# ないため意図的に含めない(誤って除外シグナルにしないこと — 要件A-4)。
+CHANNEL_COLLECT_INFO_CODES = frozenset({
+    "BOOKINGCOMBANKTRANS",  # 実データで確認済み(154件)
+    "BOOKINGCOMVIRTCARD", "EXPEDIACOLLECT", "AGODACOLLECT", "VIRTUALCARD",  # 未実証・防御的
+})
 
 
-def extract_onsite_payment(raw: dict) -> Tuple[bool, Optional[int]]:
-    """現地決済が必要か、現地で回収すべき残額はいくらかを判定する。
+def _is_channel_collect(raw: dict) -> bool:
+    for item in raw.get("infoItems") or []:
+        code = str(item.get("code") or "").upper()
+        if code in CHANNEL_COLLECT_INFO_CODES:
+            return True
+    return False
 
-    ONSITE_PAYMENT_TOKENS(accounting/beds24_revenue_logic.py、既存の売上ロジックで
-    実証済みのトークン一覧)を再利用し、新しい判定器を独自に作らない。
 
-    2026-09、property 330695、直近9か月657予約の実データ調査結果: 現地決済markerを
-    持つ予約は2件のみ(いずれも非キャンセル)。両方とも「現地支払い」invoiceItemが
-    type=payment/lineTotal=0のマーカー行として存在し、他のpayment行は一切無く、
-    charge合計(=price)がそのまま未収残高だった(13,000円/14,500円で実証)。
-    トップレベルにbalance/paid/due相当のfieldも存在しなかった。よって:
+def extract_invoice_balance(raw: dict) -> int:
+    """Beds24公式のbooking単位 Invoice Balance([INVOICEBALANCE1]相当)を計算する。
 
-        outstanding = sum(type=charge の lineTotal) - sum(marker以外のtype=payment の |lineTotal|)
+    Beds24 API v2にはbooking-level balanceを直接返すfieldが存在しない
+    (2026-09、GET /bookings/invoicesは実データで0件、GET /bookingsのpayloadにも
+    balance/due/owing相当のtop-level fieldは一切無いことを実証済み)。よって
+    invoiceItemsから計算するが、符号は必ず実データで確認済みの規約を使う:
 
-    を残高とする。marker以外に実際の支払い行があるケース(一部前払い等)は実データに
-    存在しなかったため未実証だが、その金額の符号(絶対値として扱う)は既存の
-    extract_beds24_coupon_discount()等と同じ確立済み規約を踏襲しており、新規に
-    推測したものではない。
+        invoice_balance = sum(type=charge の lineTotal) + sum(type=payment の lineTotal)
 
-    表示条件(呼び出し側で使う想定): 明示的なonsite signalがあり、かつ
-    outstanding > 0 の場合のみ (True, outstanding) を返す。signalが無ければ
-    (False, None)。signalはあるが残高が0以下なら (False, None)(現地決済表示しない)。
+    (payment側は絶対値化しない — lineTotalは既に実額入金時は負数で入っている。
+    2026-09、11件の実予約(現地支払いmarker/BankTransfer/coupon+point+事前払いの
+    組み合わせ/無支払いのBooking.com等)で全件この式がBeds24の実態と一致することを
+    確認済み。以前のバージョンはpayment側をabs()していたが、これは支払い済み予約の
+    残高を「charge+|payment|」という誤った加算にしてしまう実害があった
+    (例: BankTransferで全額入金済みの予約が誤って残高2倍表示になっていた)。
+    """
+    if not raw:
+        return 0
+    items = raw.get("invoiceItems") or []
+    charge_sum = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
+                     for it in items if it.get("type") == "charge")
+    payment_sum = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
+                      for it in items if it.get("type") == "payment")
+    return round(charge_sum + payment_sum)
+
+
+def extract_amount_due_at_property(raw: dict) -> Tuple[bool, Optional[int]]:
+    """その予約について、喜らくフロントが現地でゲストから回収すべき残額を判定する。
+
+    ルール(要件A-8、実データで検証済み):
+        invoice_balance <= 0        -> 現地決済なし(支払い済み/charge無し)
+        channel collectが明確       -> 現地決済なし(OTAが既に回収/回収予定)
+        それ以外でinvoice_balance>0 -> その金額が現地回収額
+
+    「現地支払い」等のmarker(旧ONSITE_PAYMENT_TOKENS)はsource of truthではない
+    (要件A-9で補助signalへ降格)。現時点ではこの関数はそれを一切参照しない
+    — 参照すると「markerが無い実予約」を誤って除外していた旧バグを再発するため。
     """
     if not raw:
         return False, None
-    items = raw.get("invoiceItems") or []
-    onsite_items = [it for it in items if _has_onsite_marker(it)]
-    if not onsite_items:
+    balance = extract_invoice_balance(raw)
+    if balance <= 0:
         return False, None
-
-    charge_sum = sum(float(it.get("lineTotal", it.get("amount", 0)) or 0)
-                     for it in items if it.get("type") == "charge")
-    payment_sum_excl_marker = sum(
-        abs(float(it.get("lineTotal", it.get("amount", 0)) or 0))
-        for it in items if it.get("type") == "payment" and it not in onsite_items)
-    outstanding = round(charge_sum - payment_sum_excl_marker)
-
-    if outstanding <= 0:
+    if _is_channel_collect(raw):
         return False, None
-    return True, outstanding
+    return True, balance
 
 
 def extract_cleaning_extra(raw: dict) -> Dict:
     """清掃指示DTO専用の追加項目(guest_notice/children_age_7plus_count/
-    children_age_data_available/onsite_payment_required/onsite_payment_amount)を
+    children_age_data_available/payment_due_at_property/amount_due_at_property)を
     まとめて抽出する。StaffBookingRecord(Daily Ops/宿泊者名簿でも使う共有dataclass)
-    には一切追加しない — 財務フィールド(onsite_payment_amount)がDaily Ops側の
+    には一切追加しない — 財務フィールド(amount_due_at_property)がDaily Ops側の
     出力へ意図せず混入するのを構造的に防ぐため、Cleaning DTO専用の別経路として
     独立させている。
     """
     children_age_7plus_count, children_age_data_available = extract_children_age_7plus(raw)
-    onsite_payment_required, onsite_payment_amount = extract_onsite_payment(raw)
+    payment_due_at_property, amount_due_at_property = extract_amount_due_at_property(raw)
     return {
         "guest_notice": extract_guest_notice(raw),
         "children_age_7plus_count": children_age_7plus_count,
         "children_age_data_available": children_age_data_available,
-        "onsite_payment_required": onsite_payment_required,
-        "onsite_payment_amount": onsite_payment_amount,
+        "payment_due_at_property": payment_due_at_property,
+        "amount_due_at_property": amount_due_at_property,
     }
 
 

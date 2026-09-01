@@ -87,22 +87,23 @@ await check("CLEANING_FORBIDDEN_KEYS is FORBIDDEN_FINANCIAL_KEYS plus the agreed
   }
 });
 
-// ---------------- 2026-09: onsite_payment_* だけを明示的に許可した例外 ----------------
+// ---------------- 2026-09: payment_due_at_property/amount_due_at_property だけを
+// 明示的に許可した例外(旧onsite_payment_required/onsite_payment_amountから改名) ----------------
 
-await check("onsite_payment_required/onsite_payment_amount are explicitly NOT rejected (the one approved financial exception)", async () => {
+await check("payment_due_at_property/amount_due_at_property are explicitly NOT rejected (the one approved financial exception)", async () => {
   const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
   const rooms = mergeCleaningOverrides(rawRooms, {});
-  // the real fixture (room 401) already carries onsite_payment_required=true /
-  // onsite_payment_amount=18000 nested inside arriving_guest — confirm both guards
+  // the real fixture (room 401) already carries payment_due_at_property=true /
+  // amount_due_at_property=18000 nested inside arriving_guest — confirm both guards
   // pass without throwing.
   const room401 = rooms.find((r) => r.room_number === "401");
-  assert.equal(room401.arriving_guest.onsite_payment_required, true);
-  assert.equal(room401.arriving_guest.onsite_payment_amount, 18000);
+  assert.equal(room401.arriving_guest.payment_due_at_property, true);
+  assert.equal(room401.arriving_guest.amount_due_at_property, 18000);
   assert.doesNotThrow(() => assertNoFinancialKeys({ date: "2026-08-30", rooms }));
   assert.doesNotThrow(() => assertNoForbiddenCleaningKeys({ date: "2026-08-30", rooms }));
 });
 
-await check("every OTHER financial key is still rejected even inside a guest object that also carries onsite_payment_amount", async () => {
+await check("every OTHER financial key is still rejected even inside a guest object that also carries amount_due_at_property", async () => {
   const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
   const rooms = mergeCleaningOverrides(rawRooms, {});
   const room401 = rooms.find((r) => r.room_number === "401");

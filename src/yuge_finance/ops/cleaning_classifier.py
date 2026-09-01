@@ -57,8 +57,8 @@ _EMPTY_CLEANING_EXTRA = {
     "guest_notice": None,
     "children_age_7plus_count": None,
     "children_age_data_available": False,
-    "onsite_payment_required": False,
-    "onsite_payment_amount": None,
+    "payment_due_at_property": False,
+    "amount_due_at_property": None,
 }
 
 
@@ -77,8 +77,8 @@ def _guest_info(b: StaffBookingRecord, cleaning_extra_by_booking_id: Optional[Di
         children_age_7plus_count=extra["children_age_7plus_count"],
         children_age_data_available=extra["children_age_data_available"],
         guest_notice=extra["guest_notice"],
-        onsite_payment_required=extra["onsite_payment_required"],
-        onsite_payment_amount=extra["onsite_payment_amount"],
+        payment_due_at_property=extra["payment_due_at_property"],
+        amount_due_at_property=extra["amount_due_at_property"],
     )
 
 

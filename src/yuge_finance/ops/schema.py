@@ -56,12 +56,17 @@ class CleaningGuestInfo:
     参照。現時点は実データに年齢fieldが存在しないため常に(None, False)。
     guest_notice: extract.extract_guest_notice()参照。ソースはguestCommentsのみ
     (内部メモ用のnotes/comments/groupNote/messageとは別経路)。
-    onsite_payment_required/onsite_payment_amount: 2026-09にユーザー要件で明示的に
-    許可された、Cleaning DTOで唯一許容される財務フィールド(「現地で回収すべき金額」の
-    operational data)。CLEANING_FORBIDDEN_KEYSのブラックリストには元々このキー名は
-    含まれない(revenue/price/commission等とは別語彙)ため技術的な変更は不要だが、
-    ここに明示的に記録しておく。それ以外の財務フィールド(revenue/ADR/RevPAR/
-    commission/invoice detail等)は引き続き禁止。
+    payment_due_at_property/amount_due_at_property: 2026-09にユーザー要件で明示的に
+    許可された、Cleaning DTOで唯一許容される財務フィールド(「喜らくフロントが現地で
+    ゲストから回収すべき残額」のoperational data)。extract.extract_amount_due_at_property()
+    参照 — Beds24公式のbooking単位Invoice Balance([INVOICEBALANCE1]相当)を
+    source of truthとし、channel collect(BOOKINGCOMBANKTRANS等)は除外する。
+    旧onsite_payment_required/onsite_payment_amount(「現地支払い」markerが明示された
+    予約だけを対象とする実装)は、markerの無い実予約(未払いのBooking.com等)を
+    誤って除外する実害があったため2026-09に撤回・改名した。CLEANING_FORBIDDEN_KEYS
+    のブラックリストには元々このキー名は含まれない(revenue/price/commission等とは
+    別語彙)ため技術的な変更は不要だが、ここに明示的に記録しておく。それ以外の
+    財務フィールド(revenue/ADR/RevPAR/commission/invoice detail等)は引き続き禁止。
     """
     booking_id: str = ""
     guest_name: str = ""
@@ -75,8 +80,8 @@ class CleaningGuestInfo:
     children_age_7plus_count: Optional[int] = None
     children_age_data_available: bool = False
     guest_notice: Optional[str] = None
-    onsite_payment_required: bool = False
-    onsite_payment_amount: Optional[int] = None
+    payment_due_at_property: bool = False
+    amount_due_at_property: Optional[int] = None
 
 
 @dataclass
@@ -126,10 +131,13 @@ def assert_no_financial_keys(d) -> None:
 # (住所/電話/メール/パスポート/国籍等)も禁止する。Daily Ops側(StaffBookingRecord)は
 # phone/addressを意図的に許可しているため、この禁止リストはCleaning DTO専用。
 #
-# 2026-09の例外(明示的に許可): onsite_payment_required / onsite_payment_amount のみ。
-# 「現地で回収すべき金額」というoperational dataであり、revenue/ADR/RevPAR/commission/
-# invoice detail等の禁止語彙とは重ならないため、このセット自体に変更は不要
-# (元々ブロックしていない)。それ以外の財務フィールドは引き続きこのリストで禁止する。
+# 2026-09の例外(明示的に許可): payment_due_at_property / amount_due_at_property のみ
+# (旧onsite_payment_required/onsite_payment_amountから改名 — Beds24公式Invoice
+# Balanceベースの実装へ全面修正したため)。「現地で回収すべき金額」というoperational
+# dataであり、revenue/ADR/RevPAR/commission/invoice detail等の禁止語彙とは重ならない
+# ため、このセット自体に変更は不要(元々ブロックしていない — "amount"は完全一致の
+# トークンであり"amount_due_at_property"という別文字列とは衝突しない)。それ以外の
+# 財務フィールドは引き続きこのリストで禁止する。
 CLEANING_FORBIDDEN_KEYS = FINANCIAL_KEYS | {
     "phone", "mobile", "address", "postcode", "prefecture", "city", "rest",
     "email", "passport", "nationality", "country", "notes", "rate", "amount",

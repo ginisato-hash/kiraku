@@ -160,12 +160,16 @@ export function guestNoticeFor(room) {
   return g ? cleanValue(g.guest_notice) : "";
 }
 
-// 現地決済表示。onsite_payment_required && onsite_payment_amountが正の有限数の
+// 現地決済表示。payment_due_at_property && amount_due_at_propertyが正の有限数の
 // 場合のみ表示対象とする(不確実な金額を「?」等で誤表示するくらいなら完全空欄)。
+// 2026-09: 金額のsource of truthはBeds24公式のbooking単位Invoice Balance
+// (extract.extract_amount_due_at_property()、channel collect除外済み)。旧
+// 「現地支払いmarkerが明示された予約だけ対象」という実装は、markerの無い実予約
+// (未払いのBooking.com等)を誤って除外していたため撤回した(要件A参照)。
 export function onsiteInfoFor(room) {
   const g = priorityGuestFor(room);
-  if (!g || !g.onsite_payment_required) return { show: false, amountText: "" };
-  const amount = g.onsite_payment_amount;
+  if (!g || !g.payment_due_at_property) return { show: false, amountText: "" };
+  const amount = g.amount_due_at_property;
   if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
     return { show: false, amountText: "" };
   }
@@ -207,11 +211,35 @@ export function roomsByCanonicalOrder(rooms) {
   });
 }
 
-// 4F(401-406)/5F(501-507)/6F(601-607)の階境界。5F/6Fの最初の部屋の上辺だけ
-// 太罫線にする。room number基準で判定する(index位置からの推測はしない)。
-const FLOOR_START_ROOMS = new Set(["501", "601"]);
-export function isFloorStartRoom(roomNumber) {
-  return FLOOR_START_ROOMS.has(String(roomNumber));
+// 印刷帳票に表示するroomのcanonical filter。2026-09改訂: 印刷は
+// CHECKIN/TURNOVER/STAYOVERのみをrow表示し、CHECKOUT/VACANT/CANCELLED(氏名だけ
+// 残った意味不明な行の原因だった)はrow自体を出さない。18室固定表示自体は
+// classifier/room master側の内部データとして維持されており、この関数は
+// print rendererでのみ使う1箇所の共通filterとする(各所で別々にfilterしない)。
+const PRINTABLE_STATUSES = new Set(["CHECKIN", "TURNOVER", "STAYOVER"]);
+export function isPrintableRoomStatus(status) {
+  return PRINTABLE_STATUSES.has(status);
+}
+export function printableRoomsForSheet(rooms) {
+  return roomsByCanonicalOrder(rooms).filter((r) => isPrintableRoomStatus(r.status));
+}
+
+// 4F(401-406)/5F(501-507)/6F(601-607)の階境界。行を間引いた後でも、5F・6Fの
+// 「最初に実際に表示されるrow」の上辺だけ太罫線にする(固定のroom numberでは
+// 判定しない — 501/601が表示対象でない日もあるため)。room number先頭桁で
+// floorを判定し、直前に表示されたrowと異なるfloorへ切り替わった箇所のうち
+// 4F以外(5F/6F)だけを対象にする。
+function floorOf(roomNumber) {
+  return String(roomNumber)[0];
+}
+export function floorSeparatorFlags(printableRooms) {
+  let prevFloor = null;
+  return printableRooms.map((room) => {
+    const floor = floorOf(room.room_number);
+    const isSeparator = floor !== prevFloor && (floor === "5" || floor === "6");
+    prevFloor = floor;
+    return isSeparator;
+  });
 }
 
 // ---------------- 印刷ページ（/ops/print/cleaning）本体 ----------------
@@ -284,9 +312,9 @@ function buildOnsiteCell(room) {
   </td>`;
 }
 
-function buildRoomRow(room) {
+function buildRoomRow(room, isFloorSeparator) {
   const guestName = guestNameFor(room);
-  const trClass = isFloorStartRoom(room.room_number) ? ` class="cs-floor-start"` : "";
+  const trClass = isFloorSeparator ? ` class="cs-floor-start"` : "";
   return `<tr data-room-number="${escapeHtml(room.room_number)}"${trClass}>
     <td class="cs-c-room">${escapeHtml(room.room_number)}</td>
     <td class="cs-c-guest ${guestNameSizeClass(guestName)}">${escapeHtml(guestName)}</td>
@@ -365,7 +393,8 @@ export function renderMobileCleaningBody(cleaningRooms) {
 // UNASSIGNED行)。date: "YYYY-MM-DD"。
 export function renderCleaningSheetTemplate(cleaningRooms, date) {
   const list = Array.isArray(cleaningRooms) ? cleaningRooms : [];
-  const canonicalRows = roomsByCanonicalOrder(list);
+  const printableRows = printableRoomsForSheet(list);
+  const separatorFlags = floorSeparatorFlags(printableRows);
   const unassignedCount = countUnassigned(list);
   const dateLabel = formatJapaneseDateWithWeekdayParen(date);
 
@@ -383,7 +412,7 @@ export function renderCleaningSheetTemplate(cleaningRooms, date) {
     <table class="cs-main-table">
       ${buildColgroup()}
       <thead>${buildHeaderRow()}</thead>
-      <tbody>${canonicalRows.map(buildRoomRow).join("")}</tbody>
+      <tbody>${printableRows.map((room, i) => buildRoomRow(room, separatorFlags[i])).join("")}</tbody>
     </table>
     <div class="cs-footer-box">
       <div class="cs-footer-title">全体通信・引継ぎ</div>

@@ -48,12 +48,15 @@ export function assertNoFinancialKeys(value, path = "$") {
 // exactly like assertNoFinancialKeys is already called after /api/daily-ops
 // fetches.
 //
-// 2026-09 exception (explicitly approved): onsite_payment_required /
-// onsite_payment_amount are the only financial fields allowed in the
-// Cleaning DTO ("amount owed on-site" as operational data). They do not
-// collide with any entry in this list (different vocabulary from
-// revenue/ADR/RevPAR/commission/invoice detail etc.), so no change to the
-// list itself was required — recorded here for auditability.
+// 2026-09 exception (explicitly approved): payment_due_at_property /
+// amount_due_at_property (renamed from onsite_payment_required/
+// onsite_payment_amount when the source of truth moved to Beds24's
+// official booking-level Invoice Balance) are the only financial fields
+// allowed in the Cleaning DTO ("amount the property collects from the
+// guest on-site" as operational data). They do not collide with any
+// entry in this list (different vocabulary from revenue/ADR/RevPAR/
+// commission/invoice detail etc.), so no change to the list itself was
+// required — recorded here for auditability.
 export const CLEANING_FORBIDDEN_KEYS = [
   ...FORBIDDEN_FINANCIAL_KEYS,
   "phone",

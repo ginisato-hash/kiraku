@@ -11,7 +11,8 @@ import path from "node:path";
 import {
   renderCleaningSheetTemplate, statusLabel, printStatusLabel, otaPrintShortName, cleanValue,
   guestNameFor, guestBreakdownFor, guestNoticeFor, onsiteInfoFor,
-  nightProgressFor, arrivalTimeFor, countUnassigned, isFloorStartRoom,
+  nightProgressFor, arrivalTimeFor, countUnassigned,
+  isPrintableRoomStatus, printableRoomsForSheet, floorSeparatorFlags,
   COLUMN_WIDTHS_MM, COLUMN_LABELS, effectiveTextWidth, guestNameSizeClass,
 } from "../public/cleaningSheetTemplate.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
@@ -22,20 +23,16 @@ const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
 const rooms = mergeCleaningOverrides(rawRooms, {}); // no overrides -> effectiveInstruction=source_instruction
 const html = readFileSync(path.join(dir, "../public/ops/print/cleaning.html"), "utf-8");
 
-const KIRAKU_ROOM_ORDER = [
-  "401", "402", "403", "404", "405", "406",
-  "501", "502", "503", "504", "505", "507",
-  "601", "602", "603", "604", "605", "607",
-];
-
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
 
 const documentHtml = renderCleaningSheetTemplate(rooms, "2026-08-30");
 
-await check("renders all 18 rooms in canonical order with data-room-number attributes", async () => {
+await check("renders ONLY the IN/連泊 rooms (401 TURNOVER, 402 CHECKIN, 404 STAYOVER) — no CHECKOUT/VACANT rows at all", async () => {
+  // 2026-09改訂: 印刷帳票は18室固定表示を廃止。CHECKIN/TURNOVER/STAYOVERの
+  // room rowだけを出力する(fixtureでは403=CHECKOUT、405-607=VACANTなので除外される)。
   const matches = [...documentHtml.matchAll(/data-room-number="(\d+)"/g)].map((m) => m[1]);
-  assert.deepEqual(matches, KIRAKU_ROOM_ORDER);
+  assert.deepEqual(matches, ["401", "402", "404"]);
 });
 
 await check("TURNOVER row (401) shows the arriving guest's name only, never 'A → B'", async () => {
@@ -89,15 +86,33 @@ await check("printStatusLabel (印刷/モバイル専用) collapses to only IN/�
   assert.equal(printStatusLabel("CANCELLED"), "");
 });
 
-await check("the print document never shows 'OUT'/'入替'/'空室' as status text (only IN/連泊/blank)", async () => {
-  // 401=TURNOVER->IN, 402=CHECKIN->IN, 403=CHECKOUT->blank, 404=STAYOVER->連泊
+await check("the print document shows ONLY IN/連泊 status text — never OUT/入替/空室/blank, because non-printable rows are dropped entirely (not just blanked)", async () => {
+  // 401=TURNOVER->IN, 402=CHECKIN->IN, 404=STAYOVER->連泊 (403/405-607 have no row at all)
   const statusCells = [...documentHtml.matchAll(/<td class="cs-c-status">([^<]*)<\/td>/g)].map((m) => m[1]);
-  assert.equal(statusCells.length, 18);
+  assert.equal(statusCells.length, 3);
   for (const text of statusCells) {
-    assert.ok(text === "IN" || text === "連泊" || text === "", `unexpected status text: "${text}"`);
+    assert.ok(text === "IN" || text === "連泊", `unexpected status text: "${text}" (blank rows must not be rendered at all)`);
   }
-  assert.ok(statusCells.includes("IN"));
-  assert.ok(statusCells.includes("連泊"));
+  assert.deepEqual(statusCells, ["IN", "IN", "連泊"]);
+});
+
+await check("isPrintableRoomStatus is true only for CHECKIN/TURNOVER/STAYOVER", async () => {
+  assert.equal(isPrintableRoomStatus("CHECKIN"), true);
+  assert.equal(isPrintableRoomStatus("TURNOVER"), true);
+  assert.equal(isPrintableRoomStatus("STAYOVER"), true);
+  assert.equal(isPrintableRoomStatus("CHECKOUT"), false);
+  assert.equal(isPrintableRoomStatus("VACANT"), false);
+  assert.equal(isPrintableRoomStatus("CANCELLED"), false);
+  assert.equal(isPrintableRoomStatus("UNASSIGNED"), false);
+});
+
+await check("printableRoomsForSheet is the single canonical filter: excludes CHECKOUT/VACANT rooms, keeps canonical order among the rest", async () => {
+  const printable = printableRoomsForSheet(rooms);
+  assert.deepEqual(printable.map((r) => r.room_number), ["401", "402", "404"]);
+});
+
+await check("CHECKOUT guest name (403, 田中一美) never appears anywhere in the printed document", async () => {
+  assert.ok(!documentHtml.includes("田中 一美"), "a CHECKOUT-only room must not leak its guest name into the print sheet");
 });
 
 await check("no メニュー/ランク/料金 column or '本日のメニュー' text anywhere in the rendered HTML", async () => {
@@ -172,16 +187,58 @@ await check("cleaning.html's .cs-c-notes still does not override display away fr
   assert.ok(!/display\s*:/.test(body), "must not set display on .cs-c-notes (needs the UA's table-cell)");
 });
 
-// ---------------- 4F/5F/6Fの階境界（太罫線）----------------
+// ---------------- 4F/5F/6Fの階境界（太罫線、間引き後のrowベース）----------------
+// 2026-09改訂: 501/601固定ではなく、「表示対象の中で各階(5F/6F)が最初に登場した
+// row」を動的に判定する(501/601自体が表示対象でない日もあるため)。
 
-await check("isFloorStartRoom is true only for 501 and 601 (room-number based, not index-based)", async () => {
-  const trueRooms = KIRAKU_ROOM_ORDER.filter(isFloorStartRoom);
-  assert.deepEqual(trueRooms, ["501", "601"]);
+await check("floorSeparatorFlags: with the real fixture (401/402/404, all 4F), no separator appears at all", async () => {
+  const printable = printableRoomsForSheet(rooms);
+  assert.deepEqual(floorSeparatorFlags(printable), [false, false, false]);
 });
 
-await check("rows for 501 and 601 carry the cs-floor-start class; no other row does", async () => {
-  const floorStartRows = [...documentHtml.matchAll(/<tr data-room-number="(\d+)" class="cs-floor-start">/g)].map((m) => m[1]);
-  assert.deepEqual(floorStartRows, ["501", "601"]);
+await check("floorSeparatorFlags: 5F's first displayed row gets a separator even when 501 itself is not displayed (spec example: only 504 shown)", async () => {
+  const synthetic = [
+    { room_number: "401", status: "VACANT" },
+    { room_number: "501", status: "VACANT" },
+    { room_number: "502", status: "VACANT" },
+    { room_number: "503", status: "VACANT" },
+    { room_number: "504", status: "CHECKIN" },
+    { room_number: "505", status: "VACANT" },
+  ];
+  const printable = printableRoomsForSheet(synthetic);
+  assert.deepEqual(printable.map((r) => r.room_number), ["504"]);
+  assert.deepEqual(floorSeparatorFlags(printable), [true]);
+});
+
+await check("floorSeparatorFlags: 6F's first displayed row (604) gets a separator when 5F has zero displayed rows that day", async () => {
+  const synthetic = [
+    { room_number: "401", status: "STAYOVER" },
+    { room_number: "601", status: "VACANT" },
+    { room_number: "602", status: "VACANT" },
+    { room_number: "603", status: "VACANT" },
+    { room_number: "604", status: "CHECKIN" },
+    { room_number: "607", status: "TURNOVER" },
+  ];
+  const printable = printableRoomsForSheet(synthetic);
+  assert.deepEqual(printable.map((r) => r.room_number), ["401", "604", "607"]);
+  // 401(4F)=no separator, 604(6Fの最初)=separator, 607(6Fの2件目)=no separator
+  assert.deepEqual(floorSeparatorFlags(printable), [false, true, false]);
+});
+
+await check("floorSeparatorFlags: 4F never gets a separator even when it is the very first displayed row overall", async () => {
+  const printable = printableRoomsForSheet(rooms); // 401 is first, 4F
+  assert.equal(floorSeparatorFlags(printable)[0], false);
+});
+
+await check("rendered document: cs-floor-start class appears on exactly the rows floorSeparatorFlags marks true", async () => {
+  const synthetic = [
+    { room_number: "401", status: "VACANT" },
+    { room_number: "504", status: "CHECKIN", arriving_guest: { guest_name: "テスト" }, effectiveInstruction: "" },
+    { room_number: "604", status: "STAYOVER", staying_guest: { guest_name: "テスト2" }, effectiveInstruction: "" },
+  ];
+  const out = renderCleaningSheetTemplate(synthetic, "2026-08-30");
+  const floorStartRows = [...out.matchAll(/<tr data-room-number="(\d+)" class="cs-floor-start">/g)].map((m) => m[1]);
+  assert.deepEqual(floorStartRows, ["504", "604"]);
 });
 
 await check("cleaning.html declares a thicker top border specifically for .cs-floor-start rows", async () => {
@@ -234,20 +291,23 @@ await check("備考・通信 cell omits the '客:' line entirely when guest_noti
   assert.ok(!room402Match[0].includes("客:"), "402 has no guest_notice in the fixture, so no 客: line should render");
 });
 
-// ---------------- 現地決済 ----------------
+// ---------------- 現地決済 (payment_due_at_property / amount_due_at_property、
+// Beds24公式Invoice Balanceベース。extract.py側の詳細な数値検証は
+// tests/test_ops_cleaning_extra.py参照 — ここはJS側のonsiteInfoFor()の
+// 表示判定ロジックのみを検証する) ----------------
 
-await check("onsiteInfoFor shows amount only when onsite_payment_required AND a positive finite amount are present", async () => {
+await check("onsiteInfoFor shows amount only when payment_due_at_property AND a positive finite amount are present", async () => {
   const room401 = rooms.find((r) => r.room_number === "401");
   assert.deepEqual(onsiteInfoFor(room401), { show: true, amountText: "¥18,000" });
 
-  const room402 = rooms.find((r) => r.room_number === "402"); // no onsite fields set
+  const room402 = rooms.find((r) => r.room_number === "402"); // no amount-due fields set
   assert.equal(onsiteInfoFor(room402).show, false);
 });
 
-await check("onsiteInfoFor never shows for a negative, zero, or non-finite amount even if onsite_payment_required is true", async () => {
+await check("onsiteInfoFor never shows for a negative, zero, or non-finite amount even if payment_due_at_property is true", async () => {
   const room = rooms.find((r) => r.room_number === "402");
   for (const bad of [0, -100, NaN, Infinity]) {
-    const tampered = { ...room, arriving_guest: { ...room.arriving_guest, onsite_payment_required: true, onsite_payment_amount: bad } };
+    const tampered = { ...room, arriving_guest: { ...room.arriving_guest, payment_due_at_property: true, amount_due_at_property: bad } };
     assert.equal(onsiteInfoFor(tampered).show, false, `amount ${bad} must not be shown`);
   }
 });
