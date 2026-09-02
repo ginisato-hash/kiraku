@@ -39,9 +39,16 @@
       .no-print { display: none !important; }
     }
 
+    /* 用紙1枚ぶんの外枠。高さは283mm -> 281mm(2mm削減、2026-09-03)。
+       @page margin 7mm を引いたA4の使用可能高さがちょうど283mmで、この外枠は
+       内容量に関係なく固定高さで用紙下端に接していた(実ブラウザ計測:
+       contentBottom 1070px == usable 1070px)。印刷エンジン/プリンタ側の丸め差が
+       1pxでも出ると2ページ目・下端切れになり得るため、下端に物理的な安全余白を
+       確保する。281mmでも内容(footer下端は268.5mm)には一切干渉しない。
+       ※ 表・行高・列幅・header・RoomNo/人数/泊数のサイズは変更していない。 */
     .cleaning-sheet {
       width: 196mm;
-      height: 283mm;
+      height: 281mm;
       margin: 0 auto;
       box-sizing: border-box;
     }
@@ -235,9 +242,15 @@
       text-overflow: ellipsis;
     }
 
+    /* 全体通信・引継ぎ欄。高さは50mm -> 48mm(2mm削減、2026-09-03)。
+       下端の安全余白そのものは上の.cleaning-sheet(283mm->281mm)が作る — この欄は
+       通常フローで表の下に置かれるだけで、外枠の固定高さには影響しないため。
+       記入欄も同じ2mmぶん詰めて全体の縮小を揃える。48mmでも実記入領域は約37.6mm
+       残る(padding 4mm + 見出し約5mmを除いた実測値)ので手書きには十分。
+       18室表・行高・列幅・header・RoomNo/人数/泊数のサイズは一切変更していない。 */
     .cs-footer-box {
       border: 1px solid #777777;
-      height: 50mm;
+      height: 48mm;
       margin-top: 2mm;
       padding: 2mm;
       box-sizing: border-box;

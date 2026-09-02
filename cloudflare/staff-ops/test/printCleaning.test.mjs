@@ -175,9 +175,13 @@ await check("cleaning.html declares @page size A4 portrait margin 7mm", async ()
   assert.ok(/@page\s*{[^}]*margin:\s*7mm/s.test(html));
 });
 
-await check("cleaning.html declares the exact .cleaning-sheet dimensions (196mm x 283mm)", async () => {
+await check("cleaning.html declares the exact .cleaning-sheet dimensions (196mm x 281mm)", async () => {
+  // 高さは283mm(=A4 297mm - margin 7mm*2 の使用可能高さちょうど)から281mmへ変更。
+  // 外枠は内容量に依らない固定高さなので、283mmだと用紙下端に密着し余白0となり、
+  // 印刷側の丸め差で2ページ目/下端切れが起き得た(実ブラウザ計測: 1070px/1070px)。
   assert.ok(/\.cleaning-sheet\s*{[^}]*width:\s*196mm/s.test(html));
-  assert.ok(/\.cleaning-sheet\s*{[^}]*height:\s*283mm/s.test(html));
+  assert.ok(/\.cleaning-sheet\s*{[^}]*height:\s*281mm/s.test(html));
+  assert.ok(!/\.cleaning-sheet\s*{[^}]*height:\s*283mm/s.test(html));
 });
 
 // ---------------- 新9列レイアウト（OUT削除・ステータス1列・現地決済追加）----------------
@@ -597,6 +601,19 @@ await check("page header (date / title) and 全体通信・引継ぎ heading are
   const titleWeight = weightOf(cssRule(".cs-header-title"));
   const footerTitleWeight = weightOf(cssRule(".cs-footer-title"));
   assert.ok(dateWeight >= 700 && titleWeight >= 700 && footerTitleWeight >= 700);
+});
+
+await check("A4下端の安全余白: 用紙外枠281mm + 通信欄48mm(実ブラウザ計測で残り約2.1mm)", async () => {
+  // 実ブラウザ計測(2026-09-03): contentBottom=1062px / A4使用可能=1070px /
+  // remaining=8px=2.12mm。.cleaning-sheetは内容量に関係ない固定高さで、以前は
+  // 283mm=使用可能高さちょうど＝余白0だったため、印刷側の丸め差で2ページ目に
+  // なり得た。数値を戻すと余白が消えるのでmm値そのものを固定する。
+  const sheet = cssRule(".cleaning-sheet");
+  assert.ok(/height:\s*281mm/.test(sheet), sheet);
+  const footer = cssRule(".cs-footer-box");
+  assert.ok(/height:\s*48mm/.test(footer), footer);
+  // 通信欄は手書きできる高さを維持(padding 2mm*2 + 見出し約4.6mmを引いて約37mm)
+  assert.ok(48 - 4 - 5 >= 30);
 });
 
 // ---------------- effectiveTextWidth / guestNameSizeClass (long-name handling) ----------------
