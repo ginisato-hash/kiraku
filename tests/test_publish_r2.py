@@ -242,6 +242,55 @@ def test_preserve_bank_fields_keeps_current_import_when_new_snapshot_has_bank_da
     assert merged["bank_actual_latest_balance"] == 111.0  # 今回値のまま
 
 
+# ---------------- _put() retry on transient R2 errors (2026-09-06 incident) ----------------
+class _FakeCompletedProcess:
+    def __init__(self, returncode, stderr=""):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+def test_put_retries_after_transient_failure_then_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(publish_r2.time, "sleep", lambda seconds: None)
+    calls = []
+
+    def fake_run(cmd, cwd, capture_output, text, timeout):
+        calls.append(cmd)
+        if len(calls) < 3:
+            return _FakeCompletedProcess(1, stderr="500: Internal Server Error")
+        return _FakeCompletedProcess(0)
+
+    monkeypatch.setattr(publish_r2.subprocess, "run", fake_run)
+    res = publish_r2._put("bucket", "latest", "manifest.json", tmp_path / "manifest.json", tmp_path)
+    assert res["ok"] is True
+    assert len(calls) == 3
+
+
+def test_put_gives_up_after_max_attempts_and_reports_last_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(publish_r2.time, "sleep", lambda seconds: None)
+    calls = []
+
+    def fake_run(cmd, cwd, capture_output, text, timeout):
+        calls.append(cmd)
+        return _FakeCompletedProcess(1, stderr="500: Internal Server Error")
+
+    monkeypatch.setattr(publish_r2.subprocess, "run", fake_run)
+    res = publish_r2._put("bucket", "latest", "manifest.json", tmp_path / "manifest.json", tmp_path)
+    assert res["ok"] is False
+    assert len(calls) == publish_r2.R2_PUT_MAX_ATTEMPTS
+    assert "500" in res["error"]
+
+
+def test_put_succeeds_immediately_without_sleeping(tmp_path, monkeypatch):
+    sleep_calls = []
+    monkeypatch.setattr(publish_r2.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(publish_r2.subprocess, "run",
+                        lambda cmd, cwd, capture_output, text, timeout: _FakeCompletedProcess(0))
+    res = publish_r2._put("bucket", "latest", "manifest.json", tmp_path / "manifest.json", tmp_path)
+    assert res["ok"] is True
+    assert sleep_calls == []
+
+
 def test_dry_run_never_calls_fetch_or_rewrites_files(tmp_path, monkeypatch):
     _seed(tmp_path)
     before = (tmp_path / "bi_snapshot.json").read_bytes()

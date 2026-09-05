@@ -143,10 +143,21 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          wrangler r2 object put kiraku-staff-ops-data/latest/staff_ops_snapshot.json \
-            --file data/output/latest/ops/staff_ops_snapshot.json \
-            --content-type application/json \
-            --remote
+          set -euo pipefail
+          # R2側の一時的な500 Internal Server Error(code 10001)対策。object putは
+          # 対象keyを丸ごと上書きするだけの冪等操作なので再試行しても安全
+          # (src/yuge_finance/publish_r2.py の _put() と同じ根拠、2026-09-06障害対応)。
+          for attempt in 1 2 3; do
+            if wrangler r2 object put kiraku-staff-ops-data/latest/staff_ops_snapshot.json \
+              --file data/output/latest/ops/staff_ops_snapshot.json \
+              --content-type application/json \
+              --remote; then
+              exit 0
+            fi
+            echo "::warning::Publish Daily Ops data to R2 attempt $attempt failed"
+            [ "$attempt" -lt 3 ] && sleep 5
+          done
+          exit 1
 
       # 補助確認のみ。主検証はrefresh-beds24-bi/publish-bi-r2のexit codeで既に厳密に行っている
       # （publish-bi-r2は成功時に generated_at_jst / default_month / uploaded files を出力済み）。

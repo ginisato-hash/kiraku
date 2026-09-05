@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -208,17 +209,31 @@ def _wrangler_available() -> bool:
     return shutil.which("npx") is not None or shutil.which("wrangler") is not None
 
 
+# R2側の一時的なエラー(例: 500 Internal Server Error、code 10001「内部エラー、再試行してください」)
+# 対策。object putは対象keyを丸ごと上書きするだけの冪等操作なので、同じ内容を複数回送っても
+# 安全（部分書き込みや二重計上にはならない）。2026-09-05 20:03-20:48 UTC(JST 05:03-05:48)に
+# Cloudflare側の一時障害でこのRETRY無しの実装が4回連続で本番publishを止めた実例あり。
+R2_PUT_MAX_ATTEMPTS = 3
+R2_PUT_RETRY_DELAY_SECONDS = 5.0
+
+
 def _put(bucket: str, prefix: str, relative_key: str, file_path: Path, cwd: Path) -> Dict:
     key = f"{prefix}/{relative_key}"
     cmd = ["npx", "wrangler", "r2", "object", "put", f"{bucket}/{key}",
            "--file", str(file_path), "--remote"]
-    try:
-        result = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as e:
-        return {"key": key, "ok": False, "error": str(e)}
-    if result.returncode != 0:
-        return {"key": key, "ok": False, "error": (result.stderr or result.stdout).strip()[:500]}
-    return {"key": key, "ok": True}
+    error = None
+    for attempt in range(1, R2_PUT_MAX_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            error = str(e)
+        else:
+            if result.returncode == 0:
+                return {"key": key, "ok": True}
+            error = (result.stderr or result.stdout).strip()[:500]
+        if attempt < R2_PUT_MAX_ATTEMPTS:
+            time.sleep(R2_PUT_RETRY_DELAY_SECONDS)
+    return {"key": key, "ok": False, "error": error}
 
 
 def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
