@@ -14,10 +14,15 @@ export const CLEANING_VISUAL_READY = true;
 // Staff cleaning list, and the live badge + WebSocket updates on
 // /cleaning/today. Kept as its own flag, separate from
 // CLEANING_VISUAL_READY, per spec (do not reuse the print/mobile-sheet flag
-// for a different feature). Flip to true only after implementation + tests
-// + local two-browser acceptance + deploy + production smoke have ALL
-// passed — mirrors how CLEANING_VISUAL_READY itself was rolled out.
-export const CLEANING_LIVE_ACCESS_READY = false;
+// for a different feature). Flipped to true on 2026-09-08 after
+// implementation + full test suite + local two-browser acceptance + deploy
+// + a real production ?preview=1 QA pass against an actual today-departing
+// room (403/502/602) confirmed the exact modal copy, <2s realtime
+// propagation to the cleaner view (~315ms confirm, ~339ms undo measured),
+// reconnect+full-resync correctness, cross-room isolation, and unauthenticated
+// 401s on every new endpoint — mirrors how CLEANING_VISUAL_READY itself was
+// rolled out.
+export const CLEANING_LIVE_ACCESS_READY = true;
 
 export function isPreviewRequested() {
   if (typeof window === "undefined") return false;

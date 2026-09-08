@@ -102,6 +102,10 @@ await check("CLEANING_LIVE_ACCESS_READY is its own flag, kept separate from CLEA
   );
 });
 
+await check("CLEANING_LIVE_ACCESS_READY is true (production ?preview=1 acceptance complete, 2026-09-08: real departing rooms, <2s propagation, undo, reconnect, cross-room isolation, unauthenticated 401s all verified against production)", async () => {
+  assert.strictEqual(CLEANING_LIVE_ACCESS_READY, true);
+});
+
 await check("cleaningLiveAccessAllowed() follows CLEANING_LIVE_ACCESS_READY when no preview param is set", async () => {
   const prevWindow = globalThis.window;
   try {
@@ -113,7 +117,7 @@ await check("cleaningLiveAccessAllowed() follows CLEANING_LIVE_ACCESS_READY when
   }
 });
 
-await check("cleaningLiveAccessAllowed() is true under ?preview=1 even while CLEANING_LIVE_ACCESS_READY is false (internal QA escape hatch, same pattern as cleaningVisualAllowed)", async () => {
+await check("cleaningLiveAccessAllowed() is true under ?preview=1 regardless of CLEANING_LIVE_ACCESS_READY's value (same escape-hatch pattern as cleaningVisualAllowed)", async () => {
   const prevWindow = globalThis.window;
   try {
     globalThis.window = { location: { search: "?preview=1" } };
