@@ -29,6 +29,27 @@ export function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+// Approximates a string's printed width as full-width(=2)/half-width(=1)
+// glyph units, so a length-based adaptive font-size decision doesn't treat a
+// short Japanese name and a long English name as equally "wide" just
+// because they have similar character counts. Used by both the cleaning
+// sheet and the guest register templates for their own (independently
+// tuned) adaptive value-sizing helpers.
+const FULL_WIDTH_RANGES = [
+  [0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3],
+  [0xf900, 0xfaff], [0xff00, 0xff60], [0xffe0, 0xffe6],
+];
+function isFullWidthChar(codePoint) {
+  return FULL_WIDTH_RANGES.some(([lo, hi]) => codePoint >= lo && codePoint <= hi);
+}
+export function effectiveTextWidth(str) {
+  let width = 0;
+  for (const ch of String(str)) {
+    width += isFullWidthChar(ch.codePointAt(0)) ? 2 : 1;
+  }
+  return width;
+}
+
 // Waits for web fonts to be ready and for a logo <img> element to settle
 // (load or error — either is fine, we just don't want to print mid-decode),
 // then resolves. Races against a short timeout so a slow/broken external

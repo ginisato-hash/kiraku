@@ -3,21 +3,59 @@
 //
 // 2026-08-30: this is a byte-for-byte port of the Beds24-proven guest
 // register design (see the task history for the exact spec) — dimensions,
-// margins, logo size, title position, font sizes, column widths, row
-// heights, borders, background colors, section order, companion/signature
-// sections, wording, and English bilingual lines are ALL fixed to match the
-// existing Beds24 printout. Do not "modernize" or "align with the Staff Ops
-// component style" — this file's HTML/inline-styles are the source of
-// truth handed down from that design, not something to be refactored for
-// its own sake. If it ever needs to change again, the change must come from
-// a fresh comparison against the real paper/Beds24 original, not from
-// this codebase's own design sense.
+// margins, logo size, title position, column widths, row heights, borders,
+// background colors, section order, companion/signature sections, wording,
+// and English bilingual lines are ALL fixed to match the existing Beds24
+// printout. Do not "modernize" or "align with the Staff Ops component
+// style" — this file's HTML/inline-styles are the source of truth handed
+// down from that design, not something to be refactored for its own sake.
+// If it ever needs to change again, the change must come from a fresh
+// comparison against the real paper/Beds24 original, not from this
+// codebase's own design sense.
+//
+// 2026-09 EXCEPTION (explicit field feedback: "印刷するとゲスト情報の文字が
+// 小さく見づらい"): the font-size of the seven PRE-FILLED VALUE cells
+// (予約番号/宿泊人数/宿泊期間/客室番号/代表者氏名/住所/電話番号 — the actual
+// booking data, never their labels) was increased via the gr-value-* classes
+// below + guest-register.html's stylesheet. Every other dimension (row
+// heights, column widths, borders, background colors, handwritten section,
+// title/label sizes) is unchanged from the port above. See
+// guestRegisterValueSizeClass() for the adaptive long-value shrink that
+// keeps this safe for long names/addresses/reservation numbers.
 //
 // Nationality/passport fields remain intentionally excluded per the
 // existing product decision (unchanged from before this port).
 
-import { escapeHtml } from "./printUtils.js";
+import { escapeHtml, effectiveTextWidth } from "./printUtils.js";
 import { formatJapaneseDateWithWeekday } from "./jst.js";
+
+// Adaptive value-only typography (2026-09). Each of the 7 pre-filled value
+// cells gets a base gr-value-<field> class (font-size/weight defined in
+// guest-register.html) that is meaningfully larger than the previous
+// uniform 11.5px base — see the file-header comment above. A small number
+// of fields (reservation number, guest name, address, phone) can
+// realistically be long enough to risk clipping/overflow at the larger
+// size, so those get an additional gr-value-<field>-long modifier once
+// effectiveTextWidth(value) crosses a threshold tuned against real print
+// rendering (long English names, long int'l addresses, long reservation
+// refs) — the "-long" variant is still comfortably larger than the old
+// 11.5px baseline, never a regression back down to or below it. Fields
+// that are always short in practice (宿泊人数, 宿泊期間, 客室番号) have no
+// long variant.
+const GUEST_REGISTER_LONG_THRESHOLDS = {
+  reservation: 12,
+  name: 40,
+  address: 70,
+  phone: 25,
+};
+
+export function guestRegisterValueSizeClass(field, value) {
+  const base = `gr-value-${field}`;
+  const threshold = GUEST_REGISTER_LONG_THRESHOLDS[field];
+  if (threshold == null) return base;
+  const width = effectiveTextWidth(cleanGuestRegisterValue(value));
+  return width > threshold ? `${base} ${base}-long` : base;
+}
 
 const COMPANION_ROW_COUNT = 5;
 
@@ -83,10 +121,12 @@ export function renderGuestRegisterSheet(booking) {
   const bookingId = escapeHtml(
     cleanGuestRegisterValue(booking.bookingId)
   );
+  const bookingIdClass = guestRegisterValueSizeClass("reservation", booking.bookingId);
 
   const guestName = escapeHtml(
     cleanGuestRegisterValue(booking.guestName)
   );
+  const guestNameClass = guestRegisterValueSizeClass("name", booking.guestName);
 
   const room = escapeHtml(
     cleanGuestRegisterValue(booking.room)
@@ -95,10 +135,11 @@ export function renderGuestRegisterSheet(booking) {
   const phone = escapeHtml(
     cleanGuestRegisterValue(booking.phone)
   );
+  const phoneClass = guestRegisterValueSizeClass("phone", booking.phone);
 
-  const address = escapeHtml(
-    buildGuestRegisterAddress(booking)
-  );
+  const rawAddress = buildGuestRegisterAddress(booking);
+  const address = escapeHtml(rawAddress);
+  const addressClass = guestRegisterValueSizeClass("address", rawAddress);
 
   const totalGuests =
     Number.isFinite(Number(booking.totalGuests))
@@ -214,7 +255,7 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
+          <td class="${bookingIdClass}" style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${bookingId}
           </td>
 
@@ -225,7 +266,7 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
+          <td class="gr-value-guests" style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${totalGuests} 名
           </td>
 
@@ -242,8 +283,8 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td colspan="3"
-            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;font-size:11.5px;font-weight:600;vertical-align:middle;">
+          <td colspan="3" class="gr-value-stay"
+            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${checkIn}&nbsp;&nbsp;―&nbsp;&nbsp;${checkOut}
           </td>
 
@@ -260,8 +301,8 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td colspan="3"
-            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;font-size:12px;font-weight:600;vertical-align:middle;">
+          <td colspan="3" class="gr-value-room"
+            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${room}
           </td>
 
@@ -278,8 +319,8 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td colspan="3"
-            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;font-size:13px;font-weight:600;vertical-align:middle;">
+          <td colspan="3" class="${guestNameClass}"
+            style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${guestName}
           </td>
 
@@ -296,7 +337,7 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td colspan="3"
+          <td colspan="3" class="${addressClass}"
             style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;line-height:1.55;">
             ${address}
           </td>
@@ -314,7 +355,7 @@ export function renderGuestRegisterSheet(booking) {
             </span>
           </td>
 
-          <td colspan="3"
+          <td colspan="3" class="${phoneClass}"
             style="border:1px solid #bbbbbb;padding:1.5mm 3mm;vertical-align:middle;">
             ${phone}
           </td>

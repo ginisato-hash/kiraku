@@ -7,7 +7,12 @@
   <style>
     /* 印刷CSSは既存Beds24版帳票をsource of truthとして固定。数値・寸法は
        勝手に調整しないこと（用紙内寸・余白・ロゴ幅・フォントサイズ等は
-       guestRegisterTemplate.js側のインラインstyleと合わせて1セット）。 */
+       guestRegisterTemplate.js側のインラインstyleと合わせて1セット）。
+       例外: 下の .gr-value-* ルール群のみ、2026-09の現場フィードバック
+       （「文字が小さく見づらい」）に基づく承認済み変更 — 予約番号/宿泊人数/
+       宿泊期間/客室番号/代表者氏名/住所/電話番号の「実データ値」セルの
+       font-sizeのみを対象とし、ラベル・見出し・記入欄等は一切変更しない
+       （guestRegisterTemplate.jsのguestRegisterValueSizeClass()参照）。 */
     @page {
       size: A4 portrait;
       margin: 10mm 12mm;
@@ -43,6 +48,28 @@
       break-inside: avoid;
       page-break-inside: avoid;
     }
+
+    /* --- 実データ値のみのtypography強調（2026-09、上記コメント参照） ---
+       ラベル(予約番号/宿泊人数/等)・見出し・記入欄のfont-sizeは一切ここに
+       含まれない。長い予約番号/氏名/住所/電話番号だけ、以前のbase(11.5px)
+       より確実に大きい範囲内でわずかに縮小する(-long修飾子)。 */
+    .gr-value-reservation { font-size: 14px; font-weight: 600; }
+    .gr-value-reservation-long { font-size: 12.5px; }
+
+    .gr-value-guests { font-size: 15px; font-weight: 700; }
+
+    .gr-value-stay { font-size: 14px; font-weight: 600; }
+
+    .gr-value-room { font-size: 15px; font-weight: 700; }
+
+    .gr-value-name { font-size: 16px; font-weight: 700; }
+    .gr-value-name-long { font-size: 14px; }
+
+    .gr-value-address { font-size: 14px; font-weight: 600; }
+    .gr-value-address-long { font-size: 13px; }
+
+    .gr-value-phone { font-size: 14.5px; font-weight: 600; }
+    .gr-value-phone-long { font-size: 13px; }
 
     @media print {
       .guest-register-sheet {

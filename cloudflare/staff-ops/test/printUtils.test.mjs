@@ -1,6 +1,6 @@
 // printUtils.js のテスト：printField()のblanking logicを中心に純粋関数として検証。
 import assert from "node:assert";
-import { printField, escapeHtml } from "../public/printUtils.js";
+import { printField, escapeHtml, effectiveTextWidth } from "../public/printUtils.js";
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -39,6 +39,24 @@ await check("escapeHtml: escapes &, <, >, \", ' so raw markup can never be injec
 
 await check("escapeHtml: a plain string with no special characters passes through unchanged", async () => {
   assert.equal(escapeHtml("山田 太郎"), "山田 太郎");
+});
+
+// ---------------- effectiveTextWidth ----------------
+
+await check("effectiveTextWidth: half-width ASCII counts as 1 unit per character", async () => {
+  assert.equal(effectiveTextWidth("ABCDE"), 5);
+});
+
+await check("effectiveTextWidth: full-width Japanese counts as 2 units per character", async () => {
+  assert.equal(effectiveTextWidth("山田太郎"), 8);
+});
+
+await check("effectiveTextWidth: mixed half/full-width sums correctly", async () => {
+  assert.equal(effectiveTextWidth("山田 Taro"), 9); // 山田=2 full-width chars=4 units, " Taro"=5 half-width chars=5 units
+});
+
+await check("effectiveTextWidth: empty string -> 0", async () => {
+  assert.equal(effectiveTextWidth(""), 0);
 });
 
 console.log(`\n${passed} printUtils checks passed`);

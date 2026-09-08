@@ -10,6 +10,7 @@ import {
   renderGuestRegisterSheet,
   cleanGuestRegisterValue,
   buildGuestRegisterAddress,
+  guestRegisterValueSizeClass,
 } from "../public/guestRegisterTemplate.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -143,6 +144,147 @@ await check("renderGuestRegisterSheet escapes HTML-special characters in guest n
   const page = renderGuestRegisterSheet({ guestName: '<script>alert(1)</script>&"\'' });
   assert.ok(!page.includes("<script>alert(1)</script>"));
   assert.ok(page.includes("&lt;script&gt;"));
+});
+
+// ---------------- 2026-09: value-only print typography ----------------
+// 現場フィードバック「印刷するとゲスト情報の文字が小さく見づらい」対応。
+// 対象は7つの実データ値セルのみ(ラベル/見出し/記入欄は一切変更しない)。
+
+await check("guestRegisterValueSizeClass: short values get only the base class (no -long modifier)", async () => {
+  assert.equal(guestRegisterValueSizeClass("reservation", "89381508"), "gr-value-reservation");
+  assert.equal(guestRegisterValueSizeClass("name", "佐藤 太郎"), "gr-value-name");
+  assert.equal(guestRegisterValueSizeClass("address", "〒990-2301 山形県山形市蔵王温泉935-25"), "gr-value-address");
+  assert.equal(guestRegisterValueSizeClass("phone", "090-1234-5678"), "gr-value-phone");
+});
+
+await check("guestRegisterValueSizeClass: fields with no configured threshold (guests/stay/room) always return only the base class", async () => {
+  assert.equal(guestRegisterValueSizeClass("guests", "2 名"), "gr-value-guests");
+  assert.equal(guestRegisterValueSizeClass("stay", "x".repeat(500)), "gr-value-stay");
+  assert.equal(guestRegisterValueSizeClass("room", "x".repeat(500)), "gr-value-room");
+});
+
+await check("guestRegisterValueSizeClass: a long reservation number adds the -long modifier", async () => {
+  assert.equal(guestRegisterValueSizeClass("reservation", "RESV-2026-0910-INTL-0042"), "gr-value-reservation gr-value-reservation-long");
+});
+
+await check("guestRegisterValueSizeClass: a moderately long English guest name (33 half-width chars) stays at the base size — only truly long names shrink", async () => {
+  assert.equal(guestRegisterValueSizeClass("name", "ALEXANDER CHRISTOPHER WASHINGTON"), "gr-value-name");
+});
+
+await check("guestRegisterValueSizeClass: a very long guest name adds the -long modifier", async () => {
+  assert.equal(guestRegisterValueSizeClass("name", "Maria Fernanda Gonzalez-Rodriguez de la Torre"), "gr-value-name gr-value-name-long");
+});
+
+await check("guestRegisterValueSizeClass: a long international address adds the -long modifier", async () => {
+  const longAddress = "Avenida Paseo de la Reforma 1234, Colonia Lomas de Chapultepec, Edificio Torre Norte, Piso 15, Departamento 1502";
+  assert.equal(guestRegisterValueSizeClass("address", longAddress), "gr-value-address gr-value-address-long");
+});
+
+await check("guestRegisterValueSizeClass: a long phone number (with extension notes) adds the -long modifier", async () => {
+  assert.equal(
+    guestRegisterValueSizeClass("phone", "+52-55-1234-5678 ext. 9012 (mobile, please call after 6pm JST)"),
+    "gr-value-phone gr-value-phone-long",
+  );
+});
+
+await check("guestRegisterValueSizeClass: empty/null values never get the -long modifier (never crash on an empty cell)", async () => {
+  assert.equal(guestRegisterValueSizeClass("phone", null), "gr-value-phone");
+  assert.equal(guestRegisterValueSizeClass("address", ""), "gr-value-address");
+  assert.equal(guestRegisterValueSizeClass("name", undefined), "gr-value-name");
+});
+
+await check("renderGuestRegisterSheet: all 7 value cells carry their gr-value-* class", async () => {
+  const page = renderGuestRegisterSheet(toBookingLike(arrivals[0]));
+  assert.ok(/class="gr-value-reservation[^"]*"/.test(page));
+  assert.ok(/class="gr-value-guests"/.test(page));
+  assert.ok(/class="gr-value-stay"/.test(page));
+  assert.ok(/class="gr-value-room"/.test(page));
+  assert.ok(/class="gr-value-name[^"]*"/.test(page));
+  assert.ok(/class="gr-value-address[^"]*"/.test(page));
+  assert.ok(/class="gr-value-phone[^"]*"/.test(page));
+});
+
+await check("renderGuestRegisterSheet: a long guest name renders with the gr-value-name-long modifier applied", async () => {
+  const page = renderGuestRegisterSheet({ guestName: "Maria Fernanda Gonzalez-Rodriguez de la Torre" });
+  assert.ok(page.includes('class="gr-value-name gr-value-name-long"'));
+});
+
+await check("renderGuestRegisterSheet: no gr-value-* class ever appears on a label cell (予約番号/宿泊人数/宿泊期間/客室番号/代表者氏名/住所/電話番号 labels are untouched)", async () => {
+  const page = renderGuestRegisterSheet(toBookingLike(arrivals[0]));
+  for (const label of ["予約番号", "宿泊人数", "宿泊期間", "客室番号", "代表者氏名", "住所", "電話番号"]) {
+    const idx = page.indexOf(label);
+    assert.ok(idx > -1, `expected label ${label} to be present`);
+    const cellStart = page.lastIndexOf("<td", idx);
+    const cellOpenTag = page.slice(cellStart, page.indexOf(">", cellStart) + 1);
+    assert.ok(!cellOpenTag.includes("gr-value"), `label cell for ${label} must not carry a gr-value-* class: ${cellOpenTag}`);
+  }
+});
+
+await check("renderGuestRegisterSheet: title/section headings/sub-labels/handwritten section retain their exact original inline font-sizes (unchanged)", async () => {
+  const page = renderGuestRegisterSheet({});
+  assert.ok(page.includes("font-size:26px;font-weight:600;letter-spacing:0.16em;color:#1f1f1f;"), "宿泊者名簿 title font-size must be unchanged");
+  assert.ok(page.includes("font-size:10.5px;font-weight:600;letter-spacing:0.03em;color:#222222"), "ご予約情報 heading font-size must be unchanged");
+  assert.ok(page.includes("font-family:Arial,sans-serif;font-size:6.5px;color:#888888;font-weight:400;"), "English sub-labels (Reservation No. etc.) font-size must be unchanged");
+  assert.ok(page.includes("font-size:16px;font-weight:600;letter-spacing:0.07em;"), "ご署名 heading font-size must be unchanged");
+  assert.ok(!/年齢[\s\S]{0,120}gr-value/.test(page), "the handwritten 年齢/同行者 section must never carry a gr-value-* class");
+});
+
+await check("renderGuestRegisterSheet: companion-row structure (5 rows, height:14mm) is unaffected by the value-typography change", async () => {
+  const page = renderGuestRegisterSheet({});
+  const rowMatches = page.match(/<tr style="height:14mm;">/g) || [];
+  assert.equal(rowMatches.length, 6);
+});
+
+await check("renderGuestRegisterSheet: row heights (11mm/11mm/11mm/12mm/16mm/11mm) for the 7 value rows are unchanged", async () => {
+  const page = renderGuestRegisterSheet({});
+  const heights = [...page.matchAll(/<tr style="height:(\d+mm);">/g)].map((m) => m[1]);
+  // first 5 pre-filled rows: reservation/guests(11mm), stay(11mm), room(11mm), name(12mm), address(16mm), phone(11mm)
+  assert.deepEqual(heights.slice(0, 6), ["11mm", "11mm", "11mm", "12mm", "16mm", "11mm"]);
+});
+
+await check("renderGuestRegisterSheet: escapes HTML-special characters in a long guest name too (adaptive sizing does not bypass escaping)", async () => {
+  const page = renderGuestRegisterSheet({ guestName: "<script>alert(1)</script>".repeat(2) });
+  assert.ok(!page.includes("<script>alert(1)</script>"));
+  assert.ok(page.includes("&lt;script&gt;"));
+});
+
+await check("guest-register.html: the 7 gr-value-* base rules exist with the expected font-size, and no rule regresses below the old 11.5px baseline", async () => {
+  const rules = {
+    "gr-value-reservation": 14,
+    "gr-value-guests": 15,
+    "gr-value-stay": 14,
+    "gr-value-room": 15,
+    "gr-value-name": 16,
+    "gr-value-address": 14,
+    "gr-value-phone": 14.5,
+  };
+  for (const [cls, expected] of Object.entries(rules)) {
+    const m = html.match(new RegExp(`\\.${cls}\\s*{[^}]*font-size:\\s*([\\d.]+)px`));
+    assert.ok(m, `expected a .${cls} rule with font-size in guest-register.html`);
+    assert.equal(Number(m[1]), expected, `.${cls} font-size mismatch`);
+    assert.ok(Number(m[1]) > 11.5, `.${cls} must be strictly larger than the old 11.5px base`);
+  }
+});
+
+await check("guest-register.html: the -long modifiers exist, are smaller than their base but still above the old 11.5px baseline", async () => {
+  const longRules = {
+    "gr-value-reservation-long": 12.5,
+    "gr-value-name-long": 14,
+    "gr-value-address-long": 13,
+    "gr-value-phone-long": 13,
+  };
+  for (const [cls, expected] of Object.entries(longRules)) {
+    const m = html.match(new RegExp(`\\.${cls}\\s*{[^}]*font-size:\\s*([\\d.]+)px`));
+    assert.ok(m, `expected a .${cls} rule with font-size in guest-register.html`);
+    assert.equal(Number(m[1]), expected, `.${cls} font-size mismatch`);
+    assert.ok(Number(m[1]) > 11.5, `.${cls} must stay strictly larger than the old 11.5px base even when shrunk for long values`);
+  }
+});
+
+await check("guest-register.html: base .guest-register-sheet dimensions/margins are unchanged by this typography-only change", async () => {
+  assert.ok(html.includes("width: 186mm;"));
+  assert.ok(html.includes("height: 267mm;"));
+  assert.ok(/@page\s*{[^}]*margin:\s*10mm\s+12mm/s.test(html));
 });
 
 function toBookingLike(arrival) {
