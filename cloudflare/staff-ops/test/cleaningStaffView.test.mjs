@@ -12,14 +12,19 @@ import path from "node:path";
 import {
   renderStaffCleaningTable, validateInstructionInput,
   buildOverrideSaveBody, buildOverrideDeleteBody,
-  performSave, performReset, MAX_INSTRUCTION_LEN,
+  buildAccessStatusBody, buildAccessStatusModalHtml,
+  performSave, performReset, performAccessStatusChange, MAX_INSTRUCTION_LEN,
 } from "../public/cleaningStaffView.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
+import { applyRoomAccessStatus } from "../src/roomAccessState.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(readFileSync(path.join(dir, "fixtures/staff_ops_snapshot.sample.json"), "utf-8"));
 const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
-const rooms = mergeCleaningOverrides(rawRooms, {});
+// applyRoomAccessStatus({}) mirrors what GET /api/cleaning returns when no
+// live record exists yet: departing rooms (401 TURNOVER, 403 CHECKOUT) get
+// WAITING_CHECKOUT, everything else gets null.
+const rooms = applyRoomAccessStatus(mergeCleaningOverrides(rawRooms, {}), {});
 const src = readFileSync(path.join(dir, "../public/cleaningStaffView.js"), "utf-8");
 
 let passed = 0;
@@ -88,9 +93,9 @@ await check("a room with no guest_notice/onsite payment shows blank cells for th
   assert.ok(!row402.includes("現地"));
 });
 
-await check("the edit panel's colspan matches the new total column count (14) so it still spans the full row", async () => {
+await check("the edit panel's colspan matches the new total column count (15, including 在室確認) so it still spans the full row", async () => {
   const out = renderStaffCleaningTable(rooms, "402", "");
-  assert.ok(out.includes('colspan="14"'));
+  assert.ok(out.includes('colspan="15"'));
 });
 
 // ---------------- validateInstructionInput / body builders ----------------
@@ -184,6 +189,151 @@ await check("performReset surfaces a server-side rejection as an error, not a th
   const result = await performReset({ date: "2026-08-30", roomNumber: "402", fetchImpl });
   assert.equal(result.ok, false);
   assert.ok(result.error);
+});
+
+// ---------------- 在室確認(room_access_status): 未退室/清掃可 ----------------
+
+await check("staff table adds a 在室確認 column", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  assert.ok(out.includes(">在室確認<"));
+});
+
+await check("a departing room (401, TURNOVER) with no live record yet shows a 未退室 button", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  const row401 = out.match(/<tr data-room-number="401">[\s\S]*?<\/tr>/)[0];
+  assert.ok(/data-action="access-request" data-room="401"/.test(row401));
+  assert.ok(row401.includes(">未退室<"));
+  assert.ok(row401.includes("csv-access-btn-WAITING_CHECKOUT"));
+});
+
+await check("a non-departing room (404, STAYOVER) shows a blank 在室確認 cell (no button)", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "");
+  const row404 = out.match(/<tr data-room-number="404">[\s\S]*?<\/tr>/)[0];
+  assert.ok(!/data-action="access-request"/.test(row404));
+});
+
+await check("liveAccessEnabled=false hides the button entirely even for a departing room, but keeps the column (no colspan change)", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "", false, true);
+  assert.ok(!/data-action="access-request"/.test(out));
+  assert.ok(out.includes(">在室確認<"));
+});
+
+await check("isToday=false replaces the button with a static badge + '当日のみ変更できます' note (read-only for other dates)", async () => {
+  const out = renderStaffCleaningTable(rooms, null, "", true, false);
+  const row401 = out.match(/<tr data-room-number="401">[\s\S]*?<\/tr>/)[0];
+  assert.ok(!/data-action="access-request"/.test(row401));
+  assert.ok(row401.includes("csv-access-badge-WAITING_CHECKOUT"));
+  assert.ok(row401.includes("当日のみ変更できます"));
+});
+
+await check("a room already CLEANING_ALLOWED shows a 清掃可 button styled distinctly from 未退室", async () => {
+  const allowedRooms = rooms.map((r) => (r.room_number === "401" ? { ...r, roomAccessStatus: "CLEANING_ALLOWED" } : r));
+  const out = renderStaffCleaningTable(allowedRooms, null, "");
+  const row401 = out.match(/<tr data-room-number="401">[\s\S]*?<\/tr>/)[0];
+  assert.ok(row401.includes(">清掃可<"));
+  assert.ok(row401.includes("csv-access-btn-CLEANING_ALLOWED"));
+});
+
+await check("buildAccessStatusModalHtml returns '' when modal state is null (no modal in the DOM)", async () => {
+  assert.equal(buildAccessStatusModalHtml(null), "");
+});
+
+await check("buildAccessStatusModalHtml (WAITING_CHECKOUT -> CLEANING_ALLOWED) shows a large room number, the confirmation copy, and an unambiguous confirm label", async () => {
+  const html = buildAccessStatusModalHtml({ roomNumber: "601", targetStatus: "CLEANING_ALLOWED", pending: false, errorText: "" });
+  assert.ok(html.includes("601号室"));
+  assert.ok(html.includes("この部屋を「清掃可」にしますか？"));
+  assert.ok(html.includes("宿泊者が退室済みであることを確認してから変更してください。"));
+  assert.ok(/data-action="access-cancel"[^>]*>キャンセル/.test(html));
+  assert.ok(/data-action="access-confirm"[^>]*>清掃可にする/.test(html));
+  // no ambiguous "OK"/"Cancel" wording (要件10)
+  assert.ok(!/>OK</.test(html));
+});
+
+await check("buildAccessStatusModalHtml (CLEANING_ALLOWED -> WAITING_CHECKOUT, undo) asks to revert and labels the confirm button accordingly", async () => {
+  const html = buildAccessStatusModalHtml({ roomNumber: "601", targetStatus: "WAITING_CHECKOUT", pending: false, errorText: "" });
+  assert.ok(html.includes("「未退室」に戻しますか？"));
+  assert.ok(/data-action="access-confirm"[^>]*>未退室に戻す/.test(html));
+});
+
+await check("buildAccessStatusModalHtml disables both buttons and shows '更新中…' while pending", async () => {
+  const html = buildAccessStatusModalHtml({ roomNumber: "601", targetStatus: "CLEANING_ALLOWED", pending: true, errorText: "" });
+  assert.ok(/data-action="access-cancel" disabled/.test(html));
+  assert.ok(/data-action="access-confirm" disabled/.test(html));
+  assert.ok(html.includes("更新中…"));
+});
+
+await check("buildAccessStatusModalHtml surfaces a network-failure error inline without hiding the modal", async () => {
+  const html = buildAccessStatusModalHtml({
+    roomNumber: "601", targetStatus: "CLEANING_ALLOWED", pending: false,
+    errorText: "更新できませんでした。もう一度お試しください",
+  });
+  assert.ok(html.includes("更新できませんでした"));
+});
+
+await check("buildAccessStatusBody produces the exact API body shape", async () => {
+  assert.deepEqual(buildAccessStatusBody("2026-09-08", "601", "CLEANING_ALLOWED"), {
+    date: "2026-09-08", roomNumber: "601", status: "CLEANING_ALLOWED",
+  });
+});
+
+await check("performAccessStatusChange posts the right body shape to POST /api/cleaning/access-status", async () => {
+  let capturedUrl = null;
+  let capturedInit = null;
+  const fetchImpl = async (url, init) => {
+    capturedUrl = url;
+    capturedInit = init;
+    return { ok: true, json: async () => ({ ok: true, previousStatus: "WAITING_CHECKOUT", status: "CLEANING_ALLOWED", updatedAt: "2026-09-08T00:00:00.000Z" }) };
+  };
+  const result = await performAccessStatusChange({ date: "2026-09-08", roomNumber: "601", status: "CLEANING_ALLOWED", fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "CLEANING_ALLOWED");
+  assert.equal(capturedUrl, "/api/cleaning/access-status");
+  assert.equal(capturedInit.method, "POST");
+  assert.deepEqual(JSON.parse(capturedInit.body), { date: "2026-09-08", roomNumber: "601", status: "CLEANING_ALLOWED" });
+});
+
+await check("performAccessStatusChange surfaces a server-side rejection as a retry-friendly error, not a thrown exception (状態を先に変えない)", async () => {
+  const fetchImpl = async () => ({ ok: false });
+  const result = await performAccessStatusChange({ date: "2026-09-08", roomNumber: "601", status: "CLEANING_ALLOWED", fetchImpl });
+  assert.equal(result.ok, false);
+  assert.ok(result.error);
+});
+
+await check("performAccessStatusChange surfaces a network exception (fetch throwing) the same way", async () => {
+  const fetchImpl = async () => { throw new Error("network down"); };
+  const result = await performAccessStatusChange({ date: "2026-09-08", roomNumber: "601", status: "CLEANING_ALLOWED", fetchImpl });
+  assert.equal(result.ok, false);
+  assert.ok(result.error);
+});
+
+await check("handleAccessCancel (在室確認モーダルのキャンセル) never calls fetch/performAccessStatusChange", async () => {
+  const start = src.indexOf("function handleAccessCancel()");
+  assert.ok(start > -1, "expected a handleAccessCancel() function");
+  const braceStart = src.indexOf("{", start);
+  let depth = 0;
+  let end = braceStart;
+  for (let i = braceStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    if (src[i] === "}") { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const body = src.slice(braceStart, end + 1);
+  assert.ok(!/fetch\(/.test(body), "handleAccessCancel must not call fetch()");
+  assert.ok(!/performAccessStatusChange/.test(body), "handleAccessCancel must not call performAccessStatusChange");
+});
+
+await check("handleAccessRequest (clicking 未退室/清掃可) never calls fetch/performAccessStatusChange — it only opens the confirmation modal", async () => {
+  const start = src.indexOf("function handleAccessRequest(roomNumber)");
+  assert.ok(start > -1, "expected a handleAccessRequest(roomNumber) function");
+  const braceStart = src.indexOf("{", start);
+  let depth = 0;
+  let end = braceStart;
+  for (let i = braceStart; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    if (src[i] === "}") { depth--; if (depth === 0) { end = i; break; } }
+  }
+  const body = src.slice(braceStart, end + 1);
+  assert.ok(!/fetch\(/.test(body), "handleAccessRequest must not call fetch()");
+  assert.ok(!/performAccessStatusChange/.test(body), "handleAccessRequest must not call performAccessStatusChange (mutation only happens on confirm)");
 });
 
 // ---------------- cancel: source-level confirmation of "no network call" ----------------

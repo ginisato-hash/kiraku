@@ -5,12 +5,16 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { CLEANING_VISUAL_READY, isPreviewRequested, cleaningVisualAllowed } from "../public/featureFlags.js";
+import {
+  CLEANING_VISUAL_READY, CLEANING_LIVE_ACCESS_READY,
+  isPreviewRequested, cleaningVisualAllowed, cleaningLiveAccessAllowed,
+} from "../public/featureFlags.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dailyOpsSrc = readFileSync(path.join(dir, "../public/dailyOps.js"), "utf-8");
 const printCleaningSrc = readFileSync(path.join(dir, "../public/ops/print/print-cleaning.js"), "utf-8");
 const todaySrc = readFileSync(path.join(dir, "../public/cleaning/today.js"), "utf-8");
+const cleaningStaffViewSrc = readFileSync(path.join(dir, "../public/cleaningStaffView.js"), "utf-8");
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -86,6 +90,46 @@ await check("cleaning/today.js (mobile) refuses to render the provisional room l
   const fetchIndex = todaySrc.indexOf("fetch(");
   assert.ok(gateIndex > -1 && fetchIndex > -1 && gateIndex < fetchIndex,
     "the feature-flag check must run before the /api/cleaning fetch");
+});
+
+// ---------------- CLEANING_LIVE_ACCESS_READY (在室確認機能, 2026-09追加) ----------------
+
+await check("CLEANING_LIVE_ACCESS_READY is its own flag, kept separate from CLEANING_VISUAL_READY", async () => {
+  assert.notStrictEqual(CLEANING_LIVE_ACCESS_READY, undefined);
+  assert.notStrictEqual(
+    "CLEANING_LIVE_ACCESS_READY", "CLEANING_VISUAL_READY",
+    "must not reuse the print/mobile-sheet flag for the live-access feature",
+  );
+});
+
+await check("cleaningLiveAccessAllowed() follows CLEANING_LIVE_ACCESS_READY when no preview param is set", async () => {
+  const prevWindow = globalThis.window;
+  try {
+    globalThis.window = { location: { search: "" } };
+    assert.strictEqual(cleaningLiveAccessAllowed(), CLEANING_LIVE_ACCESS_READY);
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window;
+    else globalThis.window = prevWindow;
+  }
+});
+
+await check("cleaningLiveAccessAllowed() is true under ?preview=1 even while CLEANING_LIVE_ACCESS_READY is false (internal QA escape hatch, same pattern as cleaningVisualAllowed)", async () => {
+  const prevWindow = globalThis.window;
+  try {
+    globalThis.window = { location: { search: "?preview=1" } };
+    assert.strictEqual(cleaningLiveAccessAllowed(), true);
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window;
+    else globalThis.window = prevWindow;
+  }
+});
+
+await check("today.js gates the live-access badge/WebSocket behind cleaningLiveAccessAllowed(), not the print/mobile-sheet flag alone", async () => {
+  assert.ok(todaySrc.includes("cleaningLiveAccessAllowed"));
+});
+
+await check("cleaningStaffView.js gates the 在室確認 button/modal behind cleaningLiveAccessAllowed()", async () => {
+  assert.ok(cleaningStaffViewSrc.includes("cleaningLiveAccessAllowed"));
 });
 
 console.log(`\n${passed} feature flag checks passed`);

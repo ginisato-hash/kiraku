@@ -28,9 +28,39 @@
     .mc-freshness {
       color: var(--text-muted);
       font-size: 0.95rem;
-      margin-bottom: 20px;
+      margin-bottom: 4px;
       min-height: 1.2em;
     }
+
+    /* 在室確認のリアルタイム接続状態。地味に、主画面(room list)の邪魔をしない。 */
+    .mc-conn-status {
+      color: var(--text-faint);
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+      min-height: 1.1em;
+    }
+    .mc-conn-status.mc-conn-connected { color: var(--green); }
+    .mc-conn-status.mc-conn-reconnecting { color: var(--amber); }
+
+    /* 在室確認バッジ(未退室/清掃可)。安全に関わる表示なので文字サイズは
+       20px以上・色だけに頼らず必ず文字を表示する(要件15/65)。 */
+    .mc-access-badge {
+      display: inline-block;
+      border-radius: var(--radius-md);
+      padding: 8px 16px;
+      margin-bottom: 12px;
+    }
+    .mc-access-label {
+      font-size: 1.3rem;
+      font-weight: 800;
+    }
+    .mc-access-sub {
+      font-size: 0.9rem;
+      font-weight: 600;
+      opacity: 0.85;
+    }
+    .mc-access-WAITING_CHECKOUT { background: var(--red-bg); color: var(--red); }
+    .mc-access-CLEANING_ALLOWED { background: var(--green-bg); color: var(--green); }
 
     .mc-room-block {
       background: var(--surface);
@@ -107,6 +137,7 @@
   <div class="mc-shell">
     <div class="mc-date" id="mc-date">—</div>
     <div class="mc-freshness" id="mc-freshness"></div>
+    <div class="mc-conn-status" id="mc-conn-status"></div>
     <div id="mc-room-list"></div>
   </div>
 

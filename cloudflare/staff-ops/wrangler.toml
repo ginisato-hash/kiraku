@@ -33,6 +33,20 @@ bucket_name = "kiraku-staff-ops-data"
 binding = "CLEANING_OVERRIDES"
 id = "REPLACE_WITH_REAL_KV_ID"
 
+# リアルタイム在室確認(room_access_status)専用のDurable Object。1営業日(date)
+# につき1インスタンス(Worker側は常にidFromName(date)で参照)。KVではなくDOを
+# 使う理由: Workers KVはeventually consistent(別locationで最大60秒以上遅延
+# し得る)で、「入室してよい/いけない」という安全性に関わる情報には不適切なため
+# (詳細はsrc/cleaningLiveState.js/src/roomAccessState.jsのコメント参照)。
+[[durable_objects.bindings]]
+name = "CLEANING_LIVE"
+class_name = "CleaningLiveState"
+
+# 新規DurableObjectネームスペースはSQLite backendを使う(Cloudflare推奨)。
+[[migrations]]
+tag = "v1-cleaning-live-sqlite"
+new_sqlite_classes = ["CleaningLiveState"]
+
 # 必須の Worker Secrets（wrangler.tomlにもGitにも絶対に書かない。
 # `wrangler secret put STAFF_OPS_PASSWORD` / `wrangler secret put STAFF_OPS_SESSION_SECRET`
 # で設定する。詳細は cloudflare/staff-ops/AUTH_SETUP.md 参照）:

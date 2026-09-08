@@ -16,13 +16,14 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { renderMobileRoomBlock, renderMobileCleaningBody } from "../public/cleaningSheetTemplate.js";
+import { renderMobileRoomBlock, renderMobileCleaningBody, renderMobileAccessBadge } from "../public/cleaningSheetTemplate.js";
 import { mergeCleaningOverrides } from "../src/cleaningOverrides.js";
+import { applyRoomAccessStatus } from "../src/roomAccessState.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(readFileSync(path.join(dir, "fixtures/staff_ops_snapshot.sample.json"), "utf-8"));
 const rawRooms = fixture.dates["2026-08-30"].cleaning.rooms;
-const rooms = mergeCleaningOverrides(rawRooms, {});
+const rooms = applyRoomAccessStatus(mergeCleaningOverrides(rawRooms, {}), {});
 const html = readFileSync(path.join(dir, "../public/cleaning/today.html"), "utf-8");
 const js = readFileSync(path.join(dir, "../public/cleaning/today.js"), "utf-8");
 
@@ -166,6 +167,103 @@ await check("today.js has no start/complete/inspected/assign status buttons (out
   assert.ok(!/<button/i.test(js));
   assert.ok(!/addEventListener\(\s*["']click["']/.test(js));
   assert.ok(!/method:\s*["']POST["']|method:\s*["']DELETE["']/.test(js), "today.js must not mutate anything");
+});
+
+// ---------------- 在室確認(room_access_status) badge + realtime (2026-09追加) ----------------
+
+await check("renderMobileAccessBadge returns '' when liveAccessEnabled is false, even for a departing room", async () => {
+  const room = rooms.find((r) => r.room_number === "401"); // TURNOVER, roomAccessStatus=WAITING_CHECKOUT
+  assert.ok(room.roomAccessStatus);
+  assert.equal(renderMobileAccessBadge(room, false), "");
+});
+
+await check("renderMobileAccessBadge returns '' for a non-departing room (roomAccessStatus is null)", async () => {
+  const room = rooms.find((r) => r.room_number === "404"); // STAYOVER
+  assert.equal(room.roomAccessStatus, null);
+  assert.equal(renderMobileAccessBadge(room, true), "");
+});
+
+await check("renderMobileAccessBadge shows 未退室 + 入室しない for WAITING_CHECKOUT", async () => {
+  const room = rooms.find((r) => r.room_number === "401");
+  const out = renderMobileAccessBadge(room, true);
+  assert.ok(out.includes("未退室"));
+  assert.ok(out.includes("入室しない"));
+  assert.ok(out.includes("mc-access-WAITING_CHECKOUT"));
+});
+
+await check("renderMobileAccessBadge shows only 清掃可 (no 入室しない) for CLEANING_ALLOWED", async () => {
+  const room = { ...rooms.find((r) => r.room_number === "401"), roomAccessStatus: "CLEANING_ALLOWED" };
+  const out = renderMobileAccessBadge(room, true);
+  assert.ok(out.includes("清掃可"));
+  assert.ok(!out.includes("入室しない"));
+  assert.ok(out.includes("mc-access-CLEANING_ALLOWED"));
+});
+
+await check("renderMobileRoomBlock includes the access badge for a departing room by default (liveAccessEnabled defaults true)", async () => {
+  const room = rooms.find((r) => r.room_number === "401");
+  const out = renderMobileRoomBlock(room);
+  assert.ok(out.includes("mc-access-badge"));
+});
+
+await check("renderMobileRoomBlock omits the access badge entirely when liveAccessEnabled=false", async () => {
+  const room = rooms.find((r) => r.room_number === "401");
+  const out = renderMobileRoomBlock(room, false);
+  assert.ok(!out.includes("mc-access-badge"));
+});
+
+await check("renderMobileCleaningBody threads liveAccessEnabled through to every block", async () => {
+  const withAccess = renderMobileCleaningBody(rooms, true);
+  const withoutAccess = renderMobileCleaningBody(rooms, false);
+  assert.ok(withAccess.includes("mc-access-badge"));
+  assert.ok(!withoutAccess.includes("mc-access-badge"));
+});
+
+await check("every room block (occupied and vacant) carries data-room-number for WebSocket per-room patching", async () => {
+  const room = rooms.find((r) => r.room_number === "401");
+  const vacant = rooms.find((r) => r.room_number === "405");
+  assert.ok(renderMobileRoomBlock(room).includes('data-room-number="401"'));
+  assert.ok(renderMobileRoomBlock(vacant).includes('data-room-number="405"'));
+});
+
+await check("today.html declares a connection-status element", async () => {
+  assert.ok(/id="mc-conn-status"/.test(html));
+});
+
+await check("today.js opens a WebSocket to /api/cleaning/live?date=... gated behind cleaningLiveAccessAllowed()", async () => {
+  assert.ok(js.includes("cleaningLiveAccessAllowed"));
+  assert.ok(js.includes("/api/cleaning/live?date="));
+  assert.ok(/new WebSocket\(/.test(js));
+});
+
+await check("today.js never calls WebSocket.send (server push only, no client->server protocol)", async () => {
+  assert.ok(!/\.send\(/.test(js), "today.js must not send anything over the WebSocket");
+});
+
+await check("today.js reconnects with capped exponential-ish backoff (1s/2s/5s/10s/30s) on close", async () => {
+  assert.ok(/1000,\s*2000,\s*5000,\s*10000,\s*30000/.test(js));
+  assert.ok(js.includes("setTimeout"));
+});
+
+await check("today.js does a full GET /api/cleaning resync on every successful (re)connect, not just once", async () => {
+  const openHandlerMatch = js.match(/addEventListener\(\s*["']open["'],\s*\(\)\s*=>\s*\{([\s\S]*?)\}\);/);
+  assert.ok(openHandlerMatch, "expected a WebSocket 'open' handler");
+  assert.ok(/fullResync\(/.test(openHandlerMatch[1]));
+});
+
+await check("today.js polls GET /api/cleaning as a fallback only while the WebSocket is not OPEN", async () => {
+  assert.ok(js.includes("setInterval"));
+  assert.ok(/readyState\s*===\s*WebSocket\.OPEN/.test(js));
+});
+
+await check("today.js resyncs immediately when the tab becomes visible again (visibilitychange)", async () => {
+  assert.ok(js.includes("visibilitychange"));
+  assert.ok(js.includes("visibilityState"));
+});
+
+await check("a room_access_status message for a different date is ignored (date isolation on the client too)", async () => {
+  const handlerMatch = js.match(/function handleLiveMessage\(raw, date\) \{([\s\S]*?)\n\}/);
+  assert.ok(handlerMatch, "expected a handleLiveMessage(raw, date) function");
+  assert.ok(/msg\.date !== date/.test(handlerMatch[1]));
 });
 
 console.log(`\n${passed} mobile cleaning checks passed`);

@@ -24,6 +24,9 @@
 
 import { KIRAKU_ROOM_ORDER } from "./roomMaster.js";
 import { buildOverrideKey, mergeCleaningOverrides, readOverridesForDate } from "./cleaningOverrides.js";
+import { validateAccessStatusBody, applyRoomAccessStatus, isDepartingRoomStatus } from "./roomAccessState.js";
+import { todayJst } from "./jstDate.js";
+import { CleaningLiveState } from "./cleaningLiveState.js";
 import {
   SESSION_COOKIE_NAME,
   DEFAULT_SESSION_MAX_AGE_SECONDS,
@@ -100,8 +103,110 @@ async function handleCleaningGet(env, url) {
   }
   const baseRooms = Array.isArray(dayData.cleaning.rooms) ? dayData.cleaning.rooms : [];
   const overridesByRoom = await readOverridesForDate(env.CLEANING_OVERRIDES, date);
-  const rooms = mergeCleaningOverrides(baseRooms, overridesByRoom);
+  const merged = mergeCleaningOverrides(baseRooms, overridesByRoom);
+  const doRoomsState = await readLiveAccessState(env, date);
+  const rooms = applyRoomAccessStatus(merged, doRoomsState);
   return jsonResponse({ date, rooms }, 200);
+}
+
+// Reads the live room_access_status snapshot from the CleaningLiveState
+// Durable Object for this date. Degrades to {} (never throws) if the DO
+// binding is missing or the call fails — applyRoomAccessStatus() then falls
+// back to DEFAULT_ROOM_ACCESS_STATUS (WAITING_CHECKOUT), the safe state,
+// rather than ever guessing CLEANING_ALLOWED.
+async function readLiveAccessState(env, date) {
+  if (!env.CLEANING_LIVE) return {};
+  try {
+    const id = env.CLEANING_LIVE.idFromName(date);
+    const stub = env.CLEANING_LIVE.get(id);
+    const res = await stub.fetch("https://cleaning-live/internal/state");
+    if (!res.ok) return {};
+    const data = await res.json();
+    return (data && data.rooms) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// POST /api/cleaning/access-status — front desk confirms/undoes physical
+// departure for one room, today (JST) only, and only for a room that
+// actually has a guest departing it today per the current R2 snapshot.
+async function handleAccessStatusPost(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (e) {
+    return jsonResponse({ error: "invalid_json" }, 400);
+  }
+
+  const validation = validateAccessStatusBody(body, KIRAKU_ROOM_ORDER);
+  if (!validation.ok) return jsonResponse({ error: validation.error }, 400);
+  const { date, roomNumber, status } = validation;
+
+  // Same mutation-endpoint defense-in-depth as POST/DELETE /api/cleaning/override.
+  if (!isSameOriginRequest(request)) {
+    return jsonResponse({ error: "origin_not_allowed" }, 403);
+  }
+
+  // Live checkout confirmation is a same-day operational action only — past
+  // and future dates stay read-only (spec item 26).
+  if (date !== todayJst()) {
+    return jsonResponse({ error: "date_locked" }, 403);
+  }
+
+  const snapshot = await getSnapshot(env);
+  const dayData = getDayData(snapshot, date);
+  if (!dayData || !dayData.cleaning) {
+    return jsonResponse({ error: "not_found" }, 404);
+  }
+  const rooms = Array.isArray(dayData.cleaning.rooms) ? dayData.cleaning.rooms : [];
+  const room = rooms.find((r) => r && r.room_number === roomNumber);
+  if (!room || !isDepartingRoomStatus(room.status)) {
+    return jsonResponse({ error: "invalid_transition" }, 409);
+  }
+
+  if (!env.CLEANING_LIVE) {
+    return jsonResponse({ error: "do_unavailable" }, 500);
+  }
+  const id = env.CLEANING_LIVE.idFromName(date);
+  const stub = env.CLEANING_LIVE.get(id);
+  let doRes;
+  try {
+    doRes = await stub.fetch("https://cleaning-live/internal/mutate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ date, roomNumber, status }),
+    });
+  } catch (e) {
+    return jsonResponse({ error: "mutation_failed" }, 500);
+  }
+  if (!doRes.ok) {
+    return jsonResponse({ error: "mutation_failed" }, 500);
+  }
+  const result = await doRes.json();
+  return jsonResponse(result, 200);
+}
+
+// GET /api/cleaning/live?date=... — WebSocket upgrade, proxied straight
+// through to that date's CleaningLiveState Durable Object. Reached only
+// after the global auth middleware below has already required a valid
+// session (this path is not in PUBLIC_STATIC_PATHS), so an unauthenticated
+// client never reaches the DO at all.
+async function handleCleaningLive(request, env, url) {
+  const date = url.searchParams.get("date");
+  if (!date || !DATE_RE.test(date)) {
+    return jsonResponse({ error: "invalid_date" }, 400);
+  }
+  const upgrade = request.headers.get("Upgrade") || "";
+  if (upgrade.toLowerCase() !== "websocket") {
+    return jsonResponse({ error: "expected_websocket" }, 426);
+  }
+  if (!env.CLEANING_LIVE) {
+    return jsonResponse({ error: "do_unavailable" }, 500);
+  }
+  const id = env.CLEANING_LIVE.idFromName(date);
+  const stub = env.CLEANING_LIVE.get(id);
+  return stub.fetch(request);
 }
 
 // POST/DELETE の両方が共有する date/roomNumber検証 + 許可body-key検証。
@@ -262,6 +367,11 @@ function handleLogout() {
   return res;
 }
 
+// wrangler needs the Durable Object class exported from the main module
+// (main = "src/worker.js" in wrangler.toml) to bind it via
+// [[durable_objects.bindings]] / [[migrations]] new_sqlite_classes.
+export { CleaningLiveState };
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -308,6 +418,14 @@ export default {
 
     if (path === "/api/cleaning/override" && request.method === "DELETE") {
       return handleCleaningOverrideDelete(request, env);
+    }
+
+    if (path === "/api/cleaning/access-status" && request.method === "POST") {
+      return handleAccessStatusPost(request, env);
+    }
+
+    if (path === "/api/cleaning/live" && request.method === "GET") {
+      return handleCleaningLive(request, env, url);
     }
 
     if (path === "/src/roomMaster.js" && request.method === "GET") {

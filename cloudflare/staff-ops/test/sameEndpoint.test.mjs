@@ -44,7 +44,10 @@ await check("print and mobile pages read rooms the same way: cleaning.rooms with
 
 await check("print and mobile pages pass the merged rooms straight into their render function with no intermediate transform", async () => {
   assert.ok(/renderCleaningSheetTemplate\(rooms, date\)/.test(printJs));
-  assert.ok(/renderMobileCleaningBody\(rooms\)/.test(mobileJs));
+  // today.js may pass a second (liveAccessEnabled) flag argument alongside
+  // rooms for the room_access_status badge feature, but rooms itself must
+  // still be passed straight through with no filtering/mapping.
+  assert.ok(/renderMobileCleaningBody\(rooms(?:,\s*\S+)?\)/.test(mobileJs));
 });
 
 console.log(`\n${passed} same-endpoint checks passed`);

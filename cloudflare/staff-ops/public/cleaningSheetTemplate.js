@@ -19,6 +19,7 @@
 import { KIRAKU_ROOM_ORDER } from "../src/roomMaster.js";
 import { escapeHtml } from "./printUtils.js";
 import { formatJapaneseDateWithWeekdayParen } from "./jst.js";
+import { WAITING_CHECKOUT, roomAccessStatusLabelJa } from "./roomAccessStatus.js";
 
 // ステータス(英語enum) -> 表示用の日本語ラベル(フル表示)。Staff cleaning list
 // (cleaningStaffView.js)専用 — CANCELLEDはVACANTと同一表示。
@@ -374,13 +375,30 @@ function buildRoomRow(room) {
 // 2026-09: 印刷側と合わせ、OUT表示を削除しstatusはIN/連泊のみにした
 // (printStatusLabel()を共有)。現地決済金額は今回モバイルへは追加しない
 // (清掃担当者に金額情報を見せる必要は今回指定されていないため)。
-export function renderMobileRoomBlock(room) {
+// 在室確認バッジ(未退室/清掃可)。当日departing guestのいるroom
+// (roomAccessStatusが非null)にのみ表示する — 印刷帳票へは絶対に追加しない
+// (要件45)。liveAccessEnabledがfalseの間は機能ごと非表示にする
+// (featureFlags.jsのCLEANING_LIVE_ACCESS_READY/preview=1で制御、
+// today.js側から明示的に渡す — このファイル自体はwindowを参照しない)。
+export function renderMobileAccessBadge(room, liveAccessEnabled = true) {
+  if (!liveAccessEnabled) return "";
+  const status = room && room.roomAccessStatus;
+  if (!status) return "";
+  const label = roomAccessStatusLabelJa(status);
+  const sub = status === WAITING_CHECKOUT ? `<div class="mc-access-sub">入室しない</div>` : "";
+  return `<div class="mc-access-badge mc-access-${escapeHtml(status)}" data-access-status="${escapeHtml(status)}">
+    <div class="mc-access-label">${escapeHtml(label)}</div>
+    ${sub}
+  </div>`;
+}
+
+export function renderMobileRoomBlock(room, liveAccessEnabled = true) {
   if (room.status === "VACANT" || room.status === "CANCELLED") {
     // 空室でも、指示(override)が付いていれば必ず表示する — 印刷ページの
     // 備考・通信列と同じデータ(effectiveInstruction)を隠さない(部屋が空室でも
     // 「電球交換」等のスタッフ向け指示が付くことは実際にあり得るため)。
     const vacantInstruction = cleanValue(room.effectiveInstruction);
-    return `<div class="mc-room-block mc-room-vacant">
+    return `<div class="mc-room-block mc-room-vacant" data-room-number="${escapeHtml(room.room_number)}">
       <div class="mc-room-number">${escapeHtml(room.room_number)}</div>
       <div class="mc-vacant-label">空室</div>
       ${vacantInstruction ? `<div class="mc-instruction">${escapeHtml(vacantInstruction)}</div>` : ""}
@@ -396,13 +414,15 @@ export function renderMobileRoomBlock(room) {
   const ota = cleanValue(otaFor(room));
   const notice = guestNoticeFor(room);
   const instruction = cleanValue(room.effectiveInstruction);
+  const accessBadge = renderMobileAccessBadge(room, liveAccessEnabled);
 
   const countNightsParts = [];
   if (count) countNightsParts.push(`人数 ${count}名${breakdown ? `（${breakdown}）` : ""}`);
   if (nights) countNightsParts.push(`泊数 ${nights}`);
 
-  return `<div class="mc-room-block">
+  return `<div class="mc-room-block" data-room-number="${escapeHtml(room.room_number)}">
     <div class="mc-room-number">${escapeHtml(room.room_number)}号室</div>
+    ${accessBadge}
     ${label ? `<div class="mc-status-badge mc-status-${room.status}">${escapeHtml(label)}</div>` : ""}
     ${guestName ? `<div class="mc-guest-name">${escapeHtml(guestName)}</div>` : ""}
     ${countNightsParts.length ? `<div class="mc-detail-line">${escapeHtml(countNightsParts.join("　"))}</div>` : ""}
@@ -416,8 +436,8 @@ export function renderMobileRoomBlock(room) {
 // cleaningRooms: GET /api/cleaning?date=... のマージ済みroom配列(18室 + 任意の
 // UNASSIGNED行、順不同でよい)。常にKIRAKU_ROOM_ORDER順の18ブロックを返す
 // (UNASSIGNED行はこの画面には出さない — 印刷ページと同じ扱い)。
-export function renderMobileCleaningBody(cleaningRooms) {
-  return roomsByCanonicalOrder(cleaningRooms).map(renderMobileRoomBlock).join("");
+export function renderMobileCleaningBody(cleaningRooms, liveAccessEnabled = true) {
+  return roomsByCanonicalOrder(cleaningRooms).map((room) => renderMobileRoomBlock(room, liveAccessEnabled)).join("");
 }
 
 // cleaningRooms: GET /api/cleaning?date=... のマージ済みroom配列(18室 + 任意の
