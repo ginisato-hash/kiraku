@@ -3,11 +3,25 @@
 """
 import json
 
-from yuge_finance import db, monthly
+import pytest
+
+from yuge_finance import config, db, monthly
 from yuge_finance.ingest import opening_balance
 from yuge_finance.reports import bi_export
 
+# 開始残高ロック値の一部は会計士確定の実データ（imports/opening_balance/、
+# .gitignore済み）が必要。CIには存在しないため、ロック値のassertを含むこの
+# テストだけ実データが無い環境ではskipする（test_opening_balance_lock.py参照）。
+_REAL_OPENING_DATA_AVAILABLE = bool(
+    list((config.IMPORTS_DIR / "opening_balance").glob("opening_balance_*.csv"))
+) if (config.IMPORTS_DIR / "opening_balance").exists() else False
 
+
+@pytest.mark.skipif(
+    not _REAL_OPENING_DATA_AVAILABLE,
+    reason="requires real accountant-confirmed opening balance data under "
+           "imports/opening_balance/ (gitignored, not present in CI)",
+)
 def test_snapshot_has_new_phase_fields(tmp_path):
     conn = db.connect(tmp_path / "t.sqlite")
     opening_balance.run(conn)  # 会計士確定BS(実データ)をDBへ投入
