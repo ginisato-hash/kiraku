@@ -136,4 +136,109 @@ await check("a GitHub dispatch API failure releases the reservation instead of l
   assert.ok(captured, "the next cron tick must retry the released dispatch");
 });
 
+// ---------------------------------------------------------------- fix round: shadow tracking (blocker 1)
+await check("shadow mode passes tracked dispatch_id/target_seq/reason inputs, and its completion callback advances state", async () => {
+  const namespace = makeCoordinatorNamespace(); // default mode = shadow
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
+  const stub = namespace.get("singleton");
+  await stub.fetch(new Request("https://do/internal/event", { method: "POST" }));
+
+  let captured = null;
+  await withMockFetch(async (url, init) => { captured = { url, init }; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  assert.ok(captured, "shadow must still call the GitHub API unconditionally");
+  const body = JSON.parse(captured.init.body);
+  assert.ok(body.inputs, "shadow's unconditional dispatch must still carry Coordinator tracking inputs");
+  assert.equal(body.inputs.reason, "booking_webhook");
+  assert.equal(body.inputs.target_seq, "1");
+  const dispatchId = body.inputs.dispatch_id;
+  assert.ok(dispatchId);
+
+  // Simulate the workflow's own completion callback for this shadow dispatch.
+  const completeRes = await stub.fetch(new Request("https://do/internal/complete", {
+    method: "POST",
+    body: JSON.stringify({ dispatch_id: dispatchId, target_seq: 1, status: "success", completed_at: "2026-09-20T00:05:00.000Z" }),
+  }));
+  assert.equal(completeRes.status, 200);
+
+  const status = await coordinatorStatus(env);
+  assert.equal(status.last_completed_seq, 1, "shadow's real success must be reflected in Coordinator state");
+  assert.equal(status.last_full_reconcile_at, "2026-09-20T00:05:00.000Z");
+  assert.equal(status.dirty_count, 0, "planner must now independently agree the coordinator is clean");
+});
+
+await check("shadow mode still dispatches unconditionally even when a previous shadow dispatch is still in-flight", async () => {
+  const namespace = makeCoordinatorNamespace();
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
+  const stub = namespace.get("singleton");
+  await stub.fetch(new Request("https://do/internal/event", { method: "POST" }));
+
+  let calls = 0;
+  let lastCaptured = null;
+  await withMockFetch(async (url, init) => {
+    calls++; lastCaptured = init;
+    return new Response(null, { status: 204 });
+  }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z"); // reserves + tracked dispatch
+    await runCron(env, makeCtx(), "2026-09-20T00:18:00Z"); // still in-flight -> untracked, but STILL fires
+  });
+  assert.equal(calls, 2, "shadow must call GitHub on every single tick, tracked or not");
+  assert.ok(!JSON.parse(lastCaptured.body).inputs, "the second, untracked tick must fall back to the legacy no-inputs call shape");
+});
+
+// ---------------------------------------------------------------- fix round: coordinator fail-open (blocker 4)
+function makeThrowingCoordinatorNamespace() {
+  return { idFromName: (n) => n, get: () => ({ fetch: async () => { throw new Error("DO unavailable"); } }) };
+}
+function makeMalformedCoordinatorNamespace() {
+  return { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("not json", { status: 200 }) }) };
+}
+
+await check("shadow + coordinator throws -> GitHub is still dispatched exactly once (fail-open)", async () => {
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
+  let calls = 0;
+  await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  assert.equal(calls, 1, "a broken Coordinator must never prevent the legacy unconditional dispatch");
+});
+
+await check("active + coordinator throws -> GitHub is still dispatched exactly once (fail-open, refresh must not silently stop)", async () => {
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
+  let calls = 0;
+  await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  assert.equal(calls, 1, "active mode must also fail open to the unconditional dispatch when the Coordinator is unavailable");
+});
+
+await check("coordinator returns a malformed (non-JSON/shape-invalid) response -> safe fallback dispatch, no thrown exception", async () => {
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeMalformedCoordinatorNamespace() };
+  let calls = 0;
+  let threw = false;
+  await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
+    try {
+      await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+    } catch (e) {
+      threw = true;
+    }
+  });
+  assert.equal(threw, false, "scheduled() must never let a Coordinator response-shape problem escape as an unhandled exception");
+  assert.equal(calls, 1, "must still have fallen back to the unconditional dispatch");
+});
+
+await check("fallback GitHub dispatch failure (coordinator down AND GitHub API fails) is observable, not a thrown exception", async () => {
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
+  let threw = false;
+  await withMockFetch(async () => new Response("server error", { status: 500 }), async () => {
+    try {
+      await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+    } catch (e) {
+      threw = true;
+    }
+  });
+  assert.equal(threw, false, "a doubly-failed tick (coordinator down + GitHub API down) must not throw — it's logged and left to the next tick");
+});
+
 console.log(`\n${passed} BI refresh cron-gating checks passed`);

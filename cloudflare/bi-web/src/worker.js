@@ -296,9 +296,14 @@ async function handleBeds24BookingWebhook(request, env) {
   return jsonResponse({ ok: true });
 }
 
-function authenticateOpsRequest(request, env) {
-  const configuredSecret = env.BI_REFRESH_CALLBACK_SECRET;
-  if (!configuredSecret) return { ok: false, status: 500, error: "callback_secret_not_configured" };
+// 権限分離（fix round blocker 7）: BI_REFRESH_CALLBACK_SECRETはGitHub
+// Actionsのcompletion callback専用。status/mode/forceはBI_REFRESH_OPS_SECRET
+// という別のCloudflare Worker Secretで認証する — GitHub Actions Secretsには
+// この値を一切持たせない。GitHub Actionsのworkflowログ・repo設定が万一漏れても、
+// mode切替やmanual forceといった運用操作までは行えないようにする境界。
+function authenticateWithSecret(request, env, secretName) {
+  const configuredSecret = env[secretName];
+  if (!configuredSecret) return { ok: false, status: 500, error: `${secretName.toLowerCase()}_not_configured` };
   const authHeader = request.headers.get("Authorization") || "";
   const match = /^Bearer (.+)$/.exec(authHeader);
   const supplied = match ? match[1] : "";
@@ -306,15 +311,24 @@ function authenticateOpsRequest(request, env) {
   return { ok: true };
 }
 
+function authenticateCallbackRequest(request, env) {
+  return authenticateWithSecret(request, env, "BI_REFRESH_CALLBACK_SECRET");
+}
+
+function authenticateOpsRequest(request, env) {
+  return authenticateWithSecret(request, env, "BI_REFRESH_OPS_SECRET");
+}
+
 // GitHub Actions completion callback（refresh-bi-r2.ymlの最終step、
 // `if: always()`で成功/失敗どちらでも送信される）。PIIはこの経路に一切
 // 乗らない（GitHub Actions側はdispatch_id/target_seq/status/reasonしか
-// 知らない）。
+// 知らない）。認証は BI_REFRESH_CALLBACK_SECRET のみ（status/mode/force用の
+// BI_REFRESH_OPS_SECRETとは別— GitHub Actionsにはops secretを渡さない）。
 async function handleBiRefreshComplete(request, env) {
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
   }
-  const auth = authenticateOpsRequest(request, env);
+  const auth = authenticateCallbackRequest(request, env);
   if (!auth.ok) return jsonResponse({ ok: false, error: auth.error }, auth.status);
 
   const contentLength = Number(request.headers.get("content-length") || "0");
@@ -378,8 +392,9 @@ async function handleBiRefreshStatus(request, env) {
 }
 
 // 運用者用: mode切替（shadow/active）・手動force。どちらも再deploy不要で
-// DO storageへ即時反映される。BI_REFRESH_CALLBACK_SECRETで認証（新規secret
-// を増やさず、既存の「内部運用系」secretを使い回す設計判断 — PR本文参照）。
+// DO storageへ即時反映される。BI_REFRESH_OPS_SECRETで認証
+// （BI_REFRESH_CALLBACK_SECRETとは別のCloudflare Worker Secret。GitHub
+// Actionsにはこの値を一切渡さない — fix round blocker 7）。
 async function handleBiRefreshMode(request, env) {
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
@@ -488,55 +503,93 @@ export default {
   },
 };
 
-// shadow: Coordinatorの判定はログするだけで、従来通り無条件にdispatchする
-// （新plannerを本番トラフィックで検証するだけ — PR本文 Stage B参照）。
-// active: Coordinatorがreserveした場合のみ、dispatch_id/target_seq/reasonを
-// inputsに載せてdispatchする。GitHub API呼び出し自体が失敗した場合は
+// shadow: 従来通り15分ごとに必ずGitHub Actionsをdispatchする — ここは
+// 一切変えない（zero production behavior change）。ただしCoordinatorは
+// shadowでも常にreserveする（handleEvaluate参照）ので、dispatch_id/
+// target_seq/reasonをinputsとして渡し、completion callbackで
+// last_completed_seq/last_full_reconcile_at/last_successful_jst_dateを
+// 正しく前進させられるようにする。これが無いと、shadow実行が実際には
+// 成功していてもCoordinatorの状態には一切反映されず、shadow planner
+// observationの「今はcleanなはず」という判定が永久にstaleなままになる
+// （fix round blocker 1）。
+// active: Coordinatorがreserveした場合のみdispatchする（Actions起動数の
+// 実削減はここ）。
+// どちらのモードでも、GitHub API呼び出し自体が失敗した場合は
 // reservationをCoordinatorへ返却し（次回Cronで再試行可能にする）、
 // 成功扱いにしない。
+//
+// fail-open（blocker 4）: Coordinator自体が例外を投げる・不正なレスポンス
+// を返す等、評価そのものが失敗した場合は、modeに関わらず従来通りの
+// 無条件dispatchへ必ずfallbackする。「取りこぼし禁止 >
+// 重複実行回避」の原則どおり、Coordinator障害でBI更新が止まる方が
+// Actions実行数が多少増えるより重大なため。
 async function runScheduledEvaluation(event, env) {
   const scheduledTime = new Date(event.scheduledTime);
   const nowIso = scheduledTime.toISOString();
   const todayJstStr = todayJst(scheduledTime);
 
-  const { body: decision } = await coordinatorPost(env, "/internal/evaluate", {
-    now_iso: nowIso, today_jst: todayJstStr,
-  });
-
-  if (decision.mode !== MODE_ACTIVE) {
-    console.log(`bi_shadow_evaluate cron=${event.cron} would_dispatch=${decision.would_dispatch} `
-      + `reason=${decision.reason} event_seq=${decision.event_seq} last_completed_seq=${decision.last_completed_seq}`);
+  let decision;
+  try {
+    const { status, body } = await coordinatorPost(env, "/internal/evaluate", {
+      now_iso: nowIso, today_jst: todayJstStr,
+    });
+    if (status !== 200 || !body || typeof body.mode !== "string") {
+      throw new Error(`unexpected coordinator response status=${status}`);
+    }
+    decision = body;
+  } catch (e) {
+    console.log(`bi_coordinator_error_fallback_dispatch cron=${event.cron} `
+      + `error=${e instanceof Error ? e.message : String(e)}`);
     const result = await dispatchBiRefreshWorkflow(env);
     if (result.ok) {
-      console.log(`bi_dispatch_ok cron=${event.cron} scheduled_time=${nowIso} mode=shadow`);
+      console.log(`bi_dispatch_ok cron=${event.cron} scheduled_time=${nowIso} mode=fallback`);
     } else {
-      console.log(`bi_dispatch_failed cron=${event.cron} status=${result.status} error=${result.error} mode=shadow`);
+      console.log(`bi_dispatch_failed cron=${event.cron} status=${result.status} error=${result.error} mode=fallback`);
     }
     return;
   }
 
-  if (!decision.would_dispatch) {
+  const isShadow = decision.mode !== MODE_ACTIVE;
+
+  if (isShadow) {
+    console.log(`bi_shadow_evaluate cron=${event.cron} would_dispatch=${decision.would_dispatch} `
+      + `reason=${decision.reason} event_seq=${decision.event_seq} last_completed_seq=${decision.last_completed_seq}`);
+  } else if (!decision.would_dispatch) {
     console.log(`bi_active_skip cron=${event.cron} reason=${decision.reason || "clean"} `
       + `event_seq=${decision.event_seq} last_completed_seq=${decision.last_completed_seq}`);
     return;
   }
 
-  const inputs = {
+  // Reached only when: shadow (always dispatches), or active with
+  // would_dispatch===true. Either way, the Coordinator has already
+  // reserved a dispatch_id/target_seq for us (handleEvaluate's
+  // shouldReserve covers both cases) unless something else raced in
+  // between — guard defensively rather than assume.
+  const inputs = decision.dispatch_id ? {
     dispatch_id: decision.dispatch_id,
     target_seq: String(decision.target_seq),
-    reason: decision.reason,
-  };
+    reason: decision.dispatch_reason || decision.reason || "shadow_unconditional",
+  } : undefined;
+
+  const modeLabel = isShadow ? "shadow" : "active";
   const result = await dispatchBiRefreshWorkflow(env, inputs);
   if (result.ok) {
-    console.log(`bi_active_dispatch_ok cron=${event.cron} dispatch_id=${decision.dispatch_id} `
-      + `target_seq=${decision.target_seq} reason=${decision.reason}`);
+    console.log(`bi_dispatch_ok cron=${event.cron} mode=${modeLabel} dispatch_id=${decision.dispatch_id || "(none)"} `
+      + `target_seq=${decision.target_seq ?? "(none)"} reason=${inputs ? inputs.reason : "(none)"}`);
     return;
   }
-  console.log(`bi_active_dispatch_failed cron=${event.cron} dispatch_id=${decision.dispatch_id} `
+  console.log(`bi_dispatch_failed cron=${event.cron} mode=${modeLabel} dispatch_id=${decision.dispatch_id || "(none)"} `
     + `status=${result.status} error=${result.error}`);
-  // GitHub側のdispatch自体が失敗したので、reservationしたin-flightを
-  // 成功扱いにしない — Coordinatorへ返却して次回Cronで再試行可能にする。
-  await coordinatorPost(env, "/internal/dispatch-failure", { dispatch_id: decision.dispatch_id });
+  if (decision.dispatch_id) {
+    // GitHub側のdispatch自体が失敗したので、reservationしたin-flightを
+    // 成功扱いにしない — Coordinatorへ返却して次回Cronで再試行可能にする
+    // （manual forceだった場合はCoordinator側でre-armされる）。
+    try {
+      await coordinatorPost(env, "/internal/dispatch-failure", { dispatch_id: decision.dispatch_id });
+    } catch (e) {
+      console.log(`bi_dispatch_failure_report_error cron=${event.cron} error=${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 }
 
 export { dispatchBiRefreshWorkflow, BiRefreshCoordinator };
