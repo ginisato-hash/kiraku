@@ -22,7 +22,7 @@ import { BiRefreshCoordinator } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
 import {
-  COORDINATOR_INSTANCE_NAME, MAX_WEBHOOK_BODY_BYTES, MODE_ACTIVE,
+  COORDINATOR_INSTANCE_NAME, MAX_WEBHOOK_BODY_BYTES, MODE_ACTIVE, MODE_SHADOW,
   envKiirakuPropertyId,
 } from "./biRefreshConfig.js";
 
@@ -503,6 +503,62 @@ export default {
   },
 };
 
+// Coordinator response contract validation (fix round: strict contract).
+// The previous fail-open check only confirmed `status===200 && typeof
+// body.mode === "string"` — that is NOT enough. A response like
+// `{"mode":"active"}` (missing would_dispatch entirely) passed that check,
+// then `!decision.would_dispatch` evaluated true (undefined is falsy),
+// silently taking the "active mode, nothing to do" early-return path and
+// stopping BI refresh entirely on a Coordinator bug/partial-response —
+// exactly the kind of failure fail-open exists to prevent. This validates
+// the full shape BEFORE any dispatch decision is made from it; any
+// violation throws, which the caller's try/catch turns into the same
+// legacy unconditional dispatch fallback as a hard Coordinator error.
+function validateCoordinatorDecision(body) {
+  if (!body || typeof body !== "object") {
+    throw new Error("coordinator response is not an object");
+  }
+  const { mode, would_dispatch: wouldDispatch, event_seq: eventSeq, last_completed_seq: lastCompletedSeq } = body;
+  if (mode !== MODE_SHADOW && mode !== MODE_ACTIVE) {
+    throw new Error(`coordinator response has an unsupported mode: ${mode}`);
+  }
+  if (typeof wouldDispatch !== "boolean") {
+    throw new Error("coordinator response would_dispatch is not a boolean");
+  }
+  if (!Number.isInteger(eventSeq) || eventSeq < 0) {
+    throw new Error("coordinator response event_seq is not a non-negative integer");
+  }
+  if (!Number.isInteger(lastCompletedSeq) || lastCompletedSeq < 0) {
+    throw new Error("coordinator response last_completed_seq is not a non-negative integer");
+  }
+
+  // dispatch_id present == the Coordinator reserved a tracked dispatch for
+  // us (shadow always does this unless already in-flight; active does it
+  // only when would_dispatch is true). Whenever it's present, its whole
+  // tracking triple must be well-formed.
+  const hasTrackedDispatch = body.dispatch_id != null;
+  if (hasTrackedDispatch) {
+    if (typeof body.dispatch_id !== "string" || !body.dispatch_id) {
+      throw new Error("coordinator response dispatch_id is present but not a non-empty string");
+    }
+    if (!Number.isInteger(body.target_seq) || body.target_seq < 0) {
+      throw new Error("coordinator response target_seq is not a non-negative integer");
+    }
+    const dispatchReason = body.dispatch_reason || body.reason;
+    if (typeof dispatchReason !== "string" || !dispatchReason) {
+      throw new Error("coordinator response has a tracked dispatch but no usable reason string");
+    }
+  }
+
+  // The exact bug this validation exists to catch: active mode saying
+  // "dispatch" without having actually reserved anything to dispatch with.
+  if (mode === MODE_ACTIVE && wouldDispatch && !hasTrackedDispatch) {
+    throw new Error("coordinator response: active mode would_dispatch=true but no dispatch_id was reserved");
+  }
+
+  return body;
+}
+
 // shadow: 従来通り15分ごとに必ずGitHub Actionsをdispatchする — ここは
 // 一切変えない（zero production behavior change）。ただしCoordinatorは
 // shadowでも常にreserveする（handleEvaluate参照）ので、dispatch_id/
@@ -533,10 +589,10 @@ async function runScheduledEvaluation(event, env) {
     const { status, body } = await coordinatorPost(env, "/internal/evaluate", {
       now_iso: nowIso, today_jst: todayJstStr,
     });
-    if (status !== 200 || !body || typeof body.mode !== "string") {
+    if (status !== 200) {
       throw new Error(`unexpected coordinator response status=${status}`);
     }
-    decision = body;
+    decision = validateCoordinatorDecision(body);
   } catch (e) {
     console.log(`bi_coordinator_error_fallback_dispatch cron=${event.cron} `
       + `error=${e instanceof Error ? e.message : String(e)}`);

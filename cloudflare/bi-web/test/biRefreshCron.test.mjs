@@ -241,4 +241,98 @@ await check("fallback GitHub dispatch failure (coordinator down AND GitHub API f
   assert.equal(threw, false, "a doubly-failed tick (coordinator down + GitHub API down) must not throw — it's logged and left to the next tick");
 });
 
+// ---------------------------------------------------------------- fix round 2: strict coordinator response contract
+// The previous fail-open check only confirmed status===200 and
+// typeof body.mode==="string" — {"mode":"active"} alone satisfied that,
+// then `!decision.would_dispatch` (undefined -> falsy -> true) took the
+// "nothing to do" early return in active mode, silently stopping BI
+// refresh on a Coordinator bug. These prove every such partial/malformed
+// response now falls back to the unconditional dispatch instead.
+function makeFixedJsonCoordinatorNamespace(body, status = 200) {
+  return {
+    idFromName: (n) => n,
+    get: () => ({ fetch: async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }) }),
+  };
+}
+
+async function assertFallsBackToUnconditionalDispatch(name, body) {
+  await check(name, async () => {
+    const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeFixedJsonCoordinatorNamespace(body) };
+    let captured = null;
+    await withMockFetch(async (url, init) => { captured = init; return new Response(null, { status: 204 }); }, async () => {
+      await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+    });
+    assert.ok(captured, "must still have dispatched");
+    assert.ok(!JSON.parse(captured.body).inputs, "a rejected/invalid decision must dispatch with the legacy no-inputs shape, not made-up inputs");
+  });
+}
+
+await assertFallsBackToUnconditionalDispatch(
+  "200 + {mode:active} (missing would_dispatch) -> unconditional fallback dispatch, not a silent skip",
+  { mode: "active" },
+);
+
+await assertFallsBackToUnconditionalDispatch(
+  "200 + {mode:active, would_dispatch:true} (missing event_seq/last_completed_seq/dispatch_id) -> unconditional fallback dispatch",
+  { mode: "active", would_dispatch: true },
+);
+
+await assertFallsBackToUnconditionalDispatch(
+  "200 + {mode:turbo, would_dispatch:false} (unsupported mode) -> unconditional fallback dispatch",
+  { mode: "turbo", would_dispatch: false },
+);
+
+await assertFallsBackToUnconditionalDispatch(
+  "200 + active dispatch decision missing dispatch_id -> unconditional fallback dispatch",
+  { mode: "active", would_dispatch: true, reason: "booking_webhook", event_seq: 5, last_completed_seq: 4 },
+);
+
+await assertFallsBackToUnconditionalDispatch(
+  "200 + active dispatch decision with an invalid target_seq -> unconditional fallback dispatch",
+  {
+    mode: "active", would_dispatch: true, reason: "booking_webhook", event_seq: 5, last_completed_seq: 4,
+    dispatch_id: "abc-123", target_seq: "not-a-number",
+  },
+);
+
+// Valid decisions must NOT be affected by the stricter contract — these
+// mirror (and re-confirm) the existing "active + clean", "active + a
+// pending webhook" and "shadow tracked dispatch" cases above, this time
+// specifically to prove the new validateCoordinatorDecision() doesn't
+// reject well-formed responses.
+await check("a well-formed active+clean decision is still accepted (not rejected by the stricter contract)", async () => {
+  const body = { mode: "active", would_dispatch: false, reason: null, event_seq: 3, last_completed_seq: 3, dispatch_id: null, target_seq: null, dispatch_reason: null };
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeFixedJsonCoordinatorNamespace(body) };
+  let calls = 0;
+  await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  assert.equal(calls, 0, "a genuinely clean, well-formed active decision must still result in zero GitHub API calls");
+});
+
+await check("a well-formed active reservation is still accepted and dispatched with its exact inputs", async () => {
+  const body = { mode: "active", would_dispatch: true, reason: "booking_webhook", event_seq: 5, last_completed_seq: 4, dispatch_id: "real-dispatch-id", target_seq: 5, dispatch_reason: "booking_webhook" };
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeFixedJsonCoordinatorNamespace(body) };
+  let captured = null;
+  await withMockFetch(async (url, init) => { captured = init; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  const parsed = JSON.parse(captured.body);
+  assert.equal(parsed.inputs.dispatch_id, "real-dispatch-id");
+  assert.equal(parsed.inputs.target_seq, "5");
+  assert.equal(parsed.inputs.reason, "booking_webhook");
+});
+
+await check("a well-formed shadow reservation is still accepted and dispatched with its exact inputs", async () => {
+  const body = { mode: "shadow", would_dispatch: false, reason: null, event_seq: 2, last_completed_seq: 2, dispatch_id: "shadow-dispatch-id", target_seq: 2, dispatch_reason: "shadow_unconditional" };
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeFixedJsonCoordinatorNamespace(body) };
+  let captured = null;
+  await withMockFetch(async (url, init) => { captured = init; return new Response(null, { status: 204 }); }, async () => {
+    await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
+  });
+  const parsed = JSON.parse(captured.body);
+  assert.equal(parsed.inputs.dispatch_id, "shadow-dispatch-id");
+  assert.equal(parsed.inputs.reason, "shadow_unconditional");
+});
+
 console.log(`\n${passed} BI refresh cron-gating checks passed`);
