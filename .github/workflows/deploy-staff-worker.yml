@@ -11,7 +11,13 @@ on:
     branches:
       - main
     paths:
-      - "cloudflare/staff-ops/**"
+      # production-affecting files only — test/**やREADME等の変更ではdeployしない
+      # (KIRAKU BI PHASE 2: test-only変更でproduction Worker deployが走っていた不具合の修正)。
+      - "cloudflare/staff-ops/src/**"
+      - "cloudflare/staff-ops/public/**"
+      - "cloudflare/staff-ops/wrangler.toml"
+      - "cloudflare/staff-ops/package.json"
+      - "cloudflare/staff-ops/package-lock.json"
       - ".github/workflows/deploy-staff-worker.yml"
   workflow_dispatch:
 
