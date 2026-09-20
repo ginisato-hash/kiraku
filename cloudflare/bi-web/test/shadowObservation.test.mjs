@@ -11,6 +11,11 @@
 // neither component reports "error". "no_baseline"/"skipped" never count,
 // and a real planner reason (e.g. booking_webhook) is not a "skip" cycle at
 // all, so a change there is expected behavior, not a false negative.
+//
+// Every /internal/observation body below carries a dispatch_id — it is a
+// required idempotency key (independent review blocker 4): a GitHub Actions
+// rerun/retry of the same coordinator-tracked dispatch must not double-count
+// the same 15-minute cycle.
 import assert from "node:assert";
 import { BiRefreshCoordinator } from "../src/biRefreshCoordinator.js";
 import worker from "../src/worker.js";
@@ -25,7 +30,12 @@ function makeDoStorage() {
 }
 
 function makeCoordinator(env = {}) {
-  return new BiRefreshCoordinator({ storage: makeDoStorage() }, env);
+  return { coord: new BiRefreshCoordinator({ storage: makeDoStorage() }, env) };
+}
+
+function makeCoordinatorWithStorage(env = {}) {
+  const storage = makeDoStorage();
+  return { coord: new BiRefreshCoordinator({ storage }, env), storage };
 }
 
 async function post(coord, path, body) {
@@ -45,25 +55,34 @@ async function check(name, fn) { await fn(); passed++; console.log("ok -", name)
 
 // ================================================================== DO-level
 
-await check("invalid body (missing reason/statuses) is rejected with 400, no counters move", async () => {
-  const coord = makeCoordinator();
+await check("invalid body (missing dispatch_id/reason/statuses) is rejected with 400, no counters move", async () => {
+  const { coord } = makeCoordinator();
   const r1 = await post(coord, "/internal/observation", {});
   assert.equal(r1.status, 400);
-  const r2 = await post(coord, "/internal/observation", { reason: "shadow_unconditional", bi_status: "unchanged" });
+  const r2 = await post(coord, "/internal/observation", {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "unchanged",
+  });
   assert.equal(r2.status, 400, "missing staff_ops_status");
-  const r3 = await post(coord, "/internal/observation", { reason: "shadow_unconditional", bi_status: "bogus", staff_ops_status: "unchanged" });
+  const r3 = await post(coord, "/internal/observation", {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "bogus", staff_ops_status: "unchanged",
+  });
   assert.equal(r3.status, 400, "unrecognized status enum value");
+  const r4 = await post(coord, "/internal/observation", {
+    reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
+  });
+  assert.equal(r4.status, 400, "missing dispatch_id");
   const s = await get(coord, "/internal/status");
   assert.equal(s.body.shadow_observation.total, 0);
 });
 
 await check("a shadow_unconditional cycle with nothing changed only bumps total + planner_skip_total", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
   });
   assert.equal(r.status, 200);
   assert.equal(r.body.false_negative, false);
+  assert.equal(r.body.duplicate, false);
   const s = await get(coord, "/internal/status");
   assert.equal(s.body.shadow_observation.total, 1);
   assert.equal(s.body.shadow_observation.planner_skip_total, 1);
@@ -72,9 +91,9 @@ await check("a shadow_unconditional cycle with nothing changed only bumps total 
 });
 
 await check("a real planner reason (booking_webhook) with a change is NOT a false negative — that's expected, not silent", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "booking_webhook", bi_status: "changed", staff_ops_status: "unchanged",
+    dispatch_id: "d1", reason: "booking_webhook", bi_status: "changed", staff_ops_status: "unchanged",
   });
   assert.equal(r.body.false_negative, false);
   const s = await get(coord, "/internal/status");
@@ -84,9 +103,9 @@ await check("a real planner reason (booking_webhook) with a change is NOT a fals
 });
 
 await check("shadow_unconditional + BI changed => BI false negative counted", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
   });
   assert.equal(r.body.false_negative, true);
   const s = await get(coord, "/internal/status");
@@ -97,9 +116,9 @@ await check("shadow_unconditional + BI changed => BI false negative counted", as
 });
 
 await check("shadow_unconditional + Staff Ops changed => Staff Ops false negative counted", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "changed",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "changed",
   });
   assert.equal(r.body.false_negative, true);
   const s = await get(coord, "/internal/status");
@@ -109,9 +128,9 @@ await check("shadow_unconditional + Staff Ops changed => Staff Ops false negativ
 });
 
 await check("shadow_unconditional + both changed => one observation, correct category counters (not double-counted)", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed",
   });
   const s = await get(coord, "/internal/status");
   assert.equal(s.body.shadow_observation.total, 1);
@@ -121,9 +140,9 @@ await check("shadow_unconditional + both changed => one observation, correct cat
 });
 
 await check("no_baseline never counts as a false negative even on a shadow_unconditional cycle", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "no_baseline", staff_ops_status: "no_baseline",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "no_baseline", staff_ops_status: "no_baseline",
   });
   assert.equal(r.body.false_negative, false);
   const s = await get(coord, "/internal/status");
@@ -134,9 +153,9 @@ await check("no_baseline never counts as a false negative even on a shadow_uncon
 });
 
 await check("skipped (gate closed) never counts as a false negative", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "skipped",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "skipped",
   });
   assert.equal(r.body.false_negative, false);
   const s = await get(coord, "/internal/status");
@@ -144,9 +163,9 @@ await check("skipped (gate closed) never counts as a false negative", async () =
 });
 
 await check("an observer error is counted separately and never treated as a false negative, even if the other component changed", async () => {
-  const coord = makeCoordinator();
+  const { coord } = makeCoordinator();
   const r = await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "error", staff_ops_status: "changed",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "error", staff_ops_status: "changed",
   });
   assert.equal(r.body.false_negative, false, "an error means we don't actually know — must not claim a false negative");
   const s = await get(coord, "/internal/status");
@@ -158,16 +177,179 @@ await check("an observer error is counted separately and never treated as a fals
 });
 
 await check("observation reporting never touches dispatch-tracking state (event_seq/in_flight/last_completed_seq)", async () => {
-  const coord = makeCoordinator({ BI_REFRESH_DEFAULT_MODE: "active" });
+  const { coord } = makeCoordinator({ BI_REFRESH_DEFAULT_MODE: "active" });
   await post(coord, "/internal/event", {}); // event_seq -> 1
   const before = await get(coord, "/internal/status");
   await post(coord, "/internal/observation", {
-    reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed",
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed",
   });
   const after = await get(coord, "/internal/status");
   assert.equal(after.body.event_seq, before.body.event_seq);
   assert.equal(after.body.last_completed_seq, before.body.last_completed_seq);
   assert.deepEqual(after.body.in_flight, before.body.in_flight);
+});
+
+// -------------------------------------------------------- idempotency (blocker 4)
+
+await check("duplicate dispatch_id: total is not double-counted, and a false negative is not double-counted either", async () => {
+  const { coord } = makeCoordinator();
+  const first = await post(coord, "/internal/observation", {
+    dispatch_id: "dispatch-A", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+  });
+  assert.equal(first.body.duplicate, false);
+  assert.equal(first.body.false_negative, true);
+  let s = await get(coord, "/internal/status");
+  assert.equal(s.body.shadow_observation.total, 1);
+  assert.equal(s.body.shadow_observation.skip_any_changed_total, 1);
+
+  // Same dispatch_id reported again (GitHub Actions rerun/retry): no-op.
+  const dup = await post(coord, "/internal/observation", {
+    dispatch_id: "dispatch-A", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+  });
+  assert.equal(dup.status, 200);
+  assert.equal(dup.body.duplicate, true);
+  assert.equal(dup.body.false_negative, false, "a duplicate never re-reports a false negative");
+  s = await get(coord, "/internal/status");
+  assert.equal(s.body.shadow_observation.total, 1, "duplicate must not bump total");
+  assert.equal(s.body.shadow_observation.skip_any_changed_total, 1, "duplicate must not double-count the false negative");
+
+  // A genuinely new dispatch_id (dispatch-B) counts as a new observation.
+  const second = await post(coord, "/internal/observation", {
+    dispatch_id: "dispatch-B", reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
+  });
+  assert.equal(second.body.duplicate, false);
+  s = await get(coord, "/internal/status");
+  assert.equal(s.body.shadow_observation.total, 2);
+});
+
+await check("duplicate observation report never touches dispatch-tracking or reason counters", async () => {
+  const { coord } = makeCoordinator();
+  await post(coord, "/internal/observation", {
+    dispatch_id: "dispatch-X", reason: "booking_webhook", bi_status: "unchanged", staff_ops_status: "unchanged",
+  });
+  const before = await get(coord, "/internal/status");
+  await post(coord, "/internal/observation", {
+    dispatch_id: "dispatch-X", reason: "booking_webhook", bi_status: "unchanged", staff_ops_status: "unchanged",
+  });
+  const after = await get(coord, "/internal/status");
+  assert.deepEqual(after.body.shadow_observation.by_reason, before.body.shadow_observation.by_reason);
+  assert.equal(after.body.shadow_observation.total, before.body.shadow_observation.total);
+});
+
+// -------------------------------------------------------- reason counters (completeness)
+
+await check("reason counters break down observations by planner reason, including an unknown reason bucketed as other", async () => {
+  const { coord } = makeCoordinator();
+  const reasons = [
+    ["shadow_unconditional", "dispatch-1"],
+    ["booking_webhook", "dispatch-2"],
+    ["full_reconciliation", "dispatch-3"],
+    ["jst_date_rollover", "dispatch-4"],
+    ["manual_force", "dispatch-5"],
+    ["some_future_reason_not_in_the_known_set", "dispatch-6"],
+  ];
+  for (const [reason, dispatchId] of reasons) {
+    const r = await post(coord, "/internal/observation", {
+      dispatch_id: dispatchId, reason, bi_status: "unchanged", staff_ops_status: "unchanged",
+    });
+    assert.equal(r.status, 200, `reason=${reason} should be accepted, not rejected`);
+  }
+  const s = await get(coord, "/internal/status");
+  assert.equal(s.body.shadow_observation.total, 6);
+  assert.equal(s.body.shadow_observation.by_reason.shadow_unconditional, 1);
+  assert.equal(s.body.shadow_observation.by_reason.booking_webhook, 1);
+  assert.equal(s.body.shadow_observation.by_reason.full_reconciliation, 1);
+  assert.equal(s.body.shadow_observation.by_reason.jst_date_rollover, 1);
+  assert.equal(s.body.shadow_observation.by_reason.manual_force, 1);
+  assert.equal(s.body.shadow_observation.by_reason.other, 1, "an unrecognized reason must not be silently dropped");
+});
+
+// -------------------------------------------------------- Phase 1 state upgrade (blocker 1)
+
+// A Phase-1-shaped stored state has none of the Phase-2 fields at all (this
+// is exactly what production's existing BiRefreshCoordinator DO storage
+// looks like today). #load() must hydrate it against current defaults
+// without ever losing an already-stored Phase-1 value.
+function phase1ShapedState() {
+  return {
+    event_seq: 7,
+    last_completed_seq: 5,
+    in_flight_dispatch_id: "phase1-in-flight",
+    in_flight_target_seq: 6,
+    in_flight_started_at: "2026-09-19T00:00:00.000Z",
+    in_flight_reason: "booking_webhook",
+    last_webhook_at: "2026-09-19T00:00:00.000Z",
+    last_dispatch_at: "2026-09-19T00:00:00.000Z",
+    last_success_at: "2026-09-18T23:00:00.000Z",
+    last_full_reconcile_at: "2026-09-18T20:00:00.000Z",
+    last_successful_jst_date: "2026-09-19",
+    consecutive_failures: 2,
+    last_failure_at: "2026-09-18T22:00:00.000Z",
+    mode: "shadow",
+    force_dispatch_requested: true,
+    // No shadow_observations_total / shadow_reason_*_total /
+    // shadow_observed_dispatch_ids at all — this is the point of the test.
+  };
+}
+
+await check("Phase 1 stored state upgrade: /status returns valid zeros (not null/undefined/NaN) before any Phase 2 observation", async () => {
+  const { coord, storage } = makeCoordinatorWithStorage();
+  await storage.put("state", phase1ShapedState());
+
+  const s = await get(coord, "/internal/status");
+  assert.equal(s.status, 200);
+  const so = s.body.shadow_observation;
+  for (const key of ["total", "planner_skip_total", "skip_bi_changed_total",
+    "skip_staff_ops_changed_total", "skip_any_changed_total", "errors_total"]) {
+    assert.equal(so[key], 0, `${key} must be a valid zero on an upgraded Phase 1 state, got ${so[key]}`);
+    assert.ok(Number.isFinite(so[key]), `${key} must not be NaN`);
+  }
+  for (const key of Object.keys(so.by_reason)) {
+    assert.equal(so.by_reason[key], 0, `by_reason.${key} must be a valid zero, got ${so.by_reason[key]}`);
+  }
+  assert.equal(so.last_observation_at, null);
+  assert.equal(so.last_observation_error_at, null);
+  assert.equal(so.last_false_negative_at, null);
+
+  // Phase 1 fields are exactly preserved, untouched by the hydration.
+  assert.equal(s.body.event_seq, 7);
+  assert.equal(s.body.last_completed_seq, 5);
+  assert.equal(s.body.consecutive_failures, 2);
+  assert.equal(s.body.force_dispatch_requested, true);
+  assert.equal(s.body.in_flight.dispatch_id, "phase1-in-flight");
+  assert.equal(s.body.in_flight.target_seq, 6);
+  assert.equal(s.body.in_flight.reason, "booking_webhook");
+  assert.equal(s.body.last_success_at, "2026-09-18T23:00:00.000Z");
+  assert.equal(s.body.last_full_reconcile_at, "2026-09-18T20:00:00.000Z");
+  assert.equal(s.body.last_successful_jst_date, "2026-09-19");
+});
+
+await check("Phase 1 stored state upgrade: the first Phase 2 observation on an upgraded state becomes a valid integer, not NaN", async () => {
+  const { coord, storage } = makeCoordinatorWithStorage();
+  await storage.put("state", phase1ShapedState());
+
+  const r = await post(coord, "/internal/observation", {
+    dispatch_id: "post-upgrade-dispatch", reason: "shadow_unconditional",
+    bi_status: "changed", staff_ops_status: "unchanged",
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.false_negative, true);
+
+  const s = await get(coord, "/internal/status");
+  const so = s.body.shadow_observation;
+  assert.equal(so.total, 1);
+  assert.ok(Number.isFinite(so.total), "total must not be NaN after the first observation on an upgraded state");
+  assert.equal(so.planner_skip_total, 1);
+  assert.equal(so.skip_bi_changed_total, 1);
+  assert.equal(so.skip_any_changed_total, 1);
+  assert.equal(so.by_reason.shadow_unconditional, 1);
+
+  // Phase 1 dispatch-tracking fields remain exactly as they were —
+  // the observation endpoint never touches them (see the earlier
+  // "observation reporting never touches dispatch-tracking state" check).
+  assert.equal(s.body.event_seq, 7);
+  assert.equal(s.body.last_completed_seq, 5);
+  assert.equal(s.body.in_flight.dispatch_id, "phase1-in-flight");
 });
 
 // ================================================================ Worker-level
@@ -204,7 +386,9 @@ await check("shadow-observation endpoint requires the callback secret (missing/w
 
 await check("the ops secret does NOT authenticate the shadow-observation endpoint (privilege separation)", async () => {
   const env = makeEnv();
-  const r = await observe(env, { reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged" }, {
+  const r = await observe(env, {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
+  }, {
     headers: { Authorization: `Bearer ${OPS_SECRET}` },
   });
   assert.equal(r.status, 401);
@@ -212,28 +396,63 @@ await check("the ops secret does NOT authenticate the shadow-observation endpoin
 
 await check("a valid observation report is accepted and reflected in /status", async () => {
   const env = makeEnv();
-  const r = await observe(env, { reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged" });
+  const r = await observe(env, {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+  });
   assert.equal(r.status, 200);
-  assert.equal((await r.json()).false_negative, true);
+  const rBody = await r.json();
+  assert.equal(rBody.false_negative, true);
+  assert.equal(rBody.duplicate, false);
   const s = await status(env);
   assert.equal(s.body.shadow_observation.total, 1);
   assert.equal(s.body.shadow_observation.skip_bi_changed_total, 1);
 });
 
+await check("a duplicate observation report through the Worker route is a no-op", async () => {
+  const env = makeEnv();
+  await observe(env, {
+    dispatch_id: "dup-d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+  });
+  const r2 = await observe(env, {
+    dispatch_id: "dup-d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "unchanged",
+  });
+  assert.equal(r2.status, 200);
+  const r2Body = await r2.json();
+  assert.equal(r2Body.duplicate, true);
+  const s = await status(env);
+  assert.equal(s.body.shadow_observation.total, 1);
+});
+
 await check("malformed status values are rejected with 400 through the Worker route too", async () => {
   const env = makeEnv();
-  const r = await observe(env, { reason: "shadow_unconditional", bi_status: "totally_bogus", staff_ops_status: "unchanged" });
+  const r = await observe(env, {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "totally_bogus", staff_ops_status: "unchanged",
+  });
   assert.equal(r.status, 400);
 });
 
-await check("/internal/bi-refresh/status exposes shadow_observation but never a PII-shaped field", async () => {
+await check("a missing dispatch_id is rejected with 400 through the Worker route too", async () => {
   const env = makeEnv();
-  await observe(env, { reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed" });
+  const r = await observe(env, {
+    reason: "shadow_unconditional", bi_status: "unchanged", staff_ops_status: "unchanged",
+  });
+  assert.equal(r.status, 400);
+});
+
+await check("/internal/bi-refresh/status exposes shadow_observation (incl. by_reason) but never a PII-shaped field", async () => {
+  const env = makeEnv();
+  await observe(env, {
+    dispatch_id: "d1", reason: "shadow_unconditional", bi_status: "changed", staff_ops_status: "changed",
+  });
   const s = await status(env);
   assert.equal(s.status, 200);
   assert.ok(s.body.shadow_observation);
-  for (const key of ["total", "planner_skip_total", "skip_bi_changed_total", "skip_staff_ops_changed_total", "skip_any_changed_total", "errors_total", "last_observation_at", "last_false_negative_at"]) {
+  for (const key of ["total", "planner_skip_total", "skip_bi_changed_total", "skip_staff_ops_changed_total",
+    "skip_any_changed_total", "errors_total", "by_reason", "last_observation_at", "last_false_negative_at"]) {
     assert.ok(key in s.body.shadow_observation, `missing shadow_observation.${key}`);
+  }
+  for (const key of ["shadow_unconditional", "booking_webhook", "full_reconciliation", "jst_date_rollover", "manual_force", "other"]) {
+    assert.ok(key in s.body.shadow_observation.by_reason, `missing shadow_observation.by_reason.${key}`);
   }
   for (const forbidden of ["guest", "name", "phone", "email", "address", "comment", "secret", "token"]) {
     assert.ok(!JSON.stringify(s.body).toLowerCase().includes(forbidden), `status leaked a ${forbidden}-shaped field`);

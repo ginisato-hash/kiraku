@@ -68,8 +68,37 @@ function defaultState() {
     last_shadow_observation_at: null,
     last_shadow_observation_error_at: null,
     last_shadow_false_negative_at: null,
+    // Reason counters (PHASE 2 completeness requirement): per-unique-
+    // observation breakdown of `reason`, so the webhook-dirty denominator
+    // (booking_webhook) can be told apart from shadow_unconditional/
+    // full_reconciliation/jst_date_rollover/manual_force. A reason outside
+    // this known set still increments shadow_reason_other_total rather than
+    // being silently dropped (see REASON_COUNTER_KEYS below).
+    shadow_reason_shadow_unconditional_total: 0,
+    shadow_reason_booking_webhook_total: 0,
+    shadow_reason_full_reconciliation_total: 0,
+    shadow_reason_jst_date_rollover_total: 0,
+    shadow_reason_manual_force_total: 0,
+    shadow_reason_other_total: 0,
+    // Bounded recent-dispatch-id set for observation idempotency (Blocker 4).
+    // 96 dispatches/day at the 15-minute cadence, so 512 entries covers
+    // several days — comfortably more than the shadow-observation window.
+    // A plain array (not a Set) because DO storage serializes as JSON.
+    shadow_observed_dispatch_ids: [],
   };
 }
+
+const REASON_COUNTER_KEYS = {
+  shadow_unconditional: "shadow_reason_shadow_unconditional_total",
+  booking_webhook: "shadow_reason_booking_webhook_total",
+  full_reconciliation: "shadow_reason_full_reconciliation_total",
+  jst_date_rollover: "shadow_reason_jst_date_rollover_total",
+  manual_force: "shadow_reason_manual_force_total",
+};
+const REASON_OTHER_COUNTER_KEY = "shadow_reason_other_total";
+
+// Bound on the recent-dispatch-id set (see defaultState() comment).
+const MAX_OBSERVED_DISPATCH_IDS = 512;
 
 // Statuses the semantic observer (GitHub Actions step, via
 // yuge-finance shadow-observe-compare) may report per component. "skipped"
@@ -98,9 +127,21 @@ export class BiRefreshCoordinator {
     this.env = env;
   }
 
+  // Hydrates whatever is actually in storage against the CURRENT default
+  // shape. Production already has a Phase-1-shaped stored state (no
+  // shadow_observation_*/shadow_reason_*/shadow_observed_dispatch_ids
+  // fields at all) — returning it as-is would make the first Phase-2
+  // observation do e.g. `undefined + 1` on a missing counter, producing
+  // NaN. Spreading defaults first and the stored object second keeps every
+  // already-stored value (Phase 1 or Phase 2) while filling in only the
+  // fields a genuinely older stored blob never had. All state fields are
+  // top-level primitives/arrays by design (see defaultState()) specifically
+  // so this one-level spread is enough — a future nested field would need
+  // its own explicit deep-hydration, not just this spread.
   async #load() {
     const stored = await this.state.storage.get(STATE_KEY);
-    return stored || defaultState();
+    if (!stored) return defaultState();
+    return { ...defaultState(), ...stored };
   }
 
   async #save(state) {
@@ -380,18 +421,42 @@ export class BiRefreshCoordinator {
   //     (planner would have skipped) AND at least one component reported
   //     "changed" AND neither component errored. "no_baseline"/"skipped"
   //     never count toward this — see PHASE 2 spec item 12.
+  //   - Idempotency (fix round blocker 4): dispatch_id is required and acts
+  //     as an idempotency key. A GitHub Actions rerun/retry of the same
+  //     coordinator-tracked dispatch reports the same 15-minute cycle again
+  //     — repeating that report must be a no-op for every counter (a
+  //     duplicate response still returns 200, since the caller's report
+  //     genuinely succeeded, it just didn't need to change anything).
   async handleObservation(body) {
+    const dispatchId = typeof (body && body.dispatch_id) === "string" && body.dispatch_id ? body.dispatch_id : null;
     const reason = typeof (body && body.reason) === "string" && body.reason ? body.reason : null;
     const biStatus = OBSERVATION_STATUSES.includes(body && body.bi_status) ? body.bi_status : null;
     const staffOpsStatus = OBSERVATION_STATUSES.includes(body && body.staff_ops_status) ? body.staff_ops_status : null;
-    if (!reason || !biStatus || !staffOpsStatus) {
+    if (!dispatchId || !reason || !biStatus || !staffOpsStatus) {
       return jsonResponse({ error: "invalid_observation" }, 400);
     }
 
     const state = await this.#load();
+
+    const alreadySeen = state.shadow_observed_dispatch_ids.includes(dispatchId);
+    if (alreadySeen) {
+      // No counters move for a duplicate — same cycle, already counted.
+      return jsonResponse({ ok: true, duplicate: true, false_negative: false });
+    }
+    state.shadow_observed_dispatch_ids =
+      [...state.shadow_observed_dispatch_ids, dispatchId].slice(-MAX_OBSERVED_DISPATCH_IDS);
+
     const nowIso = (body && body.observed_at) || new Date().toISOString();
 
     state.shadow_observations_total += 1;
+    const reasonKey = REASON_COUNTER_KEYS[reason];
+    if (reasonKey) {
+      state[reasonKey] += 1;
+    } else {
+      // Unknown reason string: never silently dropped — bucketed as
+      // "other" so it stays visible in /status instead of vanishing.
+      state[REASON_OTHER_COUNTER_KEY] += 1;
+    }
     const plannerWouldHaveSkipped = reason === "shadow_unconditional";
     if (plannerWouldHaveSkipped) state.shadow_planner_skip_total += 1;
 
@@ -416,7 +481,7 @@ export class BiRefreshCoordinator {
 
     state.last_shadow_observation_at = nowIso;
     await this.#save(state);
-    return jsonResponse({ ok: true, false_negative: isFalseNegative });
+    return jsonResponse({ ok: true, duplicate: false, false_negative: isFalseNegative });
   }
 
   // Read-only. PII-safe by construction: only ever built from this DO's own
@@ -462,6 +527,14 @@ export class BiRefreshCoordinator {
         skip_staff_ops_changed_total: state.shadow_skip_staff_ops_changed_total,
         skip_any_changed_total: state.shadow_skip_any_changed_total,
         errors_total: state.shadow_observation_errors_total,
+        by_reason: {
+          shadow_unconditional: state.shadow_reason_shadow_unconditional_total,
+          booking_webhook: state.shadow_reason_booking_webhook_total,
+          full_reconciliation: state.shadow_reason_full_reconciliation_total,
+          jst_date_rollover: state.shadow_reason_jst_date_rollover_total,
+          manual_force: state.shadow_reason_manual_force_total,
+          other: state.shadow_reason_other_total,
+        },
         last_observation_at: state.last_shadow_observation_at,
         last_observation_error_at: state.last_shadow_observation_error_at,
         last_false_negative_at: state.last_shadow_false_negative_at,

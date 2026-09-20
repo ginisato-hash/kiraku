@@ -395,6 +395,14 @@ async function handleBiRefreshStatus(request, env) {
       skip_staff_ops_changed_total: s.shadow_observation.skip_staff_ops_changed_total,
       skip_any_changed_total: s.shadow_observation.skip_any_changed_total,
       errors_total: s.shadow_observation.errors_total,
+      by_reason: s.shadow_observation.by_reason ? {
+        shadow_unconditional: s.shadow_observation.by_reason.shadow_unconditional,
+        booking_webhook: s.shadow_observation.by_reason.booking_webhook,
+        full_reconciliation: s.shadow_observation.by_reason.full_reconciliation,
+        jst_date_rollover: s.shadow_observation.by_reason.jst_date_rollover,
+        manual_force: s.shadow_observation.by_reason.manual_force,
+        other: s.shadow_observation.by_reason.other,
+      } : null,
       last_observation_at: s.shadow_observation.last_observation_at,
       last_observation_error_at: s.shadow_observation.last_observation_error_at,
       last_false_negative_at: s.shadow_observation.last_false_negative_at,
@@ -440,18 +448,22 @@ async function handleBiRefreshShadowObservation(request, env) {
   }
 
   const { status: doStatus, body: result } = await coordinatorPost(env, "/internal/observation", {
+    dispatch_id: payload.dispatch_id,
     reason: payload.reason,
     bi_status: payload.bi_status,
     staff_ops_status: payload.staff_ops_status,
     observed_at: payload.observed_at,
   });
   // reason/statusの実値は列挙型の短い文字列のみでPIIではないため、可観測性の
-  // ためログしてよい（bi_refresh_complete と同じ方針）。
-  console.log(`bi_shadow_observation reason=${payload.reason} bi_status=${payload.bi_status} `
-    + `staff_ops_status=${payload.staff_ops_status} accepted=${doStatus === 200} `
+  // ためログしてよい（bi_refresh_complete と同じ方針）。dispatch_idは
+  // GitHub Actions run固有のUUID（Coordinatorが発行）であって予約者PIIでは
+  // ないため、これもログしてよい（重複配信の追跡に必要）。
+  console.log(`bi_shadow_observation dispatch_id=${payload.dispatch_id} reason=${payload.reason} `
+    + `bi_status=${payload.bi_status} staff_ops_status=${payload.staff_ops_status} `
+    + `accepted=${doStatus === 200} duplicate=${result && result.duplicate} `
     + `false_negative=${result && result.false_negative}`);
   if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
-  return jsonResponse({ ok: true, false_negative: result.false_negative });
+  return jsonResponse({ ok: true, duplicate: result.duplicate, false_negative: result.false_negative });
 }
 
 // 運用者用: mode切替（shadow/active）・手動force。どちらも再deploy不要で
