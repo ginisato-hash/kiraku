@@ -362,17 +362,21 @@ Beds24 API取得・BI生成・R2 publish・Staff Ops export自体は一切変更
 **mode切替（コード再deploy不要）**
 
 ```bash
-# 現在の状態を見る（PII無し。要 BI_REFRESH_CALLBACK_SECRET）
+# status/mode/force は BI_REFRESH_OPS_SECRET で認証する
+# （BI_REFRESH_CALLBACK_SECRETとは別のCloudflare Worker Secret。
+#  GitHub Actionsにはこの値を設定しない — 権限分離）。
+
+# 現在の状態を見る（PII無し）
 curl -s https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/status \
-  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" | python3 -m json.tool
+  -H "Authorization: Bearer $BI_REFRESH_OPS_SECRET" | python3 -m json.tool
 
 # shadow（既定・安全）: Webhook/Coordinatorは動くが、Cronは従来通り毎回dispatchする
 curl -s -X POST https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/mode \
-  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" -d '{"mode":"shadow"}'
+  -H "Authorization: Bearer $BI_REFRESH_OPS_SECRET" -d '{"mode":"shadow"}'
 
 # active: Coordinatorの判断でのみdispatchする（Actions起動数が実際に減る）
 curl -s -X POST https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/mode \
-  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" -d '{"mode":"active"}'
+  -H "Authorization: Bearer $BI_REFRESH_OPS_SECRET" -d '{"mode":"active"}'
 ```
 
 **ロールバック**：`mode=shadow`に戻すだけで、即座に「15分ごと無条件dispatch」という
@@ -389,17 +393,26 @@ curl -s -X POST https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/mod
 | 置き場所 | Secret名 | 用途 |
 |---|---|---|
 | Cloudflare Worker (`kiraku-bi`) | `BEDS24_WEBHOOK_SECRET` | Beds24 Booking WebhookのCustom Headerと照合 |
-| Cloudflare Worker (`kiraku-bi`) | `BI_REFRESH_CALLBACK_SECRET` | completion callback / status / mode / force エンドポイントの認証 |
-| GitHub Actions (このrepo) | `BI_REFRESH_CALLBACK_SECRET` | completion callback送信時にWorker側と同じ値を使う |
+| Cloudflare Worker (`kiraku-bi`) | `BI_REFRESH_CALLBACK_SECRET` | `POST /internal/bi-refresh/complete`（GitHub Actions completion callback）専用の認証 |
+| Cloudflare Worker (`kiraku-bi`) | `BI_REFRESH_OPS_SECRET` | `status` / `mode` / `force` エンドポイント専用の認証。**GitHub Actionsには渡さない**（権限分離：GitHub Actions repoが漏れても運用操作はできない） |
+| GitHub Actions (このrepo) | `BI_REFRESH_CALLBACK_SECRET` | completion callback送信時にWorker側と同じ値を使う（`BI_REFRESH_OPS_SECRET`はGitHub Actionsには設定しない） |
 
 **Beds24側の手動設定**（ブラウザ操作が必要なため自動化していません）：
+
+Beds24 API v2の公式仕様（`https://api.beds24.com/v2/apiV2.yaml`、`webhooks.customHeader`定義）で
+確認済み：Custom Headerは単一のテキスト欄で、`"header-name: header-value"`という1行（コロン+半角
+スペース区切り）をそのまま貼り付ける形式（複数ヘッダーが必要な場合のみ改行で追加）。名前と値を
+別々の入力欄に分けて入力する形式ではない。
 
 ```text
 1. Beds24管理画面 > Settings > Properties > Access > Booking webhooks を開く（喜らく=330695のみ）
 2. Webhook URL: https://kiraku-bi.s-sato-dce.workers.dev/internal/beds24/booking-webhook
-3. Webhook Version: 2 (without personal data) を推奨（PIIをそもそも送らせない多重防御。
-   with personal dataでも当ハンドラはPIIを一切ログ・保存しないため安全側だが、不要なら渡さない方がよい）
-4. Custom Header: 名前 X-Kiraku-Webhook-Token、値は上記 BEDS24_WEBHOOK_SECRET と同じランダム文字列
+3. Webhook Version: "2 (without personal data)"（API上の値: twoNoPersonalData）を推奨
+   （PIIをそもそも送らせない多重防御。with personal data (twoWithPersonalData) でも当ハンドラは
+   PIIを一切ログ・保存しないため安全側だが、不要なら渡さない方がよい）
+4. Custom Header 欄に、1行でそのまま貼り付ける:
+   X-Kiraku-Webhook-Token: <上記 BEDS24_WEBHOOK_SECRET と同じ値>
+   （名前欄・値欄が分かれているUIではない。コロンの後の半角スペースも含めてそのまま）
 5. 保存後、テスト予約は作らず、実際の予約変動が来るのを待って
    GET /internal/bi-refresh/status の last_webhook_at が更新されることを確認する
 ```

@@ -4,14 +4,22 @@
 // bookkeeping, duplicate/stale/wrong-dispatch-id handling end-to-end
 // through the Worker (not just the DO unit tests), and that status/mode
 // endpoints require auth too.
+//
+// Privilege separation (fix round blocker 7): /complete is authenticated by
+// BI_REFRESH_CALLBACK_SECRET (the one GitHub Actions holds); /status,
+// /mode and /force are authenticated by a DIFFERENT secret,
+// BI_REFRESH_OPS_SECRET, that GitHub Actions never sees. CALLBACK_SECRET
+// must never work against the ops endpoints and vice versa — asserted
+// explicitly below, not just assumed from the two envs being different.
 import assert from "node:assert";
 import worker from "../src/worker.js";
 import { makeCoordinatorNamespace } from "./testDoNamespace.js";
 
-const SECRET = "test-callback-shared-secret";
+const CALLBACK_SECRET = "test-callback-secret-github-actions-only";
+const OPS_SECRET = "test-ops-secret-operator-only";
 
 function makeEnv(overrides = {}) {
-  const env = { BI_REFRESH_CALLBACK_SECRET: SECRET, ...overrides };
+  const env = { BI_REFRESH_CALLBACK_SECRET: CALLBACK_SECRET, BI_REFRESH_OPS_SECRET: OPS_SECRET, ...overrides };
   // Durable Objects exported from the same Worker script share the same
   // env/vars — the coordinator namespace must see the same overrides
   // (e.g. BI_REFRESH_DEFAULT_MODE) that the test passes to the Worker env.
@@ -22,12 +30,12 @@ function makeEnv(overrides = {}) {
 function complete(env, body, { headers = {} } = {}) {
   return worker.fetch(new Request("https://x/internal/bi-refresh/complete", {
     method: "POST",
-    headers: { "content-type": "application/json", "Authorization": `Bearer ${SECRET}`, ...headers },
+    headers: { "content-type": "application/json", "Authorization": `Bearer ${CALLBACK_SECRET}`, ...headers },
     body: JSON.stringify(body),
   }), env);
 }
 
-async function status(env, headers = { "Authorization": `Bearer ${SECRET}` }) {
+async function status(env, headers = { "Authorization": `Bearer ${OPS_SECRET}` }) {
   const r = await worker.fetch(new Request("https://x/internal/bi-refresh/status", { headers }), env);
   return { status: r.status, body: await r.json() };
 }
@@ -57,6 +65,34 @@ await check("an unconfigured callback secret fails closed (500)", async () => {
   const env = makeEnv({ BI_REFRESH_CALLBACK_SECRET: undefined });
   const r = await complete(env, { dispatch_id: "x", target_seq: 1, status: "success" });
   assert.equal(r.status, 500);
+});
+
+// ---------------------------------------------------------------- privilege separation (fix round blocker 7)
+await check("the ops secret does NOT authenticate the completion callback endpoint", async () => {
+  const env = makeEnv();
+  const r = await complete(env, { dispatch_id: "x", target_seq: 1, status: "success" }, {
+    headers: { Authorization: `Bearer ${OPS_SECRET}` },
+  });
+  assert.equal(r.status, 401);
+});
+
+await check("the callback secret does NOT authenticate any ops endpoint (status/mode/force)", async () => {
+  const env = makeEnv();
+  const wrongAuthHeader = { Authorization: `Bearer ${CALLBACK_SECRET}` };
+  const s = await worker.fetch(new Request("https://x/internal/bi-refresh/status", { headers: wrongAuthHeader }), env);
+  assert.equal(s.status, 401);
+  const m = await worker.fetch(new Request("https://x/internal/bi-refresh/mode", {
+    method: "POST", headers: wrongAuthHeader, body: JSON.stringify({ mode: "active" }),
+  }), env);
+  assert.equal(m.status, 401);
+  const f = await worker.fetch(new Request("https://x/internal/bi-refresh/force", { method: "POST", headers: wrongAuthHeader }), env);
+  assert.equal(f.status, 401);
+});
+
+await check("GitHub Actions holding only the callback secret cannot flip mode or force a dispatch", async () => {
+  const env = makeEnv({ BI_REFRESH_OPS_SECRET: undefined }); // simulates "GitHub Actions never has this secret"
+  const s = await status(env, { Authorization: `Bearer ${CALLBACK_SECRET}` });
+  assert.equal(s.status, 500, "ops endpoints must fail closed, not fall back to the callback secret");
 });
 
 // ---------------------------------------------------------------- success
@@ -110,6 +146,16 @@ await check("a stale dispatch_id (already superseded) is a safe no-op, never reg
   assert.equal(s.body.last_completed_seq, 2, "must not regress after a late/duplicate callback for an old dispatch");
 });
 
+// ---------------------------------------------------------------- future target_seq invariant (blocker 5, end-to-end through the Worker route)
+await check("a callback claiming a target_seq beyond the current event_seq is rejected (400), state untouched", async () => {
+  const env = makeEnv({ BI_REFRESH_DEFAULT_MODE: "active" });
+  await reserveOne(env); // event_seq=1
+  const r = await complete(env, { dispatch_id: "forged", target_seq: 999999, status: "success" });
+  assert.equal(r.status, 400);
+  const s = await status(env);
+  assert.equal(s.body.last_completed_seq, 0);
+});
+
 // ---------------------------------------------------------------- seq mismatch / malformed
 await check("malformed payloads are rejected with 400", async () => {
   const env = makeEnv();
@@ -145,12 +191,12 @@ await check("mode switching requires auth, validates the value, and takes effect
   assert.equal(unauth.status, 401);
 
   const bad = await worker.fetch(new Request("https://x/internal/bi-refresh/mode", {
-    method: "POST", headers: { Authorization: `Bearer ${SECRET}` }, body: JSON.stringify({ mode: "turbo" }),
+    method: "POST", headers: { Authorization: `Bearer ${OPS_SECRET}` }, body: JSON.stringify({ mode: "turbo" }),
   }), env);
   assert.equal(bad.status, 400);
 
   const ok = await worker.fetch(new Request("https://x/internal/bi-refresh/mode", {
-    method: "POST", headers: { Authorization: `Bearer ${SECRET}` }, body: JSON.stringify({ mode: "active" }),
+    method: "POST", headers: { Authorization: `Bearer ${OPS_SECRET}` }, body: JSON.stringify({ mode: "active" }),
   }), env);
   assert.equal(ok.status, 200);
   const s = await status(env);
@@ -164,7 +210,7 @@ await check("manual force via the operator endpoint causes the next evaluate to 
     method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
   const forceRes = await worker.fetch(new Request("https://x/internal/bi-refresh/force", {
-    method: "POST", headers: { Authorization: `Bearer ${SECRET}` },
+    method: "POST", headers: { Authorization: `Bearer ${OPS_SECRET}` },
   }), env);
   assert.equal(forceRes.status, 200);
   const evalRes = await stub.fetch(new Request("https://do/internal/evaluate", {

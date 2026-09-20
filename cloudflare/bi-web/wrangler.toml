@@ -52,3 +52,12 @@ FULL_RECONCILE_MAX_AGE_SECONDS = "21600"
 # in-flight dispatchのlease timeout（秒）。既定25分
 # （実測p95 146秒・最大176秒、2026-09-20時点直近100回、に対し十分な余裕）。
 LEASE_TIMEOUT_SECONDS = "1500"
+
+# 必須の Worker Secrets（wrangler.tomlにもGitにも絶対に書かない。
+# `wrangler secret put <name>` で設定する）:
+#   GITHUB_ACTIONS_DISPATCH_TOKEN — GitHub workflow_dispatch API呼び出し用
+#   BEDS24_WEBHOOK_SECRET         — Beds24 Booking WebhookのCustom Headerと照合
+#   BI_REFRESH_CALLBACK_SECRET    — POST /internal/bi-refresh/complete 専用
+#                                   （GitHub ActionsもこのSecretだけを持つ）
+#   BI_REFRESH_OPS_SECRET         — status/mode/force 専用。権限分離のため
+#                                   GitHub Actionsには絶対に設定しない
