@@ -98,18 +98,34 @@ const REASON_COUNTER_KEYS = {
 const REASON_OTHER_COUNTER_KEY = "shadow_reason_other_total";
 const REASON_OTHER_BUCKET = "other";
 
+// Shared by handleObservation() and worker.js's completion-callback logging
+// (fix round blocker 8) so the two code paths can never drift apart on
+// what counts as a "known" reason. Returns null for a missing/empty
+// reason (the completion callback's reason is optional), the reason
+// itself when it's one of the known automated values, or "other" for
+// anything else — the raw string is never returned, so a caller that only
+// ever logs/stores this return value can never leak arbitrary text.
+export function normalizeReasonBucket(reason) {
+  if (typeof reason !== "string" || !reason) return null;
+  return Object.prototype.hasOwnProperty.call(REASON_COUNTER_KEYS, reason) ? reason : REASON_OTHER_BUCKET;
+}
+
 // refresh-bi-r2.yml's dispatch_id/reason workflow_dispatch inputs are
 // human-editable (an operator can run the workflow manually with any text
-// in either field), so this endpoint must not trust either one to be safe
-// to store or log verbatim.
+// in either field), so neither /internal/observation nor /internal/complete
+// (both take a dispatch_id from that same workflow input) may trust it to
+// be safe to store or log verbatim.
 //
 // The only dispatch_id the automated pipeline ever sends is one this
 // Coordinator itself issued via crypto.randomUUID() (handleEvaluate) —
 // always a canonical RFC 4122 version-4 UUID. Restricting acceptance to
 // exactly that shape means an operator typing arbitrary text (or PII) into
 // the manual dispatch_id input can never have it stored in
-// shadow_observed_dispatch_ids or reach a log line; it simply gets
-// rejected as invalid_observation, same as any other malformed value.
+// shadow_observed_dispatch_ids/logged by the observation endpoint, or
+// logged by the completion callback (handleComplete uses this same
+// constant — see its comment — so the two can never drift apart); it
+// simply gets rejected as invalid_dispatch_id/invalid_observation, same as
+// any other malformed value.
 const DISPATCH_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Bound on the recent-dispatch-id set (see defaultState() comment).
@@ -368,11 +384,24 @@ export class BiRefreshCoordinator {
   // callback). in_flight is only cleared when dispatch_id matches the
   // CURRENT reservation, so a stale/duplicate/wrong-dispatch-id callback
   // can never clear a different, still-running dispatch's lease.
+  //
+  // dispatch_id must be a canonical UUID (fix round blocker 8, same
+  // DISPATCH_ID_RE as handleObservation — shared so the two can never
+  // drift apart), even though a mismatched-but-valid UUID is still
+  // accepted and simply treated as "wrong dispatch_id" (matched_in_flight:
+  // false) exactly as before. This is a pure format check independent of
+  // the late/duplicate/wrong-dispatch-id matching semantics above, and is
+  // enforced here too (not just in worker.js) so calling this DO endpoint
+  // directly — bypassing the Worker route entirely — gets the same
+  // contract. refresh-bi-r2.yml's dispatch_id input is operator-editable
+  // on a manual workflow_dispatch; rejecting anything non-UUID-shaped
+  // before it can be logged or stored is what stops arbitrary/PII-shaped
+  // text from reaching either.
   async handleComplete(body) {
     const dispatchId = body && body.dispatch_id;
     const targetSeq = body && body.target_seq;
     const status = body && body.status;
-    if (typeof dispatchId !== "string" || !dispatchId) {
+    if (typeof dispatchId !== "string" || !DISPATCH_ID_RE.test(dispatchId)) {
       return jsonResponse({ error: "invalid_dispatch_id" }, 400);
     }
     if (!Number.isInteger(targetSeq) || targetSeq < 0) {
@@ -464,8 +493,7 @@ export class BiRefreshCoordinator {
       // field must not appear anywhere in the response.
       return jsonResponse({ error: "invalid_observation" }, 400);
     }
-    const reasonBucket = Object.prototype.hasOwnProperty.call(REASON_COUNTER_KEYS, reason)
-      ? reason : REASON_OTHER_BUCKET;
+    const reasonBucket = normalizeReasonBucket(reason);
 
     const state = await this.#load();
 

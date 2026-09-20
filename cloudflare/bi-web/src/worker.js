@@ -18,7 +18,7 @@
 //   （refresh-beds24-bi → publish-bi-r2）がそのまま担う。ここでは何も
 //   fetch/生成/publishしない。dispatch token/webhook secret/callback secretの
 //   値は絶対にログしない。
-import { BiRefreshCoordinator } from "./biRefreshCoordinator.js";
+import { BiRefreshCoordinator, normalizeReasonBucket } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
 import {
@@ -320,10 +320,15 @@ function authenticateOpsRequest(request, env) {
 }
 
 // GitHub Actions completion callback（refresh-bi-r2.ymlの最終step、
-// `if: always()`で成功/失敗どちらでも送信される）。PIIはこの経路に一切
-// 乗らない（GitHub Actions側はdispatch_id/target_seq/status/reasonしか
-// 知らない）。認証は BI_REFRESH_CALLBACK_SECRET のみ（status/mode/force用の
+// `if: always()`で成功/失敗どちらでも送信される）。認証は
+// BI_REFRESH_CALLBACK_SECRET のみ（status/mode/force用の
 // BI_REFRESH_OPS_SECRETとは別— GitHub Actionsにはops secretを渡さない）。
+// dispatch_id/reasonはworkflow_dispatch inputsであり運用者が手動実行時に
+// 任意文字列を入れられる（fix round blocker 8）。dispatch_idはCoordinator側
+// (handleComplete)でcanonical UUID以外を400 rejectする。rawなdispatch_id/
+// reasonはこのハンドラも一切log/echoしない — dispatch_idはaccepted時のみ
+// (=Coordinator側でUUID validation済み)、reasonはnormalizeReasonBucket()
+// 経由のreason_bucketのみをlogする。
 async function handleBiRefreshComplete(request, env) {
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
@@ -357,8 +362,10 @@ async function handleBiRefreshComplete(request, env) {
     status: payload.status,
     completed_at: payload.completed_at,
   });
-  console.log(`bi_refresh_complete dispatch_id=${payload.dispatch_id} target_seq=${payload.target_seq} `
-    + `status=${payload.status} reason=${payload.reason || "(none)"} accepted=${doStatus === 200}`);
+  const loggedDispatchId = doStatus === 200 ? payload.dispatch_id : "(rejected)";
+  const reasonBucket = normalizeReasonBucket(payload.reason) || "(none)";
+  console.log(`bi_refresh_complete dispatch_id=${loggedDispatchId} target_seq=${payload.target_seq} `
+    + `status=${payload.status} reason_bucket=${reasonBucket} accepted=${doStatus === 200}`);
   if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
   return jsonResponse({ ok: true, last_completed_seq: result.last_completed_seq });
 }

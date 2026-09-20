@@ -38,7 +38,7 @@ await check("active mode + clean coordinator (freshly reconciled) -> no GitHub A
   // Prime a fresh successful completion so full-reconciliation/day-rollover don't fire.
   const stub = namespace.get("singleton");
   await stub.fetch(new Request("https://do/internal/complete", {
-    method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
+    method: "POST", body: JSON.stringify({ dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
 
   let calls = 0;
@@ -54,7 +54,7 @@ await check("active mode + a pending webhook -> dispatches exactly once with dis
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
   const stub = namespace.get("singleton");
   await stub.fetch(new Request("https://do/internal/complete", {
-    method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
+    method: "POST", body: JSON.stringify({ dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
   await stub.fetch(new Request("https://do/internal/event", { method: "POST" }));
 
@@ -79,7 +79,7 @@ await check("active mode fires a full-reconciliation dispatch once the max age i
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
   const stub = namespace.get("singleton");
   await stub.fetch(new Request("https://do/internal/complete", {
-    method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
+    method: "POST", body: JSON.stringify({ dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
 
   let captured = null;
@@ -96,7 +96,7 @@ await check("active mode skips dispatching again while a previous dispatch is st
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
   const stub = namespace.get("singleton");
   await stub.fetch(new Request("https://do/internal/complete", {
-    method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
+    method: "POST", body: JSON.stringify({ dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
   await stub.fetch(new Request("https://do/internal/event", { method: "POST" }));
 
@@ -115,7 +115,7 @@ await check("a GitHub dispatch API failure releases the reservation instead of l
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: namespace };
   const stub = namespace.get("singleton");
   await stub.fetch(new Request("https://do/internal/complete", {
-    method: "POST", body: JSON.stringify({ dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
+    method: "POST", body: JSON.stringify({ dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z" }),
   }));
   await stub.fetch(new Request("https://do/internal/event", { method: "POST" }));
 
