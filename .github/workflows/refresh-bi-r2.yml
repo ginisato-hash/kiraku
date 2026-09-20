@@ -13,7 +13,28 @@ on:
   # 自身のon.scheduleは信頼性が低く（fc1ffca参照：549回期待に対し実行100回、
   # 最大687分のsilent gapを実測）、Cloudflare側の経路が2026-08-29に本番検証
   # 済み（手動+自律発火とも成功、production freshness ~1-2分）のため撤去。
+  #
+  # dispatch_id/target_seq/reason はCloudflare側のBiRefreshCoordinator
+  # Durable Object（event-driven BI refresh移行、cloudflare/bi-web/src/
+  # biRefreshCoordinator.js）がactive modeでdispatchする際にだけ渡す。
+  # 3つとも任意（既定=空文字）なので、`gh workflow run refresh-bi-r2.yml`の
+  # ような既存の手動実行はこれまで通りinputs無しで動く。dispatch_idが空の
+  # 場合、末尾のcompletion callback stepは「Coordinator起点ではない実行」
+  # と判断してcallback送信自体をスキップする（後方互換 — 項目23/32参照）。
   workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: "BiRefreshCoordinatorが発行したdispatch id（手動実行では空のままでよい）"
+        required: false
+        default: ""
+      target_seq:
+        description: "このdispatchが取り込むevent_seqのスナップショット（手動実行では空のままでよい）"
+        required: false
+        default: ""
+      reason:
+        description: "dispatch理由（booking_webhook/full_reconciliation/jst_date_rollover/manual_force/manual）"
+        required: false
+        default: "manual"
 
 concurrency:
   group: refresh-bi-r2
@@ -76,6 +97,7 @@ jobs:
           fi
 
       - name: Refresh BI from Beds24
+        id: refresh_bi
         env:
           # コードが実際に読む env var 名は BEDS24_LONG_LIFE_TOKEN（Secret名は統一のためBEDS24_API_TOKENのまま）。
           BEDS24_LONG_LIFE_TOKEN: ${{ secrets.BEDS24_API_TOKEN }}
@@ -86,6 +108,7 @@ jobs:
           yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
 
       - name: Publish BI to R2
+        id: publish_r2
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -218,3 +241,70 @@ jobs:
             | python3 -m json.tool \
             | grep -E "generated_at_jst|today_jst|bank_fields_source|bank_actual_latest_balance|bank_csv_import_status" \
             >> "$GITHUB_STEP_SUMMARY" || echo "public snapshot unavailable from GitHub runner" >> "$GITHUB_STEP_SUMMARY"
+
+      # event-driven BI refresh移行（BiRefreshCoordinator Durable Object）用の
+      # completion callback。dispatch_id input が空（＝Coordinator起点ではない
+      # 手動実行、または移行前の後方互換呼び出し）の場合は何もせず正常終了する。
+      # `if: always()` — main jobが途中失敗してもfailure callbackを試みる
+      # (項目15)。ただしこのstep自体の失敗が元のjob結果の意味を隠さないよう、
+      # 常にexit 0で終える（実際の成否は上のsteps自体のjob.statusで既に確定
+      # している）。secret値・payload本体は絶対にログしない — HTTPステータス
+      # コードのみ報告する。
+      - name: Report completion to BI Refresh Coordinator
+        if: always()
+        env:
+          BI_REFRESH_CALLBACK_SECRET: ${{ secrets.BI_REFRESH_CALLBACK_SECRET }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          TARGET_SEQ: ${{ inputs.target_seq }}
+          REASON: ${{ inputs.reason }}
+          REFRESH_OUTCOME: ${{ steps.refresh_bi.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish_r2.outcome }}
+        run: |
+          set -uo pipefail
+          if [ -z "${DISPATCH_ID:-}" ]; then
+            echo "No dispatch_id input (manual run without Coordinator context) — skipping completion callback."
+            exit 0
+          fi
+          if [ -z "${BI_REFRESH_CALLBACK_SECRET:-}" ]; then
+            echo "::warning::BI_REFRESH_CALLBACK_SECRET is not set — cannot report completion to the Coordinator. Set it at Settings > Secrets and variables > Actions. The Coordinator's lease-timeout recovery will treat this dispatch as stale and retry it."
+            exit 0
+          fi
+
+          call_status="success"
+          if [ "${REFRESH_OUTCOME:-}" != "success" ] || [ "${PUBLISH_OUTCOME:-}" != "success" ]; then
+            call_status="failure"
+          fi
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # jq -n --arg で組み立てる（値はすべてシェル変数展開ではなく--argで
+          # 渡すため、JSON injectionの心配が無い）。target_seqは数値が来る
+          # 前提だが、想定外の非数値が来た場合はnullにフォールバックし、
+          # 400として素直にCoordinator側でrejectさせる（このstep自体は
+          # 落とさない）。
+          payload=$(jq -n \
+            --arg dispatch_id "$DISPATCH_ID" \
+            --arg target_seq "$TARGET_SEQ" \
+            --arg status "$call_status" \
+            --arg reason "$REASON" \
+            --arg completed_at "$completed_at" \
+            '{
+              dispatch_id: $dispatch_id,
+              target_seq: (if ($target_seq | test("^[0-9]+$")) then ($target_seq | tonumber) else null end),
+              status: $status,
+              reason: (if $reason == "" then null else $reason end),
+              completed_at: $completed_at
+            }')
+
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/complete" \
+            -H "Authorization: Bearer ${BI_REFRESH_CALLBACK_SECRET}" \
+            -H "Content-Type: application/json" \
+            --max-time 20 \
+            -d "$payload") || http_code="curl_error"
+
+          # payload本体・secretは出力しない。ステータスと最終判定のcall_statusのみ。
+          echo "completion_callback_http_status=${http_code} dispatch_status=${call_status}"
+          if [ "$http_code" != "200" ]; then
+            echo "::warning::Completion callback did not return 200 (got ${http_code}). The Coordinator's lease-timeout recovery will treat this dispatch as stale and retry it on a later Cron tick — no manual action required."
+          fi
+          exit 0
