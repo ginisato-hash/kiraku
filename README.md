@@ -335,6 +335,75 @@ curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.
 必要なGitHub Secrets：`CLOUDFLARE_API_TOKEN`（Workers編集権限のみの最小権限トークン）、
 `CLOUDFLARE_ACCOUNT_ID`。
 
+### 13.3 Event-driven BI refresh（BiRefreshCoordinator、`cloudflare/bi-web/src/biRefreshCoordinator.js`）
+
+13.1のCronは「15分ごとに必ずGitHub Actionsを起動する」構成でしたが、Beds24 Booking
+Webhookをdirty signalとして使い、変更があるときだけActionsを起動するevent-driven構成へ
+段階的に移行できるようにしました。詳細な設計・race-condition proof・移行段階（shadow →
+active）・コスト試算は、このPRの本文（`ginisato-hash/kiraku` PR）を参照してください。
+ここでは運用に必要な最小限だけをまとめます。
+
+**アーキテクチャ概要**
+
+```text
+Beds24 Booking Webhook (POST /internal/beds24/booking-webhook)
+        -> BiRefreshCoordinator (Durable Object) の event_seq++ だけ
+Cloudflare Cron (15分ごと、変更なし)
+        -> Coordinatorへ dispatch要否を問い合わせ
+        -> mode=shadow: 従来通り無条件でActionsを起動（判定はログのみ、挙動は変えない）
+        -> mode=active: 必要な時だけ dispatch_id/target_seq/reason をinputsに載せてActionsを起動
+GitHub Actions (refresh-bi-r2.yml、処理内容は変更なし)
+        -> 完了時に POST /internal/bi-refresh/complete でCoordinatorへ報告（if: always()）
+```
+
+Beds24 API取得・BI生成・R2 publish・Staff Ops export自体は一切変更していません
+（`refresh-bi-r2.yml`の既存ステップはそのまま）。
+
+**mode切替（コード再deploy不要）**
+
+```bash
+# 現在の状態を見る（PII無し。要 BI_REFRESH_CALLBACK_SECRET）
+curl -s https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/status \
+  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" | python3 -m json.tool
+
+# shadow（既定・安全）: Webhook/Coordinatorは動くが、Cronは従来通り毎回dispatchする
+curl -s -X POST https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/mode \
+  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" -d '{"mode":"shadow"}'
+
+# active: Coordinatorの判断でのみdispatchする（Actions起動数が実際に減る）
+curl -s -X POST https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/mode \
+  -H "Authorization: Bearer $BI_REFRESH_CALLBACK_SECRET" -d '{"mode":"active"}'
+```
+
+**ロールバック**：`mode=shadow`に戻すだけで、即座に「15分ごと無条件dispatch」という
+移行前の挙動に戻ります。Git revertは不要です。Coordinator自体を無効化したい場合は
+`wrangler.toml`の`[[durable_objects.bindings]]`/`[[migrations]]`を残したままでも、
+`mode=shadow`である限りCoordinatorの判定結果は使われません（Cronは常に無条件dispatch）。
+
+**手動force refresh**：既存の`gh workflow run refresh-bi-r2.yml`（inputs無し）はこれまで
+通り動きます。Coordinator経由で次のCronに強制dispatchさせたい場合は
+`POST /internal/bi-refresh/force`を呼びます。
+
+**必要なSecrets**（値はここに書きません。名前のみ）：
+
+| 置き場所 | Secret名 | 用途 |
+|---|---|---|
+| Cloudflare Worker (`kiraku-bi`) | `BEDS24_WEBHOOK_SECRET` | Beds24 Booking WebhookのCustom Headerと照合 |
+| Cloudflare Worker (`kiraku-bi`) | `BI_REFRESH_CALLBACK_SECRET` | completion callback / status / mode / force エンドポイントの認証 |
+| GitHub Actions (このrepo) | `BI_REFRESH_CALLBACK_SECRET` | completion callback送信時にWorker側と同じ値を使う |
+
+**Beds24側の手動設定**（ブラウザ操作が必要なため自動化していません）：
+
+```text
+1. Beds24管理画面 > Settings > Properties > Access > Booking webhooks を開く（喜らく=330695のみ）
+2. Webhook URL: https://kiraku-bi.s-sato-dce.workers.dev/internal/beds24/booking-webhook
+3. Webhook Version: 2 (without personal data) を推奨（PIIをそもそも送らせない多重防御。
+   with personal dataでも当ハンドラはPIIを一切ログ・保存しないため安全側だが、不要なら渡さない方がよい）
+4. Custom Header: 名前 X-Kiraku-Webhook-Token、値は上記 BEDS24_WEBHOOK_SECRET と同じランダム文字列
+5. 保存後、テスト予約は作らず、実際の予約変動が来るのを待って
+   GET /internal/bi-refresh/status の last_webhook_at が更新されることを確認する
+```
+
 ### Gitに含めないもの
 `.gitignore` により以下は追跡されません：`.env`系、`data/`配下の生成物・DB、`logs/`、
 `imports/`配下の実データ（銀行CSV・現金レシート・開始残高・返済予定表等）、
