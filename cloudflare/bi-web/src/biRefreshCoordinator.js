@@ -56,8 +56,87 @@ function defaultState() {
     last_failure_at: null,
     mode: null, // null = not explicitly set yet; effective mode falls back to env default
     force_dispatch_requested: false,
+    // Shadow semantic false-negative observation (KIRAKU BI PHASE 2). PII-safe
+    // aggregate counters only — never any booking/guest content. See
+    // handleObservation() for the counting rules.
+    shadow_observations_total: 0,
+    shadow_planner_skip_total: 0,
+    shadow_skip_bi_changed_total: 0,
+    shadow_skip_staff_ops_changed_total: 0,
+    shadow_skip_any_changed_total: 0,
+    shadow_observation_errors_total: 0,
+    last_shadow_observation_at: null,
+    last_shadow_observation_error_at: null,
+    last_shadow_false_negative_at: null,
+    // Reason counters (PHASE 2 completeness requirement): per-unique-
+    // observation breakdown of `reason`, so the webhook-dirty denominator
+    // (booking_webhook) can be told apart from shadow_unconditional/
+    // full_reconciliation/jst_date_rollover/manual_force. A reason outside
+    // this known set still increments shadow_reason_other_total rather than
+    // being silently dropped (see REASON_COUNTER_KEYS below).
+    shadow_reason_shadow_unconditional_total: 0,
+    shadow_reason_booking_webhook_total: 0,
+    shadow_reason_full_reconciliation_total: 0,
+    shadow_reason_jst_date_rollover_total: 0,
+    shadow_reason_manual_force_total: 0,
+    shadow_reason_other_total: 0,
+    // Bounded recent-dispatch-id set for observation idempotency (Blocker 4).
+    // 96 dispatches/day at the 15-minute cadence, so 512 entries covers
+    // several days — comfortably more than the shadow-observation window.
+    // A plain array (not a Set) because DO storage serializes as JSON.
+    shadow_observed_dispatch_ids: [],
   };
 }
+
+const REASON_COUNTER_KEYS = {
+  shadow_unconditional: "shadow_reason_shadow_unconditional_total",
+  booking_webhook: "shadow_reason_booking_webhook_total",
+  full_reconciliation: "shadow_reason_full_reconciliation_total",
+  jst_date_rollover: "shadow_reason_jst_date_rollover_total",
+  manual_force: "shadow_reason_manual_force_total",
+};
+const REASON_OTHER_COUNTER_KEY = "shadow_reason_other_total";
+const REASON_OTHER_BUCKET = "other";
+
+// Shared by handleObservation() and worker.js's completion-callback logging
+// (fix round blocker 8) so the two code paths can never drift apart on
+// what counts as a "known" reason. Returns null for a missing/empty
+// reason (the completion callback's reason is optional), the reason
+// itself when it's one of the known automated values, or "other" for
+// anything else — the raw string is never returned, so a caller that only
+// ever logs/stores this return value can never leak arbitrary text.
+export function normalizeReasonBucket(reason) {
+  if (typeof reason !== "string" || !reason) return null;
+  return Object.prototype.hasOwnProperty.call(REASON_COUNTER_KEYS, reason) ? reason : REASON_OTHER_BUCKET;
+}
+
+// refresh-bi-r2.yml's dispatch_id/reason workflow_dispatch inputs are
+// human-editable (an operator can run the workflow manually with any text
+// in either field), so neither /internal/observation nor /internal/complete
+// (both take a dispatch_id from that same workflow input) may trust it to
+// be safe to store or log verbatim.
+//
+// The only dispatch_id the automated pipeline ever sends is one this
+// Coordinator itself issued via crypto.randomUUID() (handleEvaluate) —
+// always a canonical RFC 4122 version-4 UUID. Restricting acceptance to
+// exactly that shape means an operator typing arbitrary text (or PII) into
+// the manual dispatch_id input can never have it stored in
+// shadow_observed_dispatch_ids/logged by the observation endpoint, or
+// logged by the completion callback (handleComplete uses this same
+// constant — see its comment — so the two can never drift apart); it
+// simply gets rejected as invalid_dispatch_id/invalid_observation, same as
+// any other malformed value.
+const DISPATCH_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// Bound on the recent-dispatch-id set (see defaultState() comment).
+const MAX_OBSERVED_DISPATCH_IDS = 512;
+
+// Statuses the semantic observer (GitHub Actions step, via
+// yuge-finance shadow-observe-compare) may report per component. "skipped"
+// covers a component that legitimately did not run this cycle (e.g. the
+// Staff Ops export gate is closed) — like "no_baseline", it never counts
+// toward a false negative.
+const OBSERVATION_STATUSES = ["changed", "unchanged", "no_baseline", "skipped", "error"];
 
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -79,9 +158,21 @@ export class BiRefreshCoordinator {
     this.env = env;
   }
 
+  // Hydrates whatever is actually in storage against the CURRENT default
+  // shape. Production already has a Phase-1-shaped stored state (no
+  // shadow_observation_*/shadow_reason_*/shadow_observed_dispatch_ids
+  // fields at all) — returning it as-is would make the first Phase-2
+  // observation do e.g. `undefined + 1` on a missing counter, producing
+  // NaN. Spreading defaults first and the stored object second keeps every
+  // already-stored value (Phase 1 or Phase 2) while filling in only the
+  // fields a genuinely older stored blob never had. All state fields are
+  // top-level primitives/arrays by design (see defaultState()) specifically
+  // so this one-level spread is enough — a future nested field would need
+  // its own explicit deep-hydration, not just this spread.
   async #load() {
     const stored = await this.state.storage.get(STATE_KEY);
-    return stored || defaultState();
+    if (!stored) return defaultState();
+    return { ...defaultState(), ...stored };
   }
 
   async #save(state) {
@@ -103,6 +194,9 @@ export class BiRefreshCoordinator {
       }
       if (request.method === "POST" && pathname === "/internal/complete") {
         return await this.handleComplete(await this.#readJson(request));
+      }
+      if (request.method === "POST" && pathname === "/internal/observation") {
+        return await this.handleObservation(await this.#readJson(request));
       }
       if (request.method === "POST" && pathname === "/internal/force") {
         return await this.handleForce();
@@ -290,11 +384,24 @@ export class BiRefreshCoordinator {
   // callback). in_flight is only cleared when dispatch_id matches the
   // CURRENT reservation, so a stale/duplicate/wrong-dispatch-id callback
   // can never clear a different, still-running dispatch's lease.
+  //
+  // dispatch_id must be a canonical UUID (fix round blocker 8, same
+  // DISPATCH_ID_RE as handleObservation — shared so the two can never
+  // drift apart), even though a mismatched-but-valid UUID is still
+  // accepted and simply treated as "wrong dispatch_id" (matched_in_flight:
+  // false) exactly as before. This is a pure format check independent of
+  // the late/duplicate/wrong-dispatch-id matching semantics above, and is
+  // enforced here too (not just in worker.js) so calling this DO endpoint
+  // directly — bypassing the Worker route entirely — gets the same
+  // contract. refresh-bi-r2.yml's dispatch_id input is operator-editable
+  // on a manual workflow_dispatch; rejecting anything non-UUID-shaped
+  // before it can be logged or stored is what stops arbitrary/PII-shaped
+  // text from reaching either.
   async handleComplete(body) {
     const dispatchId = body && body.dispatch_id;
     const targetSeq = body && body.target_seq;
     const status = body && body.status;
-    if (typeof dispatchId !== "string" || !dispatchId) {
+    if (typeof dispatchId !== "string" || !DISPATCH_ID_RE.test(dispatchId)) {
       return jsonResponse({ error: "invalid_dispatch_id" }, 400);
     }
     if (!Number.isInteger(targetSeq) || targetSeq < 0) {
@@ -337,6 +444,105 @@ export class BiRefreshCoordinator {
     return jsonResponse({ ok: true, last_completed_seq: state.last_completed_seq, matched_in_flight: matchesInFlight });
   }
 
+  // Shadow semantic false-negative observation (KIRAKU BI PHASE 2). Called
+  // once per refresh-bi-r2.yml run (from its own "Report shadow observation"
+  // step, alongside — not instead of — handleComplete's completion
+  // callback). Body is already PII-free by construction on the caller's
+  // side (GitHub Actions never has the actual snapshot content, only the
+  // opaque status strings yuge-finance shadow-observe-compare produced) —
+  // this handler additionally never persists anything but counters/
+  // timestamps, so even a caller bug could not smuggle booking content into
+  // Durable Object storage through this endpoint.
+  //
+  // Counting rules (PHASE 2 spec):
+  //   - shadow_observations_total: every accepted observation report.
+  //   - shadow_planner_skip_total: subset where reason==="shadow_unconditional"
+  //     (the planner itself would have skipped this cycle in active mode).
+  //   - shadow_observation_errors_total: subset where either component
+  //     reported "error" (the comparison itself failed — never treated as a
+  //     false negative, since we don't know what actually happened).
+  //   - A "false negative" is counted ONLY when: reason==="shadow_unconditional"
+  //     (planner would have skipped) AND at least one component reported
+  //     "changed" AND neither component errored. "no_baseline"/"skipped"
+  //     never count toward this — see PHASE 2 spec item 12.
+  //   - Idempotency (fix round blocker 4): dispatch_id is required and acts
+  //     as an idempotency key. A GitHub Actions rerun/retry of the same
+  //     coordinator-tracked dispatch reports the same 15-minute cycle again
+  //     — repeating that report must be a no-op for every counter (a
+  //     duplicate response still returns 200, since the caller's report
+  //     genuinely succeeded, it just didn't need to change anything).
+  //   - PII-safe metadata contract (fix round blocker 7): dispatch_id must
+  //     be a canonical UUID (see DISPATCH_ID_RE) and reason is only ever
+  //     stored/returned/logged as its normalized `reason_bucket` — one of
+  //     the known reason names or "other" — never the raw string. Both
+  //     `dispatch_id` and `reason` are human-editable workflow_dispatch
+  //     inputs; this is what stops an operator's manual-run typo (or
+  //     malicious input) from smuggling arbitrary text into DO storage or
+  //     a Cloudflare log line, on top of the caller-side PII-safety this
+  //     endpoint already assumed for bi_status/staff_ops_status.
+  async handleObservation(body) {
+    const rawDispatchId = body && body.dispatch_id;
+    const dispatchId = typeof rawDispatchId === "string" && DISPATCH_ID_RE.test(rawDispatchId)
+      ? rawDispatchId : null;
+    const reason = typeof (body && body.reason) === "string" && body.reason ? body.reason : null;
+    const biStatus = OBSERVATION_STATUSES.includes(body && body.bi_status) ? body.bi_status : null;
+    const staffOpsStatus = OBSERVATION_STATUSES.includes(body && body.staff_ops_status) ? body.staff_ops_status : null;
+    if (!dispatchId || !reason || !biStatus || !staffOpsStatus) {
+      // Never echo rawDispatchId/body.reason back — a malformed dispatch_id
+      // (including one carrying arbitrary/PII-shaped text) or an unrecognized
+      // field must not appear anywhere in the response.
+      return jsonResponse({ error: "invalid_observation" }, 400);
+    }
+    const reasonBucket = normalizeReasonBucket(reason);
+
+    const state = await this.#load();
+
+    const alreadySeen = state.shadow_observed_dispatch_ids.includes(dispatchId);
+    if (alreadySeen) {
+      // No counters move for a duplicate — same cycle, already counted.
+      return jsonResponse({ ok: true, duplicate: true, false_negative: false, reason_bucket: reasonBucket });
+    }
+    state.shadow_observed_dispatch_ids =
+      [...state.shadow_observed_dispatch_ids, dispatchId].slice(-MAX_OBSERVED_DISPATCH_IDS);
+
+    const nowIso = (body && body.observed_at) || new Date().toISOString();
+
+    state.shadow_observations_total += 1;
+    if (reasonBucket === REASON_OTHER_BUCKET) {
+      // Unknown reason string: never stored/logged raw — only ever
+      // bucketed as "other" so it stays visible in /status without
+      // vanishing OR smuggling arbitrary text anywhere.
+      state[REASON_OTHER_COUNTER_KEY] += 1;
+    } else {
+      state[REASON_COUNTER_KEYS[reasonBucket]] += 1;
+    }
+    const plannerWouldHaveSkipped = reason === "shadow_unconditional";
+    if (plannerWouldHaveSkipped) state.shadow_planner_skip_total += 1;
+
+    const hadError = biStatus === "error" || staffOpsStatus === "error";
+    if (hadError) {
+      state.shadow_observation_errors_total += 1;
+      state.last_shadow_observation_error_at = nowIso;
+    }
+
+    let isFalseNegative = false;
+    if (plannerWouldHaveSkipped && !hadError) {
+      const biChanged = biStatus === "changed";
+      const staffOpsChanged = staffOpsStatus === "changed";
+      if (biChanged) state.shadow_skip_bi_changed_total += 1;
+      if (staffOpsChanged) state.shadow_skip_staff_ops_changed_total += 1;
+      if (biChanged || staffOpsChanged) {
+        isFalseNegative = true;
+        state.shadow_skip_any_changed_total += 1;
+        state.last_shadow_false_negative_at = nowIso;
+      }
+    }
+
+    state.last_shadow_observation_at = nowIso;
+    await this.#save(state);
+    return jsonResponse({ ok: true, duplicate: false, false_negative: isFalseNegative, reason_bucket: reasonBucket });
+  }
+
   // Read-only. PII-safe by construction: only ever built from this DO's own
   // scheduling state, which never holds Beds24 booking data or guest PII.
   async handleStatus() {
@@ -373,6 +579,25 @@ export class BiRefreshCoordinator {
       consecutive_failures: state.consecutive_failures,
       last_failure_at: state.last_failure_at,
       next_reconcile_due_at: nextReconcileDueAt,
+      shadow_observation: {
+        total: state.shadow_observations_total,
+        planner_skip_total: state.shadow_planner_skip_total,
+        skip_bi_changed_total: state.shadow_skip_bi_changed_total,
+        skip_staff_ops_changed_total: state.shadow_skip_staff_ops_changed_total,
+        skip_any_changed_total: state.shadow_skip_any_changed_total,
+        errors_total: state.shadow_observation_errors_total,
+        by_reason: {
+          shadow_unconditional: state.shadow_reason_shadow_unconditional_total,
+          booking_webhook: state.shadow_reason_booking_webhook_total,
+          full_reconciliation: state.shadow_reason_full_reconciliation_total,
+          jst_date_rollover: state.shadow_reason_jst_date_rollover_total,
+          manual_force: state.shadow_reason_manual_force_total,
+          other: state.shadow_reason_other_total,
+        },
+        last_observation_at: state.last_shadow_observation_at,
+        last_observation_error_at: state.last_shadow_observation_error_at,
+        last_false_negative_at: state.last_shadow_false_negative_at,
+      },
     });
   }
 }

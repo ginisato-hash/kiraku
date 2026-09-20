@@ -10,7 +10,13 @@ on:
     branches:
       - main
     paths:
-      - "cloudflare/bi-web/**"
+      # production-affecting files only — test/**やREADME等の変更ではdeployしない
+      # (KIRAKU BI PHASE 2: test-only変更でproduction Worker deployが走っていた不具合の修正)。
+      - "cloudflare/bi-web/src/**"
+      - "cloudflare/bi-web/public/**"
+      - "cloudflare/bi-web/wrangler.toml"
+      - "cloudflare/bi-web/package.json"
+      - "cloudflare/bi-web/package-lock.json"
       - ".github/workflows/deploy-worker.yml"
   workflow_dispatch:
 

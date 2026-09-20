@@ -41,7 +41,7 @@ await check("clean state (no webhooks, fresh reconcile) -> would_dispatch=false 
   const now = new Date().toISOString();
   // Prime last_full_reconcile_at/last_successful_jst_date so the bootstrap
   // full-reconciliation branch doesn't fire — simulate "just ran".
-  await post(coord, "/internal/complete", { dispatch_id: "boot", target_seq: 0, status: "success", completed_at: now });
+  await post(coord, "/internal/complete", { dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: now });
   const r = await post(coord, "/internal/evaluate", { now_iso: now, today_jst: "2026-09-20" });
   assert.equal(r.body.would_dispatch, false);
   assert.equal(r.body.reason, null);
@@ -183,7 +183,7 @@ await check("an in-flight dispatch past its lease timeout is reclaimed and a new
 await check("full reconciliation fires when the max age is exceeded even with zero webhooks", async () => {
   const coord = makeCoordinator({ ...ACTIVE_ENV, FULL_RECONCILE_MAX_AGE_SECONDS: "3600" });
   await post(coord, "/internal/complete", {
-    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+    dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
   });
   const stillFresh = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:30:00.000Z", today_jst: "2026-09-20" });
   assert.equal(stillFresh.body.would_dispatch, false);
@@ -204,7 +204,7 @@ await check("a bootstrap coordinator (never run) treats the missing reconcile ti
 await check("JST date rollover forces a dispatch even with zero new webhooks and a fresh reconcile", async () => {
   const coord = makeCoordinator({ ...ACTIVE_ENV, FULL_RECONCILE_MAX_AGE_SECONDS: "21600" });
   await post(coord, "/internal/complete", {
-    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-19T10:00:00.000Z",
+    dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-19T10:00:00.000Z",
   });
   const sameDayStatus = await get(coord, "/internal/status");
   assert.equal(sameDayStatus.body.last_successful_jst_date, "2026-09-19");
@@ -218,7 +218,7 @@ await check("JST date rollover forces a dispatch even with zero new webhooks and
 await check("manual force triggers a dispatch on the next evaluate and then clears itself", async () => {
   const coord = makeCoordinator(ACTIVE_ENV);
   await post(coord, "/internal/complete", {
-    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+    dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
   });
   const clean = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:01:00.000Z", today_jst: "2026-09-20" });
   assert.equal(clean.body.would_dispatch, false);
@@ -254,7 +254,7 @@ await check("a callback with a dispatch_id that doesn't match the current in-fli
   const coord = makeCoordinator(ACTIVE_ENV);
   await post(coord, "/internal/event");
   const r = await post(coord, "/internal/evaluate", { today_jst: "2026-09-20" });
-  const wrong = await post(coord, "/internal/complete", { dispatch_id: "not-the-real-one", target_seq: 0, status: "success" });
+  const wrong = await post(coord, "/internal/complete", { dispatch_id: "99999999-9999-4999-8999-999999999999", target_seq: 0, status: "success" });
   assert.equal(wrong.body.matched_in_flight, false);
   const status = await get(coord, "/internal/status");
   assert.ok(status.body.in_flight, "the real in-flight reservation must still be there");
@@ -281,9 +281,9 @@ await check("complete rejects malformed payloads with 400 instead of corrupting 
   const coord = makeCoordinator(ACTIVE_ENV);
   const noId = await post(coord, "/internal/complete", { target_seq: 1, status: "success" });
   assert.equal(noId.status, 400);
-  const badSeq = await post(coord, "/internal/complete", { dispatch_id: "x", target_seq: "1", status: "success" });
+  const badSeq = await post(coord, "/internal/complete", { dispatch_id: "66666666-6666-4666-8666-666666666666", target_seq: "1", status: "success" });
   assert.equal(badSeq.status, 400);
-  const badStatus = await post(coord, "/internal/complete", { dispatch_id: "x", target_seq: 1, status: "maybe" });
+  const badStatus = await post(coord, "/internal/complete", { dispatch_id: "66666666-6666-4666-8666-666666666666", target_seq: 1, status: "maybe" });
   assert.equal(badStatus.status, 400);
 });
 
@@ -301,7 +301,7 @@ await check("shadow: a clean successful unconditional run updates last_full_reco
   // Prime a very recent success so the bootstrap/full-reconcile-overdue
   // branch doesn't fire — isolates the "genuinely clean" case.
   await post(coord, "/internal/complete", {
-    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+    dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
   });
 
   const r = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:01:00.000Z", today_jst: "2026-09-20" });
@@ -373,7 +373,7 @@ await check("shadow: the planner becomes clean (would_dispatch=false) after the 
 await check("manual force + a dispatch-API failure re-arms the force request for the next tick", async () => {
   const coord = makeCoordinator(ACTIVE_ENV);
   await post(coord, "/internal/complete", {
-    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+    dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
   });
   await post(coord, "/internal/force");
 
@@ -413,7 +413,7 @@ await check("a completion callback claiming a target_seq beyond the current even
   const before = await get(coord, "/internal/status");
   assert.equal(before.body.event_seq, 10);
 
-  const r = await post(coord, "/internal/complete", { dispatch_id: "forged", target_seq: 999999, status: "success" });
+  const r = await post(coord, "/internal/complete", { dispatch_id: "88888888-8888-4888-8888-888888888888", target_seq: 999999, status: "success" });
   assert.equal(r.status, 400);
   assert.equal(r.body.error, "target_seq_exceeds_event_seq");
 
@@ -426,7 +426,7 @@ await check("a completion callback whose target_seq exactly equals the current e
   const coord = makeCoordinator(ACTIVE_ENV);
   await post(coord, "/internal/event");
   await post(coord, "/internal/event");
-  const r = await post(coord, "/internal/complete", { dispatch_id: "x", target_seq: 2, status: "success" });
+  const r = await post(coord, "/internal/complete", { dispatch_id: "77777777-7777-4777-8777-777777777777", target_seq: 2, status: "success" });
   assert.equal(r.status, 200);
   assert.equal(r.body.last_completed_seq, 2);
 });

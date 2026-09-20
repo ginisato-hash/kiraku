@@ -18,7 +18,7 @@
 //   （refresh-beds24-bi → publish-bi-r2）がそのまま担う。ここでは何も
 //   fetch/生成/publishしない。dispatch token/webhook secret/callback secretの
 //   値は絶対にログしない。
-import { BiRefreshCoordinator } from "./biRefreshCoordinator.js";
+import { BiRefreshCoordinator, normalizeReasonBucket } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
 import {
@@ -320,10 +320,15 @@ function authenticateOpsRequest(request, env) {
 }
 
 // GitHub Actions completion callback（refresh-bi-r2.ymlの最終step、
-// `if: always()`で成功/失敗どちらでも送信される）。PIIはこの経路に一切
-// 乗らない（GitHub Actions側はdispatch_id/target_seq/status/reasonしか
-// 知らない）。認証は BI_REFRESH_CALLBACK_SECRET のみ（status/mode/force用の
+// `if: always()`で成功/失敗どちらでも送信される）。認証は
+// BI_REFRESH_CALLBACK_SECRET のみ（status/mode/force用の
 // BI_REFRESH_OPS_SECRETとは別— GitHub Actionsにはops secretを渡さない）。
+// dispatch_id/reasonはworkflow_dispatch inputsであり運用者が手動実行時に
+// 任意文字列を入れられる（fix round blocker 8）。dispatch_idはCoordinator側
+// (handleComplete)でcanonical UUID以外を400 rejectする。rawなdispatch_id/
+// reasonはこのハンドラも一切log/echoしない — dispatch_idはaccepted時のみ
+// (=Coordinator側でUUID validation済み)、reasonはnormalizeReasonBucket()
+// 経由のreason_bucketのみをlogする。
 async function handleBiRefreshComplete(request, env) {
   if (request.method !== "POST") {
     return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
@@ -357,8 +362,10 @@ async function handleBiRefreshComplete(request, env) {
     status: payload.status,
     completed_at: payload.completed_at,
   });
-  console.log(`bi_refresh_complete dispatch_id=${payload.dispatch_id} target_seq=${payload.target_seq} `
-    + `status=${payload.status} reason=${payload.reason || "(none)"} accepted=${doStatus === 200}`);
+  const loggedDispatchId = doStatus === 200 ? payload.dispatch_id : "(rejected)";
+  const reasonBucket = normalizeReasonBucket(payload.reason) || "(none)";
+  console.log(`bi_refresh_complete dispatch_id=${loggedDispatchId} target_seq=${payload.target_seq} `
+    + `status=${payload.status} reason_bucket=${reasonBucket} accepted=${doStatus === 200}`);
   if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
   return jsonResponse({ ok: true, last_completed_seq: result.last_completed_seq });
 }
@@ -388,6 +395,91 @@ async function handleBiRefreshStatus(request, env) {
     last_full_reconcile_at: s.last_full_reconcile_at,
     consecutive_failures: s.consecutive_failures,
     next_reconcile_due_at: s.next_reconcile_due_at,
+    shadow_observation: s.shadow_observation ? {
+      total: s.shadow_observation.total,
+      planner_skip_total: s.shadow_observation.planner_skip_total,
+      skip_bi_changed_total: s.shadow_observation.skip_bi_changed_total,
+      skip_staff_ops_changed_total: s.shadow_observation.skip_staff_ops_changed_total,
+      skip_any_changed_total: s.shadow_observation.skip_any_changed_total,
+      errors_total: s.shadow_observation.errors_total,
+      by_reason: s.shadow_observation.by_reason ? {
+        shadow_unconditional: s.shadow_observation.by_reason.shadow_unconditional,
+        booking_webhook: s.shadow_observation.by_reason.booking_webhook,
+        full_reconciliation: s.shadow_observation.by_reason.full_reconciliation,
+        jst_date_rollover: s.shadow_observation.by_reason.jst_date_rollover,
+        manual_force: s.shadow_observation.by_reason.manual_force,
+        other: s.shadow_observation.by_reason.other,
+      } : null,
+      last_observation_at: s.shadow_observation.last_observation_at,
+      last_observation_error_at: s.shadow_observation.last_observation_error_at,
+      last_false_negative_at: s.shadow_observation.last_false_negative_at,
+    } : null,
+  });
+}
+
+// GitHub Actions completion callbackと対になる、shadow false-negative観測用の
+// 別endpoint（PHASE 2）。責務を分離するため /internal/bi-refresh/complete には
+// 混ぜない — completeはdispatch/target_seqのreservation解決、こちらは
+// PII-safeな集計カウンタの加算だけを行う。認証はcompleteと同じ
+// BI_REFRESH_CALLBACK_SECRET（GitHub Actions→Coordinatorのmachine callbackで
+// あり、BI_REFRESH_OPS_SECRETはGitHub Actionsに一切渡さない方針は変えない）。
+// bodyにはBI/Staff Opsのopaqueなstatus文字列（changed/unchanged/no_baseline/
+// skipped/error）以外は乗らない設計（yuge-finance shadow-observe-compare側の
+// 契約）。念のためこの層でも許可された文字列以外はコード側でrejectされる
+// （biRefreshCoordinator.js の OBSERVATION_STATUSES）。
+async function handleBiRefreshShadowObservation(request, env) {
+  if (request.method !== "POST") {
+    return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
+  }
+  const auth = authenticateCallbackRequest(request, env);
+  if (!auth.ok) return jsonResponse({ ok: false, error: auth.error }, auth.status);
+
+  const contentLength = Number(request.headers.get("content-length") || "0");
+  if (contentLength > CALLBACK_MAX_BODY_BYTES) {
+    return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
+  }
+  let bodyText;
+  try {
+    bodyText = await request.text();
+  } catch (e) {
+    return jsonResponse({ ok: false, error: "body_read_error" }, 400);
+  }
+  if (bodyText.length > CALLBACK_MAX_BODY_BYTES) {
+    return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch (e) {
+    return jsonResponse({ ok: false, error: "malformed_json" }, 400);
+  }
+
+  const { status: doStatus, body: result } = await coordinatorPost(env, "/internal/observation", {
+    dispatch_id: payload.dispatch_id,
+    reason: payload.reason,
+    bi_status: payload.bi_status,
+    staff_ops_status: payload.staff_ops_status,
+    observed_at: payload.observed_at,
+  });
+  // dispatch_id/reason are human-editable refresh-bi-r2.yml workflow_dispatch
+  // inputs (an operator can run the workflow manually with arbitrary text in
+  // either field), so the RAW request values are never logged here — only
+  // once the Coordinator has validated dispatch_id as a canonical UUID
+  // (fix round blocker 7; a rejection logs a fixed "(rejected)" placeholder
+  // instead) and normalized reason into result.reason_bucket (one of the
+  // known reason names or "other" — never the raw string). bi_status/
+  // staff_ops_status are not operator-editable workflow_dispatch inputs
+  // (only ever the fixed enum shadow-observe-compare's own CLI output can
+  // produce), so those remain safe to log verbatim as before.
+  const loggedDispatchId = doStatus === 200 ? payload.dispatch_id : "(rejected)";
+  const reasonBucket = (result && result.reason_bucket) || "(rejected)";
+  console.log(`bi_shadow_observation dispatch_id=${loggedDispatchId} reason_bucket=${reasonBucket} `
+    + `bi_status=${payload.bi_status} staff_ops_status=${payload.staff_ops_status} `
+    + `accepted=${doStatus === 200} duplicate=${result && result.duplicate} `
+    + `false_negative=${result && result.false_negative}`);
+  if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
+  return jsonResponse({
+    ok: true, duplicate: result.duplicate, false_negative: result.false_negative, reason_bucket: result.reason_bucket,
   });
 }
 
@@ -452,6 +544,9 @@ export default {
     }
     if (path === "/internal/bi-refresh/complete") {
       return handleBiRefreshComplete(request, env);
+    }
+    if (path === "/internal/bi-refresh/shadow-observation") {
+      return handleBiRefreshShadowObservation(request, env);
     }
     if (path === "/internal/bi-refresh/status") {
       return handleBiRefreshStatus(request, env);
