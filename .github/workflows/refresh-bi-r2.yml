@@ -96,6 +96,33 @@ jobs:
             exit 1
           fi
 
+      # --- Shadow semantic false-negative observation (KIRAKU BI PHASE 2) ---
+      # Beds24's Booking Webhook does not fire for every field change that
+      # matters to BI/Staff Ops, so before active mode can be trusted we need
+      # to measure how often a would-have-been-skipped cycle
+      # (reason=shadow_unconditional) actually produced a meaningful change.
+      # These steps only ever produce/consume the opaque status strings
+      # changed/unchanged/no_baseline/skipped/error — never booking or guest
+      # content — and never fail the job (continue-on-error: true), per the
+      # "observability failure < BI/Staff Ops freshness" principle (item 13).
+      - name: Capture previous BI snapshot (shadow observation baseline)
+        id: shadow_bi_baseline
+        continue-on-error: true
+        run: |
+          yuge-finance shadow-observe-capture-baseline --component bi \
+            --out "$RUNNER_TEMP/shadow_obs_bi_old.json"
+
+      - name: Capture previous Staff Ops snapshot (shadow observation baseline)
+        id: shadow_staffops_baseline
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          yuge-finance shadow-observe-capture-baseline --component staff_ops \
+            --out "$RUNNER_TEMP/shadow_obs_staffops_old.json"
+
       - name: Refresh BI from Beds24
         id: refresh_bi
         env:
@@ -106,6 +133,13 @@ jobs:
           TZ: Asia/Tokyo
         run: |
           yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
+
+      - name: Compare BI snapshot semantics (shadow observation)
+        id: shadow_bi_semantic
+        continue-on-error: true
+        run: |
+          yuge-finance shadow-observe-compare --component bi \
+            --old "$RUNNER_TEMP/shadow_obs_bi_old.json"
 
       - name: Publish BI to R2
         id: publish_r2
@@ -137,6 +171,14 @@ jobs:
           TZ: Asia/Tokyo
         run: |
           yuge-finance export-daily-ops
+
+      - name: Compare Staff Ops snapshot semantics (shadow observation)
+        id: shadow_staffops_semantic
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
+        continue-on-error: true
+        run: |
+          yuge-finance shadow-observe-compare --component staff_ops \
+            --old "$RUNNER_TEMP/shadow_obs_staffops_old.json"
 
       - name: Staff Ops data gate not yet open (Cloudflare Access unconfirmed)
         if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED != '1' }}
@@ -327,5 +369,72 @@ jobs:
           echo "completion_callback_http_status=${http_code} dispatch_status=${call_status}"
           if [ "$http_code" != "200" ]; then
             echo "::warning::Completion callback did not return 200 (got ${http_code}). The Coordinator's lease-timeout recovery will treat this dispatch as stale and retry it on a later Cron tick — no manual action required."
+          fi
+          exit 0
+
+      # Shadow semantic false-negative observation report (KIRAKU BI PHASE 2).
+      # Separate from "Report completion" above by design (item 11): this is
+      # PII-safe aggregate-counter bookkeeping, not dispatch/lease
+      # reconciliation, so a bug here can never affect last_completed_seq or
+      # in_flight tracking. Same skip-if-manual-run gating as the completion
+      # callback (no dispatch_id = not a Coordinator-tracked cycle, don't
+      # pollute the aggregate stats). `if: always()` so an observation is
+      # still reported (as bi_status=error) when refresh_bi itself failed.
+      # Only ever sends the opaque status words below — never snapshot
+      # content, never the secret value.
+      - name: Report shadow observation to BI Refresh Coordinator
+        if: always()
+        env:
+          BI_REFRESH_CALLBACK_SECRET: ${{ secrets.BI_REFRESH_CALLBACK_SECRET }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          REASON: ${{ inputs.reason }}
+          BI_STATUS: ${{ steps.shadow_bi_semantic.outputs.status }}
+          STAFF_OPS_STATUS: ${{ steps.shadow_staffops_semantic.outputs.status }}
+        run: |
+          set -uo pipefail
+          if [ -z "${DISPATCH_ID:-}" ]; then
+            echo "No dispatch_id input (manual run without Coordinator context) — skipping shadow observation report."
+            exit 0
+          fi
+          if [ -z "${BI_REFRESH_CALLBACK_SECRET:-}" ]; then
+            echo "::warning::BI_REFRESH_CALLBACK_SECRET is not set — cannot report shadow observation to the Coordinator."
+            exit 0
+          fi
+
+          # A step that never ran (e.g. refresh_bi itself failed, so
+          # "Compare BI snapshot semantics" was skipped; or the Staff Ops
+          # gate is closed, so its compare step never ran) reports an empty
+          # output — bi should always have run, so treat empty as an
+          # observer error; staff_ops's compare step legitimately does not
+          # run when the gate is closed, so treat empty as "skipped".
+          bi_status="${BI_STATUS:-}"
+          if [ -z "$bi_status" ]; then bi_status="error"; fi
+          staff_ops_status="${STAFF_OPS_STATUS:-}"
+          if [ -z "$staff_ops_status" ]; then staff_ops_status="skipped"; fi
+          observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          payload=$(jq -n \
+            --arg reason "$REASON" \
+            --arg bi_status "$bi_status" \
+            --arg staff_ops_status "$staff_ops_status" \
+            --arg observed_at "$observed_at" \
+            '{
+              reason: (if $reason == "" then "shadow_unconditional" else $reason end),
+              bi_status: $bi_status,
+              staff_ops_status: $staff_ops_status,
+              observed_at: $observed_at
+            }')
+
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "https://kiraku-bi.s-sato-dce.workers.dev/internal/bi-refresh/shadow-observation" \
+            -H "Authorization: Bearer ${BI_REFRESH_CALLBACK_SECRET}" \
+            -H "Content-Type: application/json" \
+            --max-time 20 \
+            -d "$payload") || http_code="curl_error"
+
+          # 送るのはenum文字列(bi_status/staff_ops_status/reason)とタイムスタンプのみ。
+          echo "shadow_observation_http_status=${http_code} bi_status=${bi_status} staff_ops_status=${staff_ops_status}"
+          if [ "$http_code" != "200" ]; then
+            echo "::warning::Shadow observation report did not return 200 (got ${http_code}). Non-fatal — does not affect BI/Staff Ops freshness or dispatch tracking."
           fi
           exit 0
