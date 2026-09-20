@@ -38,7 +38,9 @@ async function check(name, fn) { await fn(); passed++; console.log("ok -", name)
 // ---------------------------------------------------------------- clean state
 await check("clean state (no webhooks, fresh reconcile) -> would_dispatch=false in active mode", async () => {
   const coord = makeCoordinator(ACTIVE_ENV);
-  const now = new Date().toISOString();
+  // Fixed instant (not wall-clock `new Date()`) so this stays stable across
+  // real calendar days — must match the today_jst passed to /internal/evaluate below.
+  const now = "2026-09-20T00:00:00.000Z";
   // Prime last_full_reconcile_at/last_successful_jst_date so the bootstrap
   // full-reconciliation branch doesn't fire — simulate "just ran".
   await post(coord, "/internal/complete", { dispatch_id: "00000000-0000-4000-8000-000000000000", target_seq: 0, status: "success", completed_at: now });
