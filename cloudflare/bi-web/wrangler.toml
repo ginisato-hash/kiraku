@@ -13,7 +13,7 @@ not_found_handling = "single-page-application"
 binding = "BI_DATA"
 bucket_name = "kiraku-bi-data"
 
-# 15分毎に refresh-bi-r2.yml の workflow_dispatch を叩く（scheduled()参照）。
+# 15分毎にBiRefreshCoordinatorへdispatch要否を問い合わせる（scheduled()参照）。
 # GitHub Actions自身の on.schedule は信頼性問題のため撤去済み
 # （fc1ffca参照：549回期待に対し実行100回、最大687分のsilent gapを実測）。
 # 15分起動はこのCloudflare Cron Trigger単独が担う一本構成。
@@ -21,3 +21,34 @@ bucket_name = "kiraku-bi-data"
 # （wrangler secret put GITHUB_ACTIONS_DISPATCH_TOKEN、リポジトリには置かない）。
 [triggers]
 crons = ["3,18,33,48 * * * *"]
+
+# BI更新のevent-driven化（Beds24 Booking Webhook -> event_seq++ ->
+# Cron問い合わせ -> 必要時のみworkflow_dispatch）用の単一シングルトンDO。
+# KVをsource of truthにしない・strong serializationが必要なため、Workers KV
+# ではなくDurable Objectを使う（cloudflare/staff-ops/wrangler.tomlの
+# CleaningLiveStateと同じ理由・同じnew_sqlite_classes方式。namespace/class/
+# 責務は完全に別 — BI更新スケジューリングだけを持つ）。
+[[durable_objects.bindings]]
+name = "BI_REFRESH_COORDINATOR"
+class_name = "BiRefreshCoordinator"
+
+[[migrations]]
+tag = "v1-bi-refresh-coordinator-sqlite"
+new_sqlite_classes = ["BiRefreshCoordinator"]
+
+# 平文で置いてよい値のみ（secretは絶対にここへ書かない — Worker Secretで管理）。
+# 変更してもコード再deploy不要な運用値は、mode含めてDO storage側で持つ
+# （POST /internal/bi-refresh/mode）。ここは初回起動時のフォールバック既定値
+# と、閾値のみ。
+[vars]
+# 喜らく単体のBeds24 property id。Webhook payloadのbooking.propertyIdが
+# これと一致しない場合はrejectする（他物件のWebhookを誤って受理しない）。
+KIRAKU_PROPERTY_ID = "330695"
+# Coordinatorのmodeが未設定（初回デプロイ直後）の場合のみ使われる既定値。
+# 一度 POST /internal/bi-refresh/mode で設定した後は、そちらが優先される。
+BI_REFRESH_DEFAULT_MODE = "shadow"
+# 定期full reconciliationの最大許容間隔（秒）。既定6時間。
+FULL_RECONCILE_MAX_AGE_SECONDS = "21600"
+# in-flight dispatchのlease timeout（秒）。既定25分
+# （実測p95 146秒・最大176秒、2026-09-20時点直近100回、に対し十分な余裕）。
+LEASE_TIMEOUT_SECONDS = "1500"
