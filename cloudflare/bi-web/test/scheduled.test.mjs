@@ -3,6 +3,7 @@
 // 一切露出しない、ctx.waitUntilでdispatchが待たれる。
 import assert from "node:assert";
 import worker, { dispatchBiRefreshWorkflow } from "../src/worker.js";
+import { makeCoordinatorNamespace } from "./testDoNamespace.js";
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -74,11 +75,28 @@ await check("the token value never appears in the returned result, even on failu
 await check("scheduled() defers to ctx.waitUntil so the dispatch isn't cancelled early", async () => {
   let waited = null;
   const ctx = { waitUntil: (p) => { waited = p; } };
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeCoordinatorNamespace() };
   await withMockFetch(async () => new Response(null, { status: 204 }), async () => {
-    await worker.scheduled({ cron: "3,18,33,48 * * * *", scheduledTime: Date.parse("2026-08-29T10:03:00Z") }, { GITHUB_ACTIONS_DISPATCH_TOKEN: "x" }, ctx);
+    await worker.scheduled({ cron: "3,18,33,48 * * * *", scheduledTime: Date.parse("2026-08-29T10:03:00Z") }, env, ctx);
+    assert.ok(waited, "scheduled() must call ctx.waitUntil with the dispatch promise");
+    await waited; // must resolve without throwing, while the mock is still active
   });
-  assert.ok(waited, "scheduled() must call ctx.waitUntil with the dispatch promise");
-  await waited; // should resolve without throwing
+});
+
+await check("scheduled() in the default (shadow) mode still dispatches unconditionally, exactly like before", async () => {
+  let dispatchCount = 0;
+  const ctx = { waitUntil: (p) => { ctx.pending = p; } };
+  const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeCoordinatorNamespace() };
+  await withMockFetch(async (url) => {
+    if (typeof url === "string" && url.includes("api.github.com")) dispatchCount++;
+    return new Response(null, { status: 204 });
+  }, async () => {
+    await worker.scheduled({ cron: "3,18,33,48 * * * *", scheduledTime: Date.parse("2026-09-20T00:03:00Z") }, env, ctx);
+    await ctx.pending;
+    await worker.scheduled({ cron: "3,18,33,48 * * * *", scheduledTime: Date.parse("2026-09-20T00:18:00Z") }, env, ctx);
+    await ctx.pending;
+  });
+  assert.equal(dispatchCount, 2, "shadow mode must never suppress the legacy unconditional dispatch");
 });
 
 console.log(`\n${passed} scheduled/dispatch checks passed`);
