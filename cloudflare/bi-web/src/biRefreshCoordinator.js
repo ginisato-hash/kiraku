@@ -56,8 +56,27 @@ function defaultState() {
     last_failure_at: null,
     mode: null, // null = not explicitly set yet; effective mode falls back to env default
     force_dispatch_requested: false,
+    // Shadow semantic false-negative observation (KIRAKU BI PHASE 2). PII-safe
+    // aggregate counters only — never any booking/guest content. See
+    // handleObservation() for the counting rules.
+    shadow_observations_total: 0,
+    shadow_planner_skip_total: 0,
+    shadow_skip_bi_changed_total: 0,
+    shadow_skip_staff_ops_changed_total: 0,
+    shadow_skip_any_changed_total: 0,
+    shadow_observation_errors_total: 0,
+    last_shadow_observation_at: null,
+    last_shadow_observation_error_at: null,
+    last_shadow_false_negative_at: null,
   };
 }
+
+// Statuses the semantic observer (GitHub Actions step, via
+// yuge-finance shadow-observe-compare) may report per component. "skipped"
+// covers a component that legitimately did not run this cycle (e.g. the
+// Staff Ops export gate is closed) — like "no_baseline", it never counts
+// toward a false negative.
+const OBSERVATION_STATUSES = ["changed", "unchanged", "no_baseline", "skipped", "error"];
 
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -103,6 +122,9 @@ export class BiRefreshCoordinator {
       }
       if (request.method === "POST" && pathname === "/internal/complete") {
         return await this.handleComplete(await this.#readJson(request));
+      }
+      if (request.method === "POST" && pathname === "/internal/observation") {
+        return await this.handleObservation(await this.#readJson(request));
       }
       if (request.method === "POST" && pathname === "/internal/force") {
         return await this.handleForce();
@@ -337,6 +359,66 @@ export class BiRefreshCoordinator {
     return jsonResponse({ ok: true, last_completed_seq: state.last_completed_seq, matched_in_flight: matchesInFlight });
   }
 
+  // Shadow semantic false-negative observation (KIRAKU BI PHASE 2). Called
+  // once per refresh-bi-r2.yml run (from its own "Report shadow observation"
+  // step, alongside — not instead of — handleComplete's completion
+  // callback). Body is already PII-free by construction on the caller's
+  // side (GitHub Actions never has the actual snapshot content, only the
+  // opaque status strings yuge-finance shadow-observe-compare produced) —
+  // this handler additionally never persists anything but counters/
+  // timestamps, so even a caller bug could not smuggle booking content into
+  // Durable Object storage through this endpoint.
+  //
+  // Counting rules (PHASE 2 spec):
+  //   - shadow_observations_total: every accepted observation report.
+  //   - shadow_planner_skip_total: subset where reason==="shadow_unconditional"
+  //     (the planner itself would have skipped this cycle in active mode).
+  //   - shadow_observation_errors_total: subset where either component
+  //     reported "error" (the comparison itself failed — never treated as a
+  //     false negative, since we don't know what actually happened).
+  //   - A "false negative" is counted ONLY when: reason==="shadow_unconditional"
+  //     (planner would have skipped) AND at least one component reported
+  //     "changed" AND neither component errored. "no_baseline"/"skipped"
+  //     never count toward this — see PHASE 2 spec item 12.
+  async handleObservation(body) {
+    const reason = typeof (body && body.reason) === "string" && body.reason ? body.reason : null;
+    const biStatus = OBSERVATION_STATUSES.includes(body && body.bi_status) ? body.bi_status : null;
+    const staffOpsStatus = OBSERVATION_STATUSES.includes(body && body.staff_ops_status) ? body.staff_ops_status : null;
+    if (!reason || !biStatus || !staffOpsStatus) {
+      return jsonResponse({ error: "invalid_observation" }, 400);
+    }
+
+    const state = await this.#load();
+    const nowIso = (body && body.observed_at) || new Date().toISOString();
+
+    state.shadow_observations_total += 1;
+    const plannerWouldHaveSkipped = reason === "shadow_unconditional";
+    if (plannerWouldHaveSkipped) state.shadow_planner_skip_total += 1;
+
+    const hadError = biStatus === "error" || staffOpsStatus === "error";
+    if (hadError) {
+      state.shadow_observation_errors_total += 1;
+      state.last_shadow_observation_error_at = nowIso;
+    }
+
+    let isFalseNegative = false;
+    if (plannerWouldHaveSkipped && !hadError) {
+      const biChanged = biStatus === "changed";
+      const staffOpsChanged = staffOpsStatus === "changed";
+      if (biChanged) state.shadow_skip_bi_changed_total += 1;
+      if (staffOpsChanged) state.shadow_skip_staff_ops_changed_total += 1;
+      if (biChanged || staffOpsChanged) {
+        isFalseNegative = true;
+        state.shadow_skip_any_changed_total += 1;
+        state.last_shadow_false_negative_at = nowIso;
+      }
+    }
+
+    state.last_shadow_observation_at = nowIso;
+    await this.#save(state);
+    return jsonResponse({ ok: true, false_negative: isFalseNegative });
+  }
+
   // Read-only. PII-safe by construction: only ever built from this DO's own
   // scheduling state, which never holds Beds24 booking data or guest PII.
   async handleStatus() {
@@ -373,6 +455,17 @@ export class BiRefreshCoordinator {
       consecutive_failures: state.consecutive_failures,
       last_failure_at: state.last_failure_at,
       next_reconcile_due_at: nextReconcileDueAt,
+      shadow_observation: {
+        total: state.shadow_observations_total,
+        planner_skip_total: state.shadow_planner_skip_total,
+        skip_bi_changed_total: state.shadow_skip_bi_changed_total,
+        skip_staff_ops_changed_total: state.shadow_skip_staff_ops_changed_total,
+        skip_any_changed_total: state.shadow_skip_any_changed_total,
+        errors_total: state.shadow_observation_errors_total,
+        last_observation_at: state.last_shadow_observation_at,
+        last_observation_error_at: state.last_shadow_observation_error_at,
+        last_false_negative_at: state.last_shadow_false_negative_at,
+      },
     });
   }
 }

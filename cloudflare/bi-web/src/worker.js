@@ -388,7 +388,70 @@ async function handleBiRefreshStatus(request, env) {
     last_full_reconcile_at: s.last_full_reconcile_at,
     consecutive_failures: s.consecutive_failures,
     next_reconcile_due_at: s.next_reconcile_due_at,
+    shadow_observation: s.shadow_observation ? {
+      total: s.shadow_observation.total,
+      planner_skip_total: s.shadow_observation.planner_skip_total,
+      skip_bi_changed_total: s.shadow_observation.skip_bi_changed_total,
+      skip_staff_ops_changed_total: s.shadow_observation.skip_staff_ops_changed_total,
+      skip_any_changed_total: s.shadow_observation.skip_any_changed_total,
+      errors_total: s.shadow_observation.errors_total,
+      last_observation_at: s.shadow_observation.last_observation_at,
+      last_observation_error_at: s.shadow_observation.last_observation_error_at,
+      last_false_negative_at: s.shadow_observation.last_false_negative_at,
+    } : null,
   });
+}
+
+// GitHub Actions completion callbackと対になる、shadow false-negative観測用の
+// 別endpoint（PHASE 2）。責務を分離するため /internal/bi-refresh/complete には
+// 混ぜない — completeはdispatch/target_seqのreservation解決、こちらは
+// PII-safeな集計カウンタの加算だけを行う。認証はcompleteと同じ
+// BI_REFRESH_CALLBACK_SECRET（GitHub Actions→Coordinatorのmachine callbackで
+// あり、BI_REFRESH_OPS_SECRETはGitHub Actionsに一切渡さない方針は変えない）。
+// bodyにはBI/Staff Opsのopaqueなstatus文字列（changed/unchanged/no_baseline/
+// skipped/error）以外は乗らない設計（yuge-finance shadow-observe-compare側の
+// 契約）。念のためこの層でも許可された文字列以外はコード側でrejectされる
+// （biRefreshCoordinator.js の OBSERVATION_STATUSES）。
+async function handleBiRefreshShadowObservation(request, env) {
+  if (request.method !== "POST") {
+    return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
+  }
+  const auth = authenticateCallbackRequest(request, env);
+  if (!auth.ok) return jsonResponse({ ok: false, error: auth.error }, auth.status);
+
+  const contentLength = Number(request.headers.get("content-length") || "0");
+  if (contentLength > CALLBACK_MAX_BODY_BYTES) {
+    return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
+  }
+  let bodyText;
+  try {
+    bodyText = await request.text();
+  } catch (e) {
+    return jsonResponse({ ok: false, error: "body_read_error" }, 400);
+  }
+  if (bodyText.length > CALLBACK_MAX_BODY_BYTES) {
+    return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(bodyText);
+  } catch (e) {
+    return jsonResponse({ ok: false, error: "malformed_json" }, 400);
+  }
+
+  const { status: doStatus, body: result } = await coordinatorPost(env, "/internal/observation", {
+    reason: payload.reason,
+    bi_status: payload.bi_status,
+    staff_ops_status: payload.staff_ops_status,
+    observed_at: payload.observed_at,
+  });
+  // reason/statusの実値は列挙型の短い文字列のみでPIIではないため、可観測性の
+  // ためログしてよい（bi_refresh_complete と同じ方針）。
+  console.log(`bi_shadow_observation reason=${payload.reason} bi_status=${payload.bi_status} `
+    + `staff_ops_status=${payload.staff_ops_status} accepted=${doStatus === 200} `
+    + `false_negative=${result && result.false_negative}`);
+  if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
+  return jsonResponse({ ok: true, false_negative: result.false_negative });
 }
 
 // 運用者用: mode切替（shadow/active）・手動force。どちらも再deploy不要で
@@ -452,6 +515,9 @@ export default {
     }
     if (path === "/internal/bi-refresh/complete") {
       return handleBiRefreshComplete(request, env);
+    }
+    if (path === "/internal/bi-refresh/shadow-observation") {
+      return handleBiRefreshShadowObservation(request, env);
     }
     if (path === "/internal/bi-refresh/status") {
       return handleBiRefreshStatus(request, env);
