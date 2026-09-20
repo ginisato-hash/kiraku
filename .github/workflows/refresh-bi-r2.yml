@@ -105,6 +105,23 @@ jobs:
       # changed/unchanged/no_baseline/skipped/error — never booking or guest
       # content — and never fail the job (continue-on-error: true), per the
       # "observability failure < BI/Staff Ops freshness" principle (item 13).
+      #
+      # Comparison order (independent review blocker 2): each component's
+      # baseline is captured BEFORE its refresh/export, but the semantic
+      # compare step runs AFTER that component's R2 publish, not before.
+      # For BI specifically, publish-bi-r2 --preserve-bank-fields-from-r2
+      # mutates the local snapshot files (restoring bank_* fields from the
+      # previous public snapshot when this run has no local bank CSV, which
+      # is always true on GitHub Actions) BEFORE uploading them — comparing
+      # before that mutation would compare a pre-publish intermediate that
+      # production never actually serves. Because the compare steps below
+      # have no `if:` of their own beyond continue-on-error, they inherit
+      # the implicit `success()` check: if the corresponding publish step
+      # fails, the compare step is skipped entirely, its output is empty,
+      # and "Report shadow observation" below maps that to bi_status/
+      # staff_ops_status=error rather than treating an unpublished local
+      # change as a real (false-negative-eligible) production change
+      # (independent review blocker 5).
       - name: Capture previous BI snapshot (shadow observation baseline)
         id: shadow_bi_baseline
         continue-on-error: true
@@ -134,13 +151,6 @@ jobs:
         run: |
           yuge-finance refresh-beds24-bi --auto-months-with-bookings --publish
 
-      - name: Compare BI snapshot semantics (shadow observation)
-        id: shadow_bi_semantic
-        continue-on-error: true
-        run: |
-          yuge-finance shadow-observe-compare --component bi \
-            --old "$RUNNER_TEMP/shadow_obs_bi_old.json"
-
       - name: Publish BI to R2
         id: publish_r2
         env:
@@ -150,6 +160,16 @@ jobs:
           TZ: Asia/Tokyo
         run: |
           yuge-finance publish-bi-r2 --bucket "$CLOUDFLARE_R2_BUCKET" --preserve-bank-fields-from-r2
+
+      # Runs AFTER publish (see comment above) — compares against the
+      # FINALIZED local snapshot files (post sticky-bank restoration), which
+      # is what was actually just uploaded to production R2.
+      - name: Compare BI snapshot semantics (shadow observation)
+        id: shadow_bi_semantic
+        continue-on-error: true
+        run: |
+          yuge-finance shadow-observe-compare --component bi \
+            --old "$RUNNER_TEMP/shadow_obs_bi_old.json"
 
       # --- ここから Staff Daily Ops / 清掃指示書 用データ（財務情報を一切含まない別系統）---
       # 既存BI(latest/bi_snapshot.json等、売上・ADR等を含む)とは完全に別バケット(kiraku-staff-ops-data)。
@@ -171,14 +191,6 @@ jobs:
           TZ: Asia/Tokyo
         run: |
           yuge-finance export-daily-ops
-
-      - name: Compare Staff Ops snapshot semantics (shadow observation)
-        id: shadow_staffops_semantic
-        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
-        continue-on-error: true
-        run: |
-          yuge-finance shadow-observe-compare --component staff_ops \
-            --old "$RUNNER_TEMP/shadow_obs_staffops_old.json"
 
       - name: Staff Ops data gate not yet open (Cloudflare Access unconfirmed)
         if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED != '1' }}
@@ -226,6 +238,20 @@ jobs:
             [ "$attempt" -lt 3 ] && sleep 5
           done
           exit 1
+
+      # Runs AFTER "Publish Daily Ops data to R2" (see the BI comparison
+      # order comment above) — same rationale: compare the payload that was
+      # actually just published, not a pre-publish intermediate. Staff Ops
+      # export has no sticky-field mutation step of its own today, but the
+      # ordering keeps both components consistent and future-proof if one
+      # is ever added.
+      - name: Compare Staff Ops snapshot semantics (shadow observation)
+        id: shadow_staffops_semantic
+        if: ${{ vars.STAFF_OPS_AUTH_CONFIRMED == '1' }}
+        continue-on-error: true
+        run: |
+          yuge-finance shadow-observe-compare --component staff_ops \
+            --old "$RUNNER_TEMP/shadow_obs_staffops_old.json"
 
       # 補助確認のみ。主検証はrefresh-beds24-bi/publish-bi-r2のexit codeで既に厳密に行っている
       # （publish-bi-r2は成功時に generated_at_jst / default_month / uploaded files を出力済み）。
@@ -380,8 +406,14 @@ jobs:
       # callback (no dispatch_id = not a Coordinator-tracked cycle, don't
       # pollute the aggregate stats). `if: always()` so an observation is
       # still reported (as bi_status=error) when refresh_bi itself failed.
-      # Only ever sends the opaque status words below — never snapshot
-      # content, never the secret value.
+      # Only ever sends dispatch_id (an opaque Coordinator-issued UUID, not
+      # guest/booking data) plus the opaque status words below — never
+      # snapshot content, never the secret value.
+      #
+      # dispatch_id is included as an idempotency key (independent review
+      # blocker 4): the Coordinator treats a repeated dispatch_id as a
+      # no-op for every counter, so a GitHub Actions rerun/retry of this
+      # same job can never double-count one 15-minute cycle.
       - name: Report shadow observation to BI Refresh Coordinator
         if: always()
         env:
@@ -390,6 +422,7 @@ jobs:
           REASON: ${{ inputs.reason }}
           BI_STATUS: ${{ steps.shadow_bi_semantic.outputs.status }}
           STAFF_OPS_STATUS: ${{ steps.shadow_staffops_semantic.outputs.status }}
+          STAFF_OPS_GATE_OPEN: ${{ vars.STAFF_OPS_AUTH_CONFIRMED }}
         run: |
           set -uo pipefail
           if [ -z "${DISPATCH_ID:-}" ]; then
@@ -401,24 +434,38 @@ jobs:
             exit 0
           fi
 
-          # A step that never ran (e.g. refresh_bi itself failed, so
-          # "Compare BI snapshot semantics" was skipped; or the Staff Ops
-          # gate is closed, so its compare step never ran) reports an empty
-          # output — bi should always have run, so treat empty as an
-          # observer error; staff_ops's compare step legitimately does not
-          # run when the gate is closed, so treat empty as "skipped".
+          # A step that never ran reports an empty output. For BI, the
+          # compare step only runs after a successful "Publish BI to R2"
+          # (see the step-order comment above), so empty always means the
+          # refresh or the publish itself failed — never a real, published
+          # change — and must be reported as an observer error, never a
+          # false-negative-eligible "changed"/"unchanged" (independent
+          # review blocker 5). For Staff Ops, empty is legitimate
+          # ("skipped") when the STAFF_OPS_AUTH_CONFIRMED gate is simply
+          # closed, but is an error when the gate is OPEN and the compare
+          # step was skipped only because a preceding publish step
+          # (export/bucket/R2 publish) failed — same blocker 5 rule,
+          # applied to the gated component.
           bi_status="${BI_STATUS:-}"
           if [ -z "$bi_status" ]; then bi_status="error"; fi
           staff_ops_status="${STAFF_OPS_STATUS:-}"
-          if [ -z "$staff_ops_status" ]; then staff_ops_status="skipped"; fi
+          if [ -z "$staff_ops_status" ]; then
+            if [ "${STAFF_OPS_GATE_OPEN:-}" = "1" ]; then
+              staff_ops_status="error"
+            else
+              staff_ops_status="skipped"
+            fi
+          fi
           observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           payload=$(jq -n \
+            --arg dispatch_id "$DISPATCH_ID" \
             --arg reason "$REASON" \
             --arg bi_status "$bi_status" \
             --arg staff_ops_status "$staff_ops_status" \
             --arg observed_at "$observed_at" \
             '{
+              dispatch_id: $dispatch_id,
               reason: (if $reason == "" then "shadow_unconditional" else $reason end),
               bi_status: $bi_status,
               staff_ops_status: $staff_ops_status,
