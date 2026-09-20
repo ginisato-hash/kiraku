@@ -1,5 +1,19 @@
 """Beds24 raw payload field probe（point候補・coupon分類）。"""
+import pytest
+
+from yuge_finance import config
 from yuge_finance.reports import beds24_field_probe
+
+# bookingTime/modifiedTimeがcandidateとして見つかることを検証する2件は、実際に
+# キャッシュされたBeds24 raw payload（data/raw/beds24/、.gitignore済み・実予約
+# データを含むため Git管理対象外）が必要。CIには存在しないためskipする。
+_REAL_BEDS24_RAW_DATA_AVAILABLE = bool(list((config.DATA_DIR / "raw" / "beds24").glob("*/*.json")))
+
+_requires_real_beds24_raw_data = pytest.mark.skipif(
+    not _REAL_BEDS24_RAW_DATA_AVAILABLE,
+    reason="requires cached real Beds24 raw payloads under data/raw/beds24/ "
+           "(gitignored, not present in CI)",
+)
 
 
 def test_probe_candidate_fields_has_point_amount():
@@ -30,6 +44,7 @@ def test_probe_does_not_leak_pii():
 
 
 # ---------------- 「本日の新規予約」判定用field（Phase 0） ----------------
+@_requires_real_beds24_raw_data
 def test_probe_finds_booking_created_at_candidate_from_real_payload():
     """推測ではなく実payloadのキー一覧からcandidateを出す。実データではbookingTimeが該当する。"""
     probe = beds24_field_probe.build_probe()
@@ -38,6 +53,7 @@ def test_probe_finds_booking_created_at_candidate_from_real_payload():
     assert probe["selected_fields"]["booking_created_at"] == "bookingTime"
 
 
+@_requires_real_beds24_raw_data
 def test_probe_finds_booking_modified_at_and_status_candidates():
     probe = beds24_field_probe.build_probe()
     assert "modifiedTime" in probe["candidate_fields"]["booking_modified_at"]

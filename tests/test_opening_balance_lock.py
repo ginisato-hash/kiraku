@@ -1,11 +1,31 @@
-"""Phase H-1: 開始残高（会計士確定BS 2026-05-31）ロック値の検証。"""
+"""Phase H-1: 開始残高（会計士確定BS 2026-05-31）ロック値の検証。
+
+このロック値は会計士確定の実データ（`imports/opening_balance/`、.gitignore済み・
+Git管理対象外）に対するものであり、CI環境にはそもそも存在しない。ロック値自体を
+緩めるのではなく、実データが無い環境ではこれらの検証をskipする
+（ローカルで実データがある場合は従来通り厳密にロック値と一致することを要求する）。
+"""
+import pytest
+
+from yuge_finance import config
 from yuge_finance.ingest import opening_balance
+
+_REAL_OPENING_DATA_AVAILABLE = bool(
+    list((config.IMPORTS_DIR / "opening_balance").glob("opening_balance_*.csv"))
+) if (config.IMPORTS_DIR / "opening_balance").exists() else False
+
+_requires_real_opening_data = pytest.mark.skipif(
+    not _REAL_OPENING_DATA_AVAILABLE,
+    reason="requires real accountant-confirmed opening balance data under "
+           "imports/opening_balance/ (gitignored, not present in CI)",
+)
 
 
 def _load_real_records():
     return opening_balance.load_opening("2026-05-31")
 
 
+@_requires_real_opening_data
 def test_asset_liability_equity_totals_match_lock():
     records = _load_real_records()
     tot = opening_balance.account_totals(records)
@@ -20,6 +40,7 @@ def test_asset_equals_liability_plus_equity():
     assert tot["asset_total"] == round(tot["liability_total"] + tot["equity_total"], 2)
 
 
+@_requires_real_opening_data
 def test_critical_checks_all_ok():
     records = _load_real_records()
     checks = opening_balance.critical_checks(records, as_of_date="2026-05-31")
