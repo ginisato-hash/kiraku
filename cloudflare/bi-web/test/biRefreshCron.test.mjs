@@ -187,7 +187,15 @@ await check("shadow mode still dispatches unconditionally even when a previous s
   assert.ok(!JSON.parse(lastCaptured.body).inputs, "the second, untracked tick must fall back to the legacy no-inputs call shape");
 });
 
-// ---------------------------------------------------------------- fix round: coordinator fail-open (blocker 4)
+// ---------------------------------------------------------------- fail-closed: coordinator evaluation failure
+// Operational requirement change: the legacy "Coordinator failure -> fall
+// back to the old unconditional 15-minute dispatch" (fail-open) behavior is
+// retired. This is an internal preview BI feed; a short outage is
+// acceptable. When the Coordinator itself throws or returns a malformed
+// response, scheduled() now logs and returns without dispatching anything
+// at all — GitHub Actions must never fire on a Coordinator failure. The
+// next tick (15 minutes later) recovers on its own once the Coordinator
+// answers normally again.
 function makeThrowingCoordinatorNamespace() {
   return { idFromName: (n) => n, get: () => ({ fetch: async () => { throw new Error("DO unavailable"); } }) };
 }
@@ -195,25 +203,25 @@ function makeMalformedCoordinatorNamespace() {
   return { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("not json", { status: 200 }) }) };
 }
 
-await check("shadow + coordinator throws -> GitHub is still dispatched exactly once (fail-open)", async () => {
+await check("shadow + coordinator throws -> GitHub Actions is not dispatched (fail-closed)", async () => {
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
   let calls = 0;
   await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
     await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
   });
-  assert.equal(calls, 1, "a broken Coordinator must never prevent the legacy unconditional dispatch");
+  assert.equal(calls, 0, "a broken Coordinator must never trigger the legacy unconditional dispatch");
 });
 
-await check("active + coordinator throws -> GitHub is still dispatched exactly once (fail-open, refresh must not silently stop)", async () => {
+await check("active + coordinator throws -> GitHub Actions is not dispatched (fail-closed)", async () => {
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
   let calls = 0;
   await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
     await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
   });
-  assert.equal(calls, 1, "active mode must also fail open to the unconditional dispatch when the Coordinator is unavailable");
+  assert.equal(calls, 0, "active mode must also fail closed — no dispatch — when the Coordinator is unavailable");
 });
 
-await check("coordinator returns a malformed (non-JSON/shape-invalid) response -> safe fallback dispatch, no thrown exception", async () => {
+await check("coordinator returns a malformed (non-JSON/shape-invalid) response -> no dispatch, no thrown exception", async () => {
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeMalformedCoordinatorNamespace() };
   let calls = 0;
   let threw = false;
@@ -225,29 +233,33 @@ await check("coordinator returns a malformed (non-JSON/shape-invalid) response -
     }
   });
   assert.equal(threw, false, "scheduled() must never let a Coordinator response-shape problem escape as an unhandled exception");
-  assert.equal(calls, 1, "must still have fallen back to the unconditional dispatch");
+  assert.equal(calls, 0, "a malformed Coordinator response must fail closed — no dispatch at all");
 });
 
-await check("fallback GitHub dispatch failure (coordinator down AND GitHub API fails) is observable, not a thrown exception", async () => {
+await check("coordinator down -> GitHub API is never invoked, even if it would have failed anyway", async () => {
   const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeThrowingCoordinatorNamespace() };
+  let calls = 0;
   let threw = false;
-  await withMockFetch(async () => new Response("server error", { status: 500 }), async () => {
+  await withMockFetch(async () => { calls++; return new Response("server error", { status: 500 }); }, async () => {
     try {
       await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
     } catch (e) {
       threw = true;
     }
   });
-  assert.equal(threw, false, "a doubly-failed tick (coordinator down + GitHub API down) must not throw — it's logged and left to the next tick");
+  assert.equal(threw, false, "a coordinator failure must not throw — it's logged and left to the next tick");
+  assert.equal(calls, 0, "fail-closed means GitHub Actions is never dispatched when Coordinator evaluation itself failed");
 });
 
 // ---------------------------------------------------------------- fix round 2: strict coordinator response contract
-// The previous fail-open check only confirmed status===200 and
-// typeof body.mode==="string" — {"mode":"active"} alone satisfied that,
-// then `!decision.would_dispatch` (undefined -> falsy -> true) took the
+// The original check only confirmed status===200 and typeof
+// body.mode==="string" — {"mode":"active"} alone satisfied that, then
+// `!decision.would_dispatch` (undefined -> falsy -> true) took the
 // "nothing to do" early return in active mode, silently stopping BI
-// refresh on a Coordinator bug. These prove every such partial/malformed
-// response now falls back to the unconditional dispatch instead.
+// refresh on a Coordinator bug. validateCoordinatorDecision() throws on
+// every such partial/malformed shape, which now (fail-closed) means no
+// dispatch at all rather than falling back to the legacy unconditional
+// dispatch.
 function makeFixedJsonCoordinatorNamespace(body, status = 200) {
   return {
     idFromName: (n) => n,
@@ -255,40 +267,39 @@ function makeFixedJsonCoordinatorNamespace(body, status = 200) {
   };
 }
 
-async function assertFallsBackToUnconditionalDispatch(name, body) {
+async function assertFailsClosedWithNoDispatch(name, body) {
   await check(name, async () => {
     const env = { GITHUB_ACTIONS_DISPATCH_TOKEN: "x", BI_REFRESH_COORDINATOR: makeFixedJsonCoordinatorNamespace(body) };
-    let captured = null;
-    await withMockFetch(async (url, init) => { captured = init; return new Response(null, { status: 204 }); }, async () => {
+    let calls = 0;
+    await withMockFetch(async () => { calls++; return new Response(null, { status: 204 }); }, async () => {
       await runCron(env, makeCtx(), "2026-09-20T00:03:00Z");
     });
-    assert.ok(captured, "must still have dispatched");
-    assert.ok(!JSON.parse(captured.body).inputs, "a rejected/invalid decision must dispatch with the legacy no-inputs shape, not made-up inputs");
+    assert.equal(calls, 0, "a rejected/invalid coordinator decision must fail closed — no dispatch at all");
   });
 }
 
-await assertFallsBackToUnconditionalDispatch(
-  "200 + {mode:active} (missing would_dispatch) -> unconditional fallback dispatch, not a silent skip",
+await assertFailsClosedWithNoDispatch(
+  "200 + {mode:active} (missing would_dispatch) -> fail-closed, no dispatch",
   { mode: "active" },
 );
 
-await assertFallsBackToUnconditionalDispatch(
-  "200 + {mode:active, would_dispatch:true} (missing event_seq/last_completed_seq/dispatch_id) -> unconditional fallback dispatch",
+await assertFailsClosedWithNoDispatch(
+  "200 + {mode:active, would_dispatch:true} (missing event_seq/last_completed_seq/dispatch_id) -> fail-closed, no dispatch",
   { mode: "active", would_dispatch: true },
 );
 
-await assertFallsBackToUnconditionalDispatch(
-  "200 + {mode:turbo, would_dispatch:false} (unsupported mode) -> unconditional fallback dispatch",
+await assertFailsClosedWithNoDispatch(
+  "200 + {mode:turbo, would_dispatch:false} (unsupported mode) -> fail-closed, no dispatch",
   { mode: "turbo", would_dispatch: false },
 );
 
-await assertFallsBackToUnconditionalDispatch(
-  "200 + active dispatch decision missing dispatch_id -> unconditional fallback dispatch",
+await assertFailsClosedWithNoDispatch(
+  "200 + active dispatch decision missing dispatch_id -> fail-closed, no dispatch",
   { mode: "active", would_dispatch: true, reason: "booking_webhook", event_seq: 5, last_completed_seq: 4 },
 );
 
-await assertFallsBackToUnconditionalDispatch(
-  "200 + active dispatch decision with an invalid target_seq -> unconditional fallback dispatch",
+await assertFailsClosedWithNoDispatch(
+  "200 + active dispatch decision with an invalid target_seq -> fail-closed, no dispatch",
   {
     mode: "active", would_dispatch: true, reason: "booking_webhook", event_seq: 5, last_completed_seq: 4,
     dispatch_id: "abc-123", target_seq: "not-a-number",

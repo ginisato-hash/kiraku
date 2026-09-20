@@ -599,16 +599,15 @@ export default {
 };
 
 // Coordinator response contract validation (fix round: strict contract).
-// The previous fail-open check only confirmed `status===200 && typeof
-// body.mode === "string"` — that is NOT enough. A response like
-// `{"mode":"active"}` (missing would_dispatch entirely) passed that check,
-// then `!decision.would_dispatch` evaluated true (undefined is falsy),
-// silently taking the "active mode, nothing to do" early-return path and
-// stopping BI refresh entirely on a Coordinator bug/partial-response —
-// exactly the kind of failure fail-open exists to prevent. This validates
+// The previous check only confirmed `status===200 && typeof body.mode ===
+// "string"` — that is NOT enough. A response like `{"mode":"active"}`
+// (missing would_dispatch entirely) passed that check, then
+// `!decision.would_dispatch` evaluated true (undefined is falsy), silently
+// taking the "active mode, nothing to do" early-return path and stopping
+// BI refresh entirely on a Coordinator bug/partial-response. This validates
 // the full shape BEFORE any dispatch decision is made from it; any
-// violation throws, which the caller's try/catch turns into the same
-// legacy unconditional dispatch fallback as a hard Coordinator error.
+// violation throws, which the caller's try/catch now (fail-closed) means
+// no dispatch at all, treated the same as any other hard Coordinator error.
 function validateCoordinatorDecision(body) {
   if (!body || typeof body !== "object") {
     throw new Error("coordinator response is not an object");
@@ -669,11 +668,15 @@ function validateCoordinatorDecision(body) {
 // reservationをCoordinatorへ返却し（次回Cronで再試行可能にする）、
 // 成功扱いにしない。
 //
-// fail-open（blocker 4）: Coordinator自体が例外を投げる・不正なレスポンス
-// を返す等、評価そのものが失敗した場合は、modeに関わらず従来通りの
-// 無条件dispatchへ必ずfallbackする。「取りこぼし禁止 >
-// 重複実行回避」の原則どおり、Coordinator障害でBI更新が止まる方が
-// Actions実行数が多少増えるより重大なため。
+// fail-closed（運用要件変更: 旧15分無条件GitHub Actions方式へのfallback
+// は禁止）: Coordinator自体が例外を投げる・不正なレスポンスを返す等、
+// 評価そのものが失敗した場合は、modeに関わらずログを出すだけで何も
+// dispatchせず戻る。社内速報BIであり短時間の更新停止は許容するため、
+// 旧fail-open（無条件dispatchへのfallback）は廃止した。次のCron tick
+// （15分後）でCoordinatorが正常応答すれば自動的に復帰する。6時間
+// full reconciliation / webhook dirty / manual forceは、いずれも
+// Coordinatorが正常応答した場合にのみ機能する従来通りの経路であり、
+// この変更では触れていない。
 async function runScheduledEvaluation(event, env) {
   const scheduledTime = new Date(event.scheduledTime);
   const nowIso = scheduledTime.toISOString();
@@ -689,14 +692,8 @@ async function runScheduledEvaluation(event, env) {
     }
     decision = validateCoordinatorDecision(body);
   } catch (e) {
-    console.log(`bi_coordinator_error_fallback_dispatch cron=${event.cron} `
+    console.log(`bi_coordinator_error_fail_closed cron=${event.cron} scheduled_time=${nowIso} `
       + `error=${e instanceof Error ? e.message : String(e)}`);
-    const result = await dispatchBiRefreshWorkflow(env);
-    if (result.ok) {
-      console.log(`bi_dispatch_ok cron=${event.cron} scheduled_time=${nowIso} mode=fallback`);
-    } else {
-      console.log(`bi_dispatch_failed cron=${event.cron} status=${result.status} error=${result.error} mode=fallback`);
-    }
     return;
   }
 
