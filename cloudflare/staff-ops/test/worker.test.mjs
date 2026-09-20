@@ -119,7 +119,23 @@ await check("unauthenticated GET /ops/print/guest-register redirects to /login (
 await check("a tampered session cookie is treated as unauthenticated", async () => {
   const env = makeEnv();
   const goodCookie = await validCookieHeader(env);
-  const tampered = goodCookie.slice(0, -1) + (goodCookie.slice(-1) === "A" ? "B" : "A");
+  // Corrupt the FIRST character of the token value, not the last. The
+  // token is base64url(payload).base64url(signature); base64's final
+  // (possibly incomplete) group has trailing bits that are pure zero
+  // padding and get discarded on decode. Flipping only the lowest bit of
+  // that specific final character (exactly what toggling between the
+  // adjacent alphabet entries "A"(000000)/"B"(000001) does) can land
+  // entirely within those discarded padding bits, decoding to the exact
+  // same bytes as the original — a silent no-op "tamper" that this test
+  // observed intermittently (probability tied to the current timestamp
+  // baked into the payload, since createSessionToken() embeds `now`).
+  // The FIRST character of a base64 string is always part of a full,
+  // non-padded group, so corrupting it always changes a real payload byte.
+  const eqIdx = goodCookie.indexOf("=");
+  const valueStart = eqIdx + 1;
+  const firstChar = goodCookie[valueStart];
+  const replacement = firstChar === "A" ? "B" : "A";
+  const tampered = goodCookie.slice(0, valueStart) + replacement + goodCookie.slice(valueStart + 1);
   const r = await get(env, "/api/daily-ops?date=2026-08-30", { Cookie: tampered });
   assert.equal(r.status, 401);
 });
