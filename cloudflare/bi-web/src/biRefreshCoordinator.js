@@ -96,6 +96,21 @@ const REASON_COUNTER_KEYS = {
   manual_force: "shadow_reason_manual_force_total",
 };
 const REASON_OTHER_COUNTER_KEY = "shadow_reason_other_total";
+const REASON_OTHER_BUCKET = "other";
+
+// refresh-bi-r2.yml's dispatch_id/reason workflow_dispatch inputs are
+// human-editable (an operator can run the workflow manually with any text
+// in either field), so this endpoint must not trust either one to be safe
+// to store or log verbatim.
+//
+// The only dispatch_id the automated pipeline ever sends is one this
+// Coordinator itself issued via crypto.randomUUID() (handleEvaluate) —
+// always a canonical RFC 4122 version-4 UUID. Restricting acceptance to
+// exactly that shape means an operator typing arbitrary text (or PII) into
+// the manual dispatch_id input can never have it stored in
+// shadow_observed_dispatch_ids or reach a log line; it simply gets
+// rejected as invalid_observation, same as any other malformed value.
+const DISPATCH_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // Bound on the recent-dispatch-id set (see defaultState() comment).
 const MAX_OBSERVED_DISPATCH_IDS = 512;
@@ -427,21 +442,37 @@ export class BiRefreshCoordinator {
   //     — repeating that report must be a no-op for every counter (a
   //     duplicate response still returns 200, since the caller's report
   //     genuinely succeeded, it just didn't need to change anything).
+  //   - PII-safe metadata contract (fix round blocker 7): dispatch_id must
+  //     be a canonical UUID (see DISPATCH_ID_RE) and reason is only ever
+  //     stored/returned/logged as its normalized `reason_bucket` — one of
+  //     the known reason names or "other" — never the raw string. Both
+  //     `dispatch_id` and `reason` are human-editable workflow_dispatch
+  //     inputs; this is what stops an operator's manual-run typo (or
+  //     malicious input) from smuggling arbitrary text into DO storage or
+  //     a Cloudflare log line, on top of the caller-side PII-safety this
+  //     endpoint already assumed for bi_status/staff_ops_status.
   async handleObservation(body) {
-    const dispatchId = typeof (body && body.dispatch_id) === "string" && body.dispatch_id ? body.dispatch_id : null;
+    const rawDispatchId = body && body.dispatch_id;
+    const dispatchId = typeof rawDispatchId === "string" && DISPATCH_ID_RE.test(rawDispatchId)
+      ? rawDispatchId : null;
     const reason = typeof (body && body.reason) === "string" && body.reason ? body.reason : null;
     const biStatus = OBSERVATION_STATUSES.includes(body && body.bi_status) ? body.bi_status : null;
     const staffOpsStatus = OBSERVATION_STATUSES.includes(body && body.staff_ops_status) ? body.staff_ops_status : null;
     if (!dispatchId || !reason || !biStatus || !staffOpsStatus) {
+      // Never echo rawDispatchId/body.reason back — a malformed dispatch_id
+      // (including one carrying arbitrary/PII-shaped text) or an unrecognized
+      // field must not appear anywhere in the response.
       return jsonResponse({ error: "invalid_observation" }, 400);
     }
+    const reasonBucket = Object.prototype.hasOwnProperty.call(REASON_COUNTER_KEYS, reason)
+      ? reason : REASON_OTHER_BUCKET;
 
     const state = await this.#load();
 
     const alreadySeen = state.shadow_observed_dispatch_ids.includes(dispatchId);
     if (alreadySeen) {
       // No counters move for a duplicate — same cycle, already counted.
-      return jsonResponse({ ok: true, duplicate: true, false_negative: false });
+      return jsonResponse({ ok: true, duplicate: true, false_negative: false, reason_bucket: reasonBucket });
     }
     state.shadow_observed_dispatch_ids =
       [...state.shadow_observed_dispatch_ids, dispatchId].slice(-MAX_OBSERVED_DISPATCH_IDS);
@@ -449,13 +480,13 @@ export class BiRefreshCoordinator {
     const nowIso = (body && body.observed_at) || new Date().toISOString();
 
     state.shadow_observations_total += 1;
-    const reasonKey = REASON_COUNTER_KEYS[reason];
-    if (reasonKey) {
-      state[reasonKey] += 1;
-    } else {
-      // Unknown reason string: never silently dropped — bucketed as
-      // "other" so it stays visible in /status instead of vanishing.
+    if (reasonBucket === REASON_OTHER_BUCKET) {
+      // Unknown reason string: never stored/logged raw — only ever
+      // bucketed as "other" so it stays visible in /status without
+      // vanishing OR smuggling arbitrary text anywhere.
       state[REASON_OTHER_COUNTER_KEY] += 1;
+    } else {
+      state[REASON_COUNTER_KEYS[reasonBucket]] += 1;
     }
     const plannerWouldHaveSkipped = reason === "shadow_unconditional";
     if (plannerWouldHaveSkipped) state.shadow_planner_skip_total += 1;
@@ -481,7 +512,7 @@ export class BiRefreshCoordinator {
 
     state.last_shadow_observation_at = nowIso;
     await this.#save(state);
-    return jsonResponse({ ok: true, duplicate: false, false_negative: isFalseNegative });
+    return jsonResponse({ ok: true, duplicate: false, false_negative: isFalseNegative, reason_bucket: reasonBucket });
   }
 
   // Read-only. PII-safe by construction: only ever built from this DO's own

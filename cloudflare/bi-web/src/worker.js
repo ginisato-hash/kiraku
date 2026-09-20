@@ -454,16 +454,26 @@ async function handleBiRefreshShadowObservation(request, env) {
     staff_ops_status: payload.staff_ops_status,
     observed_at: payload.observed_at,
   });
-  // reason/statusの実値は列挙型の短い文字列のみでPIIではないため、可観測性の
-  // ためログしてよい（bi_refresh_complete と同じ方針）。dispatch_idは
-  // GitHub Actions run固有のUUID（Coordinatorが発行）であって予約者PIIでは
-  // ないため、これもログしてよい（重複配信の追跡に必要）。
-  console.log(`bi_shadow_observation dispatch_id=${payload.dispatch_id} reason=${payload.reason} `
+  // dispatch_id/reason are human-editable refresh-bi-r2.yml workflow_dispatch
+  // inputs (an operator can run the workflow manually with arbitrary text in
+  // either field), so the RAW request values are never logged here — only
+  // once the Coordinator has validated dispatch_id as a canonical UUID
+  // (fix round blocker 7; a rejection logs a fixed "(rejected)" placeholder
+  // instead) and normalized reason into result.reason_bucket (one of the
+  // known reason names or "other" — never the raw string). bi_status/
+  // staff_ops_status are not operator-editable workflow_dispatch inputs
+  // (only ever the fixed enum shadow-observe-compare's own CLI output can
+  // produce), so those remain safe to log verbatim as before.
+  const loggedDispatchId = doStatus === 200 ? payload.dispatch_id : "(rejected)";
+  const reasonBucket = (result && result.reason_bucket) || "(rejected)";
+  console.log(`bi_shadow_observation dispatch_id=${loggedDispatchId} reason_bucket=${reasonBucket} `
     + `bi_status=${payload.bi_status} staff_ops_status=${payload.staff_ops_status} `
     + `accepted=${doStatus === 200} duplicate=${result && result.duplicate} `
     + `false_negative=${result && result.false_negative}`);
   if (doStatus !== 200) return jsonResponse({ ok: false, error: result.error || "invalid_payload" }, 400);
-  return jsonResponse({ ok: true, duplicate: result.duplicate, false_negative: result.false_negative });
+  return jsonResponse({
+    ok: true, duplicate: result.duplicate, false_negative: result.false_negative, reason_bucket: result.reason_bucket,
+  });
 }
 
 // 運用者用: mode切替（shadow/active）・手動force。どちらも再deploy不要で
