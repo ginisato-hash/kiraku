@@ -30,6 +30,7 @@ async function get(coord, path) {
 }
 
 const ACTIVE_ENV = { BI_REFRESH_DEFAULT_MODE: "active" };
+const SHADOW_ENV = { BI_REFRESH_DEFAULT_MODE: "shadow" };
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; console.log("ok -", name); }
@@ -292,6 +293,142 @@ await check("set-mode rejects an invalid mode value", async () => {
   assert.equal(r.status, 400);
   const ok = await post(coord, "/internal/mode", { mode: "active" });
   assert.equal(ok.body.mode, "active");
+});
+
+// ---------------------------------------------------------------- fix round: shadow state tracking (blocker 1)
+await check("shadow: a clean successful unconditional run updates last_full_reconcile_at/last_successful_jst_date", async () => {
+  const coord = makeCoordinator({ ...SHADOW_ENV, FULL_RECONCILE_MAX_AGE_SECONDS: "21600" });
+  // Prime a very recent success so the bootstrap/full-reconcile-overdue
+  // branch doesn't fire — isolates the "genuinely clean" case.
+  await post(coord, "/internal/complete", {
+    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+  });
+
+  const r = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:01:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r.body.mode, "shadow");
+  assert.equal(r.body.would_dispatch, false, "planner verdict: nothing warrants a dispatch");
+  assert.ok(r.body.dispatch_id, "shadow must still reserve/track its unconditional dispatch");
+  assert.equal(r.body.dispatch_reason, "shadow_unconditional");
+
+  await post(coord, "/internal/complete", {
+    dispatch_id: r.body.dispatch_id, target_seq: r.body.target_seq, status: "success",
+    completed_at: "2026-09-20T00:02:00.000Z",
+  });
+  const status = await get(coord, "/internal/status");
+  assert.equal(status.body.last_full_reconcile_at, "2026-09-20T00:02:00.000Z");
+  assert.equal(status.body.last_successful_jst_date, "2026-09-20");
+});
+
+await check("shadow: a successful run advances last_completed_seq only to the dispatch-time target_seq snapshot", async () => {
+  const coord = makeCoordinator(SHADOW_ENV);
+  await post(coord, "/internal/event");
+  await post(coord, "/internal/event");
+  const r = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:00:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r.body.target_seq, 2);
+  await post(coord, "/internal/complete", { dispatch_id: r.body.dispatch_id, target_seq: r.body.target_seq, status: "success" });
+  const status = await get(coord, "/internal/status");
+  assert.equal(status.body.last_completed_seq, 2);
+});
+
+await check("shadow: a webhook arriving mid-run remains dirty after that run's completion (the whole race-condition point, in shadow too)", async () => {
+  const coord = makeCoordinator(SHADOW_ENV);
+  await post(coord, "/internal/event"); // event_seq=1
+  const r = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:00:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r.body.target_seq, 1);
+
+  await post(coord, "/internal/event"); // event_seq=2, arrives while the shadow-tracked run is "in flight"
+
+  // shadow still can't reserve a second dispatch while one is in-flight —
+  // it will still unconditionally call GitHub next tick, just untracked;
+  // the important guarantee is the FIRST run's own completion is correct.
+  const midFlight = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:01:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(midFlight.body.dispatch_id, null);
+  assert.equal(midFlight.body.reason, "in_flight");
+
+  await post(coord, "/internal/complete", {
+    dispatch_id: r.body.dispatch_id, target_seq: r.body.target_seq, status: "success",
+    completed_at: "2026-09-20T00:02:00.000Z",
+  });
+  const status = await get(coord, "/internal/status");
+  assert.equal(status.body.last_completed_seq, 1);
+  assert.equal(status.body.event_seq, 2);
+  assert.equal(status.body.dirty_count, 1, "event 2 must still be pending — this is what a boolean dirty flag would have lost");
+});
+
+await check("shadow: the planner becomes clean (would_dispatch=false) after the unconditional run it was observing succeeds", async () => {
+  const coord = makeCoordinator(SHADOW_ENV);
+  await post(coord, "/internal/event");
+  const r = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:00:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r.body.would_dispatch, true);
+  assert.equal(r.body.reason, "booking_webhook");
+  await post(coord, "/internal/complete", {
+    dispatch_id: r.body.dispatch_id, target_seq: r.body.target_seq, status: "success",
+    completed_at: "2026-09-20T00:02:00.000Z",
+  });
+  const clean = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:03:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(clean.body.would_dispatch, false, "planner must now independently agree nothing is pending");
+});
+
+// ---------------------------------------------------------------- fix round: manual force survives dispatch failure (blocker 3)
+await check("manual force + a dispatch-API failure re-arms the force request for the next tick", async () => {
+  const coord = makeCoordinator(ACTIVE_ENV);
+  await post(coord, "/internal/complete", {
+    dispatch_id: "boot", target_seq: 0, status: "success", completed_at: "2026-09-20T00:00:00.000Z",
+  });
+  await post(coord, "/internal/force");
+
+  const r1 = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:01:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r1.body.reason, "manual_force");
+  // GitHub workflow_dispatch API itself failed (500/network/timeout) — worker.js reports this back.
+  await post(coord, "/internal/dispatch-failure", { dispatch_id: r1.body.dispatch_id });
+
+  const midStatus = await get(coord, "/internal/status");
+  assert.equal(midStatus.body.force_dispatch_requested, true, "the force request must not be silently dropped");
+  assert.equal(midStatus.body.in_flight, null);
+
+  const r2 = await post(coord, "/internal/evaluate", { now_iso: "2026-09-20T00:02:00.000Z", today_jst: "2026-09-20" });
+  assert.equal(r2.body.reason, "manual_force", "the next tick must retry the same manual force");
+  assert.notEqual(r2.body.dispatch_id, r1.body.dispatch_id);
+
+  // This time the GitHub API call succeeds.
+  await post(coord, "/internal/complete", { dispatch_id: r2.body.dispatch_id, target_seq: r2.body.target_seq, status: "success" });
+  const finalStatus = await get(coord, "/internal/status");
+  assert.equal(finalStatus.body.force_dispatch_requested, false, "a genuinely successful dispatch must still consume the force flag");
+});
+
+await check("a dispatch-API failure for a non-force reason does NOT resurrect force_dispatch_requested", async () => {
+  const coord = makeCoordinator(ACTIVE_ENV);
+  await post(coord, "/internal/event");
+  const r = await post(coord, "/internal/evaluate", { today_jst: "2026-09-20" });
+  assert.equal(r.body.reason, "booking_webhook");
+  await post(coord, "/internal/dispatch-failure", { dispatch_id: r.body.dispatch_id });
+  const status = await get(coord, "/internal/status");
+  assert.equal(status.body.force_dispatch_requested, false);
+});
+
+// ---------------------------------------------------------------- fix round: target_seq invariant (blocker 5)
+await check("a completion callback claiming a target_seq beyond the current event_seq is rejected without mutating state", async () => {
+  const coord = makeCoordinator(ACTIVE_ENV);
+  for (let i = 0; i < 10; i++) await post(coord, "/internal/event"); // event_seq=10
+  const before = await get(coord, "/internal/status");
+  assert.equal(before.body.event_seq, 10);
+
+  const r = await post(coord, "/internal/complete", { dispatch_id: "forged", target_seq: 999999, status: "success" });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, "target_seq_exceeds_event_seq");
+
+  const after = await get(coord, "/internal/status");
+  assert.equal(after.body.last_completed_seq, 0, "must not have advanced");
+  assert.equal(after.body.event_seq, 10, "must not have been mutated at all");
+});
+
+await check("a completion callback whose target_seq exactly equals the current event_seq is accepted (boundary)", async () => {
+  const coord = makeCoordinator(ACTIVE_ENV);
+  await post(coord, "/internal/event");
+  await post(coord, "/internal/event");
+  const r = await post(coord, "/internal/complete", { dispatch_id: "x", target_seq: 2, status: "success" });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.last_completed_seq, 2);
 });
 
 console.log(`\n${passed} BiRefreshCoordinator checks passed`);

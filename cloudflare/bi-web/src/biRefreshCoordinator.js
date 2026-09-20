@@ -155,12 +155,27 @@ export class BiRefreshCoordinator {
   }
 
   // Core decision (Cron planner). Mutates state for: stale-lease reclaim
-  // (always, regardless of mode) and, only when mode=active AND a dispatch
-  // is warranted, the atomic reservation of a new in-flight dispatch.
-  // mode=shadow computes the same would_dispatch/reason but never reserves
-  // — the existing unconditional Cron dispatch keeps running in shadow so
-  // the planner can be observed against real traffic before it controls
-  // anything (Stage B in the PR description).
+  // (always, regardless of mode), and the atomic reservation of a new
+  // in-flight dispatch whenever one is actually needed to keep tracking
+  // correct — which differs by mode:
+  //   active: reserves ONLY when would_dispatch is true. When clean, the
+  //     Worker skips calling GitHub entirely — this is the actual
+  //     Actions-count savings.
+  //   shadow: the Worker calls GitHub UNCONDITIONALLY every tick regardless
+  //     of would_dispatch (that's the whole point of shadow mode — zero
+  //     production behavior change while the planner is only observed).
+  //     But that unconditional call still needs a target_seq snapshot and a
+  //     dispatch_id so its completion callback can advance
+  //     last_completed_seq/last_full_reconcile_at/last_successful_jst_date
+  //     — otherwise shadow-mode observation never reflects real successful
+  //     runs and can never show "clean". So shadow ALWAYS reserves too
+  //     (unless something is already in-flight), just with `reason` falling
+  //     back to "shadow_unconditional" when the planner itself found
+  //     nothing warranting a dispatch. `would_dispatch`/`reason` in the
+  //     response always reflect the planner's own independent judgement
+  //     (what active mode would have done) for observability; the
+  //     dispatch/reservation actually issued is reported separately via
+  //     dispatch_id/target_seq/dispatch_reason.
   async handleEvaluate(body) {
     const state = await this.#load();
     const nowIso = (body && body.now_iso) || new Date().toISOString();
@@ -184,7 +199,7 @@ export class BiRefreshCoordinator {
       return jsonResponse({
         would_dispatch: false, reason: "in_flight", mode,
         event_seq: state.event_seq, last_completed_seq: state.last_completed_seq,
-        stale_reclaimed: staleReclaimed,
+        stale_reclaimed: staleReclaimed, dispatch_id: null, target_seq: null, dispatch_reason: null,
       });
     }
 
@@ -204,31 +219,39 @@ export class BiRefreshCoordinator {
     }
 
     const wouldDispatch = reason != null;
+    // active only reserves when actually warranted; shadow always reserves
+    // (it dispatches every tick regardless of the planner's own verdict).
+    const shouldReserve = mode === MODE_ACTIVE ? wouldDispatch : true;
 
-    if (mode !== MODE_ACTIVE || !wouldDispatch) {
+    if (!shouldReserve) {
       await this.#save(state); // persist any stale-lease reclaim even when not dispatching
       return jsonResponse({
         would_dispatch: wouldDispatch, reason, mode,
         event_seq: state.event_seq, last_completed_seq: state.last_completed_seq,
-        stale_reclaimed: staleReclaimed,
+        stale_reclaimed: staleReclaimed, dispatch_id: null, target_seq: null, dispatch_reason: null,
       });
     }
 
-    // active mode, dispatch warranted: reserve atomically.
+    // Reserve atomically. dispatch_reason is what actually gets reported to
+    // GitHub as the `reason` input — the real planner reason when there is
+    // one (including in shadow mode, e.g. a webhook came in), or
+    // "shadow_unconditional" when shadow is dispatching solely because it
+    // always does, not because the planner found anything.
+    const dispatchReason = reason || "shadow_unconditional";
     const dispatchId = crypto.randomUUID();
     state.in_flight_dispatch_id = dispatchId;
     state.in_flight_target_seq = state.event_seq;
     state.in_flight_started_at = nowIso;
-    state.in_flight_reason = reason;
+    state.in_flight_reason = dispatchReason;
     state.last_dispatch_at = nowIso;
     if (reason === "manual_force") state.force_dispatch_requested = false;
     await this.#save(state);
 
     return jsonResponse({
-      would_dispatch: true, reason, mode,
+      would_dispatch: wouldDispatch, reason, mode,
       event_seq: state.event_seq, last_completed_seq: state.last_completed_seq,
       stale_reclaimed: staleReclaimed,
-      dispatch_id: dispatchId, target_seq: state.in_flight_target_seq,
+      dispatch_id: dispatchId, target_seq: state.in_flight_target_seq, dispatch_reason: dispatchReason,
     });
   }
 
@@ -238,14 +261,23 @@ export class BiRefreshCoordinator {
   // counts a failure when dispatch_id matches the CURRENT in-flight
   // reservation — a stale/duplicate report can never clobber a newer,
   // unrelated in-flight dispatch (see "wrong dispatch_id" test coverage).
+  //
+  // If the reservation being released was for a manual force
+  // (in_flight_reason === "manual_force"), force_dispatch_requested is
+  // re-armed: handleEvaluate() already consumed it at reservation time
+  // (before the GitHub API call even happened), so without re-arming here
+  // a dispatch-API-layer failure would silently and permanently drop an
+  // operator's force request instead of retrying it on the next tick.
   async handleDispatchFailure(body) {
     const state = await this.#load();
     const dispatchId = body && body.dispatch_id;
     const matches = Boolean(dispatchId) && dispatchId === state.in_flight_dispatch_id;
-    if (matches) clearInFlight(state);
     if (matches) {
+      const wasManualForce = state.in_flight_reason === "manual_force";
+      clearInFlight(state);
       state.consecutive_failures += 1;
       state.last_failure_at = (body && body.now_iso) || new Date().toISOString();
+      if (wasManualForce) state.force_dispatch_requested = true;
     }
     await this.#save(state);
     return jsonResponse({ ok: true, released: matches });
@@ -273,6 +305,15 @@ export class BiRefreshCoordinator {
     }
 
     const state = await this.#load();
+    // A legitimate dispatch's target_seq is always an event_seq snapshot
+    // taken at reservation time, so it can never legitimately exceed the
+    // CURRENT event_seq (which only grows). A callback claiming otherwise
+    // is either a bug or forged input — reject before mutating any state.
+    // An old/stale target_seq (<= last_completed_seq already) remains
+    // accepted, per the existing "old completion callback" guarantee.
+    if (targetSeq > state.event_seq) {
+      return jsonResponse({ error: "target_seq_exceeds_event_seq" }, 400);
+    }
     const nowIso = (body && body.completed_at) || new Date().toISOString();
     const matchesInFlight = dispatchId === state.in_flight_dispatch_id;
 
