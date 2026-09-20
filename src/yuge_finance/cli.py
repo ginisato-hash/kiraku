@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
-from . import bi_refresh, config, csvio, db, locks, monthly, publish, publish_r2
+from . import bi_refresh, config, csvio, db, locks, monthly, publish, publish_r2, shadow_observation
 from .accounting import breakeven_model, labor_model, reconciliation
 from .ingest import (bank_actuals, bank_csv, cash_receipt_csv, loan_schedule,
                      manual_adjustments, opening_balance)
@@ -554,6 +554,60 @@ def cmd_export_daily_ops(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- shadow-observe-*
+def _write_github_output(key: str, value: str) -> None:
+    import os
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{key}={value}\n")
+
+
+def cmd_shadow_observe_capture_baseline(args) -> int:
+    """refresh前の「現在productionに出ている」snapshotを一時ファイルへ保存する
+    （shadow false-negative観測の比較基準）。取得失敗時はファイルを作らず終了する
+    （呼び出し側のcompareが no_baseline として扱う）。中身は一切標準出力へ出さない。
+    """
+    out_path = Path(args.out)
+    if args.component == "bi":
+        baseline = shadow_observation.capture_bi_baseline()
+    else:
+        baseline = shadow_observation.capture_staff_ops_baseline()
+    if baseline is None:
+        _print(f"[shadow-observe-capture-baseline] component={args.component} baseline=unavailable")
+        return 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(baseline, ensure_ascii=False), encoding="utf-8")
+    _print(f"[shadow-observe-capture-baseline] component={args.component} baseline=captured")
+    return 0
+
+
+def cmd_shadow_observe_compare(args) -> int:
+    """refresh前baseline(--old)とrefresh後の現在生成物を意味比較し、
+    changed/unchanged/no_baseline/error のいずれかだけを出力する。
+    比較対象の実データ(BI数値・宿泊者PII)は一切標準出力/GITHUB_OUTPUTへ出さない。
+    """
+    old_path = Path(args.old)
+    old = None
+    if old_path.exists():
+        try:
+            old = json.loads(old_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old = None  # 壊れたbaseline = no_baseline扱い（errorにしない）
+
+    if args.component == "bi":
+        source_dir = Path(args.source_dir) if args.source_dir else None
+        status = shadow_observation.observe_bi(old, source_dir)
+    else:
+        new_path = Path(args.new) if args.new else None
+        status = shadow_observation.observe_staff_ops(old, new_path)
+
+    _print(f"[shadow-observe-compare] component={args.component} status={status}")
+    _write_github_output("status", status)
+    return 0
+
+
 # ---------------------------------------------------------------- close-month
 def cmd_close_month(args) -> int:
     month = _validate_month(args.month)
@@ -712,6 +766,20 @@ def build_parser() -> argparse.ArgumentParser:
     edo.add_argument("--out", default=None,
                      help="出力先パス（既定: data/output/latest/ops/staff_ops_snapshot.json）")
 
+    socb = sub.add_parser("shadow-observe-capture-baseline",
+                          help="shadow false-negative観測: refresh前のsnapshotを一時ファイルへ保存")
+    socb.add_argument("--component", required=True, choices=["bi", "staff_ops"])
+    socb.add_argument("--out", required=True, help="保存先パス（runner一時ディレクトリ推奨）")
+
+    soc = sub.add_parser("shadow-observe-compare",
+                         help="shadow false-negative観測: refresh前後のsnapshotを意味比較")
+    soc.add_argument("--component", required=True, choices=["bi", "staff_ops"])
+    soc.add_argument("--old", required=True, help="capture-baselineで保存したファイルパス")
+    soc.add_argument("--source-dir", default=None,
+                     help="component=bi の既定refresh後ソースディレクトリ（既定: publish-bi-r2と同じ）")
+    soc.add_argument("--new", default=None,
+                     help="component=staff_ops の既定refresh後ファイルパス（既定: export-daily-opsと同じ）")
+
     def add_month(name, help_):
         sp = sub.add_parser(name, help=help_)
         sp.add_argument("--month", required=True, help="対象月 YYYY-MM")
@@ -758,6 +826,10 @@ def main(argv=None) -> int:
         return cmd_publish_bi_r2(args)
     if cmd == "export-daily-ops":
         return cmd_export_daily_ops(args)
+    if cmd == "shadow-observe-capture-baseline":
+        return cmd_shadow_observe_capture_baseline(args)
+    if cmd == "shadow-observe-compare":
+        return cmd_shadow_observe_compare(args)
     handlers = {
         "ingest-opening": lambda: (cmd_ingest_opening(args), 0)[1],
         "debug-beds24-revenue": lambda: cmd_debug_beds24_revenue(args),
