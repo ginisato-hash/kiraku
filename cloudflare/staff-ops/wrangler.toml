@@ -1,5 +1,5 @@
 name = "kiraku-staff-ops"
-main = "src/worker.js"
+main = "src/worker-entry.js"
 compatibility_date = "2026-07-08"
 
 # HTML/JS/CSS は Static Assets から配信（staff-ops データは同梱しない）。

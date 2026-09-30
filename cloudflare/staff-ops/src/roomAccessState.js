@@ -11,13 +11,11 @@
 //   state — cleaning staff must not enter.
 // CLEANING_ALLOWED: front desk has explicitly confirmed the room is empty.
 //
-// A room only ever carries a non-null room_access_status when a guest is
-// actually departing it today (Cleaning DTO status CHECKOUT or TURNOVER, as
-// already computed by the Python classifier) — STAYOVER/CHECKIN/VACANT/
-// UNASSIGNED/CANCELLED rooms are out of scope for this feature entirely and
-// always resolve to null, even if a stale Durable Object record exists for
-// that room number (e.g. after the R2 snapshot refreshes and a booking
-// changes) — see applyRoomAccessStatus below.
+// Legacy manual room_access_status is displayed only for a scheduled departure
+// (CHECKOUT or TURNOVER). A committed Guest OS physical event is also displayed,
+// read-only when the snapshot has no departing guest, such as after a room move.
+// An unrelated legacy manual record still cannot make a non-departing room
+// cleanable after the R2 snapshot changes — see applyRoomAccessStatus below.
 //
 // This module is imported by BOTH src/worker.js (Worker) and
 // src/cleaningLiveState.js (Durable Object) — keep it free of any
@@ -89,12 +87,14 @@ export function applyRoomAccessStatus(rooms, doRoomsState) {
   const list = Array.isArray(rooms) ? rooms : [];
   const doRooms = (doRoomsState && typeof doRoomsState === "object") ? doRoomsState : {};
   return list.map((room) => {
-    if (!room || !isDepartingRoomStatus(room.status)) {
+    const record = room?.room_number ? doRooms[room.room_number] : null;
+    const physicalEvent = Number.isSafeInteger(record?.guestOsEventId) && record.guestOsEventId > 0;
+    if (!room || (!isDepartingRoomStatus(room.status) && !physicalEvent)) {
       return { ...room, roomAccessStatus: null, roomAccessUpdatedAt: null };
     }
-    const record = room.room_number ? doRooms[room.room_number] : null;
     const status = (record && isValidRoomAccessStatus(record.status)) ? record.status : DEFAULT_ROOM_ACCESS_STATUS;
     const updatedAt = (record && record.updatedAt) || null;
-    return { ...room, roomAccessStatus: status, roomAccessUpdatedAt: updatedAt };
+    return { ...room, roomAccessStatus: status, roomAccessUpdatedAt: updatedAt,
+      ...(physicalEvent && !isDepartingRoomStatus(room.status) ? { roomAccessReadOnly: true } : {}) };
   });
 }
