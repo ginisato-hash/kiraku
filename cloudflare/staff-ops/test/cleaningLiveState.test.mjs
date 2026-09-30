@@ -254,3 +254,6 @@ await check("history is capped at 100 entries (oldest dropped first)", async () 
 });
 
 console.log(`\n${passed} cleaningLiveState checks passed`);
+
+// New private ingress shares this production DO; its contract belongs in this gate.
+await import('./guestOsEvents.test.mjs');

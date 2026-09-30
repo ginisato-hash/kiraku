@@ -22,6 +22,8 @@
 // messages without keeping the DO warm/billed for idle time.
 import { ROOM_ACCESS_STATUSES, DEFAULT_ROOM_ACCESS_STATUS, isValidRoomAccessStatus } from "./roomAccessState.js";
 
+import { handleGuestOsInternal } from "./guestOsEvents.js";
+
 const ROOM_KEY_PREFIX = "room:";
 const HISTORY_KEY = "history";
 const MAX_HISTORY = 100;
@@ -44,6 +46,8 @@ export class CleaningLiveState {
   }
 
   async fetch(request) {
+    const eventResponse = await handleGuestOsInternal(this, request);
+    if (eventResponse) return eventResponse;
     const upgrade = request.headers.get("Upgrade") || "";
     if (upgrade.toLowerCase() === "websocket") {
       return this.handleWebSocketUpgrade();

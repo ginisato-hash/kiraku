@@ -212,6 +212,14 @@ await check("a non-departing room (404, STAYOVER) shows a blank 在室確認 cel
   assert.ok(!/data-action="access-request"/.test(row404));
 });
 
+await check("a physical event outside planned departures shows a read-only status badge", async () => {
+  const physical = rooms.map(r => r.room_number === "404" ? { ...r, roomAccessStatus: "WAITING_CHECKOUT", roomAccessReadOnly: true } : r);
+  const row404 = renderStaffCleaningTable(physical, null, "", true, true).match(/<tr data-room-number="404">[\s\S]*?<\/tr>/)[0];
+  assert.ok(row404.includes("csv-access-badge-WAITING_CHECKOUT"));
+  assert.ok(row404.includes("客室移動・滞在の記録"));
+  assert.ok(!row404.includes('data-action="access-request"'));
+});
+
 await check("liveAccessEnabled=false hides the button entirely even for a departing room, but keeps the column (no colspan change)", async () => {
   const out = renderStaffCleaningTable(rooms, null, "", false, true);
   assert.ok(!/data-action="access-request"/.test(out));

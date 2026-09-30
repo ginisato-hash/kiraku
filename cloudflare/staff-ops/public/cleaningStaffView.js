@@ -54,10 +54,10 @@ function buildAccessStatusCell(room, isToday, liveAccessEnabled) {
   const status = room.roomAccessStatus;
   if (!liveAccessEnabled || !status) return `<td class="csv-c-access"></td>`;
   const label = roomAccessStatusLabelJa(status);
-  if (!isToday) {
+  if (!isToday || room.roomAccessReadOnly === true) {
     return `<td class="csv-c-access">
       <span class="csv-access-badge csv-access-badge-${escapeHtml(status)}">${escapeHtml(label)}</span>
-      <div class="csv-access-note">当日のみ変更できます</div>
+      <div class="csv-access-note">${room.roomAccessReadOnly === true ? "客室移動・滞在の記録" : "当日のみ変更できます"}</div>
     </td>`;
   }
   return `<td class="csv-c-access">
