@@ -1,0 +1,4 @@
+# Cloudflare Static Assets: BIデータ(JSON/CSV)をWorkerを経由せず静的公開しないための除外。
+# ローカルの publish-bi が public/data/ へ出力したファイルを `wrangler deploy` が
+# アセットとして同梱・公開してしまう経路を塞ぐ（BIデータはR2からWorker経由でのみ配信する）。
+data/

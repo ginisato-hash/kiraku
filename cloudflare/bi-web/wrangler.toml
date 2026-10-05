@@ -2,11 +2,17 @@ name = "kiraku-bi"
 main = "src/worker.js"
 compatibility_date = "2026-07-08"
 
-# HTML/JS/CSS は Static Assets から配信（BIデータは同梱しない）
+# HTML/JS/CSS は Static Assets から配信（BIデータは同梱しない。public/data/ は
+# public/.assetsignore で配信対象から除外している）。
+# run_worker_first = true が無いと、index.html等の実ファイルに一致するリクエストは
+# Workerのfetch()を経由せず直接配信され、Worker内のadmin gate（src/worker.js）が
+# 丸ごとバイパスされる（cloudflare/staff-ops/wrangler.toml の同設定と同じ理由）。
+# 全リクエストを先にWorkerで判定し、gate通過後にenv.ASSETS.fetchで配信する。
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = true
 
 # BIデータ（JSON/CSV）は R2 から読む。binding名・bucket名は固定。
 [[r2_buckets]]
@@ -53,6 +59,21 @@ FULL_RECONCILE_MAX_AGE_SECONDS = "21600"
 # （実測p95 146秒・最大176秒、2026-09-20時点直近100回、に対し十分な余裕）。
 LEASE_TIMEOUT_SECONDS = "1500"
 
+# Admin gate（任意の二段階有効化。値はここに書かない — secret / 運用値で管理）:
+#   /health と /internal/*（各自の認可あり）以外のすべて（/api/*、/data/*、静的UI）は、
+#   ヘッダ x-kiraku-admin-gate が Worker Secret BI_ADMIN_GATE_SECRET と一致する場合のみ
+#   通し、他は理由を示さない404を返す。有効化条件は次のどちらか:
+#     1) BI_ADMIN_GATE_SECRET が設定されている
+#     2) BI_GATE_REQUIRED = "true"（このとき秘密が無ければ gated route は全て404 = fail-closed）
+#   どちらも無い間は従来どおり開いている（マージ・deployだけで既存の閲覧を止めないため）。
+#   手順: (1) `wrangler secret put BI_ADMIN_GATE_SECRET`（設定した時点でgate有効）
+#            → 管理ページ経由の閲覧と、無ヘッダ直アクセスが404になることを確認
+#         (2) 確認後に下の BI_GATE_REQUIRED を "true" にして再deploy
+#            （以後は秘密を失っても/消してもopenに戻らず、全て404のまま）。
+#   ロールバック: (1)の段階なら `wrangler secret delete BI_ADMIN_GATE_SECRET` だけで従来どおり開く。
+#                (2)の後は BI_GATE_REQUIRED を外して再deployし、その上で秘密を削除する。
+# BI_GATE_REQUIRED = "true"   # 管理ページ経由の閲覧確認後に有効化（上記手順参照）
+
 # 必須の Worker Secrets（wrangler.tomlにもGitにも絶対に書かない。
 # `wrangler secret put <name>` で設定する）:
 #   GITHUB_ACTIONS_DISPATCH_TOKEN — GitHub workflow_dispatch API呼び出し用
@@ -61,3 +82,7 @@ LEASE_TIMEOUT_SECONDS = "1500"
 #                                   （GitHub ActionsもこのSecretだけを持つ）
 #   BI_REFRESH_OPS_SECRET         — status/mode/force 専用。権限分離のため
 #                                   GitHub Actionsには絶対に設定しない
+#
+# 任意の Worker Secret（admin gate。詳細は上のAdmin gateコメント参照）:
+#   BI_ADMIN_GATE_SECRET          — x-kiraku-admin-gate ヘッダの照合値。
+#                                   設定した時点でgateが有効になる
