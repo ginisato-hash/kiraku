@@ -60,14 +60,23 @@ def test_refresh_wrapper_script_never_deploys_or_touches_ledger():
 
 
 def test_refresh_wrapper_script_checks_manifest_after_publish():
-    """R2 publish後にmanifestのgenerated_at_jstを確認するログを出す（日付跨ぎ不具合対応）。"""
+    """R2 publish後にmanifestのgenerated_at_jstを確認するログを出す（日付跨ぎ不具合対応）。
+    BIのWorker公開URLは管理用ゲートの内側にあるため、公開GETではなくR2を認証付きで直接読む。"""
     text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
-    assert "curl" in text
-    assert "/api/manifest" in text
+    assert "r2 object get" in text
+    assert "latest/manifest.json" in text
+    assert "--remote" in text, "ローカルstorageではなくリモートR2を読むこと"
     assert "generated_at_jst" in text
     publish_idx = text.index("publish-bi-r2")
-    curl_idx = text.index("curl")
-    assert curl_idx > publish_idx, "manifest確認curlはpublish-bi-r2の後に実行すること"
+    get_idx = text.index("r2 object get")
+    assert get_idx > publish_idx, "manifest確認はpublish-bi-r2の後に実行すること"
+
+
+def test_refresh_wrapper_script_does_not_read_the_public_worker_url():
+    """ゲートの内側にある公開Worker URLへの無認証GET(curl)は残さない。"""
+    text = WRAPPER_SCRIPT.read_text(encoding="utf-8")
+    assert "curl" not in text
+    assert "workers.dev" not in text
 
 
 def test_refresh_wrapper_script_sets_path_for_launchd():
