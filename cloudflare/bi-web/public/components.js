@@ -1,20 +1,34 @@
 // 喜らく 速報BI — DOM生成コンポーネント（純粋関数。副作用なし）。
 // app.js はこれらを呼んでinnerHTMLへ差し込むだけにする。
+//
+// スナップショット/manifest由来の値（宿泊者氏名・OTA名・部屋タイプ・備考・ラベル等）は
+// すべて escapeHtml() を通してから文字列補間する。この画面は管理ページと同一originで
+// 配信されるため、データ中の "<" や引用符がそのままHTML/属性になってはならない。
+// 新しい補間を足すときも、数値整形だけのもの以外は必ず e() を通すこと
+// （test/htmlEscaping.test.mjs が全render関数に攻撃文字列を流して構造不変を検証する）。
+
+const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+// HTMLテキスト/属性値（二重引用符・単一引用符どちらでも安全）として使えるようエスケープする。
+export function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
+}
+const e = escapeHtml;
 
 function metaListHtml(meta) {
   if (!meta || !meta.length) return "";
   return `<div class="metric-meta-list">${meta.map(
-    (m) => `<span class="meta-item">${m.label} <b>${m.value}</b></span>`).join("")}</div>`;
+    (m) => `<span class="meta-item">${e(m.label)} <b>${e(m.value)}</b></span>`).join("")}</div>`;
 }
 
 export function renderMetricCard(card) {
   const badge = card.badge
-    ? `<span class="state-badge tone-${card.tone}"><span class="dot"></span>${card.badge}</span>` : "";
-  const helper = card.helper ? `<div class="metric-helper">${card.helper}</div>` : "";
-  const note = card.note ? `<div class="metric-note">${card.note}</div>` : "";
-  return `<div class="metric-card size-${card.size || "normal"} tone-${card.tone || "gray"}">
-    <div class="metric-label">${card.label}</div>
-    <div class="metric-value">${card.value}</div>
+    ? `<span class="state-badge tone-${e(card.tone)}"><span class="dot"></span>${e(card.badge)}</span>` : "";
+  const helper = card.helper ? `<div class="metric-helper">${e(card.helper)}</div>` : "";
+  const note = card.note ? `<div class="metric-note">${e(card.note)}</div>` : "";
+  return `<div class="metric-card size-${e(card.size || "normal")} tone-${e(card.tone || "gray")}">
+    <div class="metric-label">${e(card.label)}</div>
+    <div class="metric-value">${e(card.value)}</div>
     ${badge}
     ${helper}
     ${metaListHtml(card.meta)}
@@ -32,18 +46,18 @@ function renderRoomChangeBlock(d) {
   if (!d.roomChangeSummary) return "";
   if (d.hasRoomChange) {
     const items = d.roomChangeHistory.map((c) => {
-      const when = c.changedAt ? `${c.changedAt} ` : "";
-      const from = c.fromRoomType || "?";
-      const to = c.toRoomType || "?";
-      const note = c.rawNote ? `（${c.rawNote}）` : "";
+      const when = c.changedAt ? `${e(c.changedAt)} ` : "";
+      const from = e(c.fromRoomType || "?");
+      const to = e(c.toRoomType || "?");
+      const note = c.rawNote ? `（${e(c.rawNote)}）` : "";
       return `<li>${when}${from} → ${to}${note}</li>`;
     }).join("");
     return `<details class="room-change-details">
-      <summary>${d.roomChangeSummary}</summary>
+      <summary>${e(d.roomChangeSummary)}</summary>
       <ul class="room-change-list">${items}</ul>
     </details>`;
   }
-  return `<div class="daily-booking-detail-room-change">${d.roomChangeSummary}</div>`;
+  return `<div class="daily-booking-detail-room-change">${e(d.roomChangeSummary)}</div>`;
 }
 
 // 日次サマリーカード1枚分の予約明細一覧。PII(email/phone/address等)は含めない。
@@ -52,17 +66,17 @@ function renderRoomChangeBlock(d) {
 export function renderDailySummaryDetails(card) {
   const cards = (card.details || []).map((d) => `<article class="daily-booking-detail-card">
       <div class="daily-booking-detail-main">
-        <div class="daily-booking-detail-guest">${d.guestName}<span class="daily-booking-detail-ota"> / ${d.otaName}</span></div>
-        <div class="daily-booking-detail-dates">CI ${d.checkin} → CO ${d.checkout}</div>
+        <div class="daily-booking-detail-guest">${e(d.guestName)}<span class="daily-booking-detail-ota"> / ${e(d.otaName)}</span></div>
+        <div class="daily-booking-detail-dates">CI ${e(d.checkin)} → CO ${e(d.checkout)}</div>
       </div>
       <div class="daily-booking-detail-sub">
-        <div class="daily-booking-detail-room">部屋: ${d.roomType}</div>
-        <div class="daily-booking-detail-amount">${d.revenue}</div>
+        <div class="daily-booking-detail-room">部屋: ${e(d.roomType)}</div>
+        <div class="daily-booking-detail-amount">${e(d.revenue)}</div>
         ${renderRoomChangeBlock(d)}
       </div>
     </article>`).join("");
   return `<div class="daily-booking-list">
-    <h3>${card.detailsTitle || "予約一覧"}</h3>
+    <h3>${e(card.detailsTitle || "予約一覧")}</h3>
     <div class="daily-booking-detail-list">${cards}</div>
   </div>`;
 }
@@ -73,31 +87,31 @@ export function renderDailySummaryDetails(card) {
 // 確保しつつ、明示的にaria-expandedも付与する。app.js側でtoggleイベントに合わせて更新)。
 export function renderDailySummaryCard(card) {
   const valueText = card.revenue ? `${card.count} / ${card.revenue}` : card.count;
-  const subLabelHtml = card.subLabel ? `<p class="daily-summary-sublabel">${card.subLabel}</p>` : "";
+  const subLabelHtml = card.subLabel ? `<p class="daily-summary-sublabel">${e(card.subLabel)}</p>` : "";
   const dateHtml = (card.dateLabel && card.dateLabel !== "—")
-    ? `<p class="daily-summary-date">対象日: ${card.dateLabel}</p>` : "";
+    ? `<p class="daily-summary-date">対象日: ${e(card.dateLabel)}</p>` : "";
   const helperLine = card.helper || "";
   const clickableClass = card.hasDetails ? " is-clickable" : "";
   const cta = card.hasDetails
-    ? `<span class="daily-summary-cta">${card.detailsCta || "詳細を見る"}</span>` : "";
+    ? `<span class="daily-summary-cta">${e(card.detailsCta || "詳細を見る")}</span>` : "";
 
   const stripInner = `<div>
-      <p class="eyebrow">${card.label}</p>
+      <p class="eyebrow">${e(card.label)}</p>
       ${subLabelHtml}
       ${dateHtml}
-      <p class="daily-summary-value">${valueText}</p>
-      <p class="daily-summary-helper">${helperLine}</p>
+      <p class="daily-summary-value">${e(valueText)}</p>
+      <p class="daily-summary-helper">${e(helperLine)}</p>
     </div>
     ${cta}`;
 
   if (!card.hasDetails) {
     const unavailable = card.detailsUnavailableNote
-      ? `<p class="daily-summary-unavailable">${card.detailsUnavailableNote}</p>` : "";
-    return `<section class="daily-summary-strip tone-${card.tone}">${stripInner}</section>${unavailable}`;
+      ? `<p class="daily-summary-unavailable">${e(card.detailsUnavailableNote)}</p>` : "";
+    return `<section class="daily-summary-strip tone-${e(card.tone)}">${stripInner}</section>${unavailable}`;
   }
 
   return `<details class="daily-summary-details">
-    <summary class="daily-summary-strip tone-${card.tone}${clickableClass}" aria-expanded="false">${stripInner}</summary>
+    <summary class="daily-summary-strip tone-${e(card.tone)}${clickableClass}" aria-expanded="false">${stripInner}</summary>
     ${renderDailySummaryDetails(card)}
   </details>`;
 }
@@ -124,7 +138,7 @@ export function renderRoomTypeOccupancyChart(chart) {
   const title = chart ? chart.title : "部屋タイプ別 日別稼働率";
   if (!chart || !chart.hasData) {
     return `<div class="chart-card">
-      <h3>${title}</h3>
+      <h3>${e(title)}</h3>
       <p class="chart-empty">データなし</p>
     </div>`;
   }
@@ -148,28 +162,28 @@ export function renderRoomTypeOccupancyChart(chart) {
   const labelStep = n > 10 ? Math.ceil(n / 10) : 1;
   const dateLabels = chart.dates.map((d, i) => {
     if (i % labelStep !== 0) return "";
-    return `<text x="${px(i)}" y="${h - 6}" class="chart-axis-label" text-anchor="middle">${d.slice(8, 10)}</text>`;
+    return `<text x="${px(i)}" y="${h - 6}" class="chart-axis-label" text-anchor="middle">${e(String(d).slice(8, 10))}</text>`;
   }).join("");
 
   const lines = chart.lines.map((line) => {
     const points = line.points.map((v, i) => `${px(i)},${py(v)}`).join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${line.color}" stroke-width="2" class="chart-line">
-      <title>${line.label}</title>
+    return `<polyline points="${points}" fill="none" stroke="${e(line.color)}" stroke-width="2" class="chart-line">
+      <title>${e(line.label)}</title>
     </polyline>`;
   }).join("");
 
   const legend = chart.lines.map((line) =>
-    `<span class="chart-legend-item"><span class="chart-legend-dot" style="background:${line.color}"></span>${line.label}</span>`
+    `<span class="chart-legend-item"><span class="chart-legend-dot" style="background:${e(line.color)}"></span>${e(line.label)}</span>`
   ).join("");
 
-  const warningItems = (chart.warnings || []).slice(0, 3).map((w2) => `<li>${w2}</li>`).join("");
+  const warningItems = (chart.warnings || []).slice(0, 3).map((w2) => `<li>${e(w2)}</li>`).join("");
   const warningsHtml = warningItems ? `<ul class="chart-warnings">${warningItems}</ul>` : "";
 
   return `<div class="chart-card">
-    <h3>${chart.title}</h3>
-    <p class="chart-helper">${chart.helper}</p>
+    <h3>${e(chart.title)}</h3>
+    <p class="chart-helper">${e(chart.helper)}</p>
     <div class="chart-scroll">
-      <svg viewBox="0 0 ${w} ${h}" class="occupancy-chart" role="img" aria-label="${chart.title}">
+      <svg viewBox="0 0 ${w} ${h}" class="occupancy-chart" role="img" aria-label="${e(chart.title)}">
         ${gridLines}
         ${lines}
         ${dateLabels}
@@ -185,55 +199,55 @@ export function renderRoomTypeRevenueMix(mix) {
   const title = mix ? mix.title : "部屋タイプ別 売上構成";
   if (!mix || !mix.hasData) {
     return `<div class="revenue-mix-card">
-      <h3>${title}</h3>
+      <h3>${e(title)}</h3>
       <p class="chart-empty">データなし</p>
     </div>`;
   }
   const rows = mix.rows.map((r) => `<div class="revenue-mix-row">
       <div class="revenue-mix-row-head">
-        <span class="revenue-mix-label">${r.roomTypeLabel}</span>
-        <span class="revenue-mix-value">${r.revenue} / ${r.share}</span>
+        <span class="revenue-mix-label">${e(r.roomTypeLabel)}</span>
+        <span class="revenue-mix-value">${e(r.revenue)} / ${e(r.share)}</span>
       </div>
       <div class="revenue-mix-bar-track">
         <div class="revenue-mix-bar-fill" style="width:${Math.max(0, Math.min(r.sharePercent, 100))}%"></div>
       </div>
-      <div class="revenue-mix-row-foot">${r.soldRoomNights} ｜ ADR ${r.adr}</div>
+      <div class="revenue-mix-row-foot">${e(r.soldRoomNights)} ｜ ADR ${e(r.adr)}</div>
     </div>`).join("");
   return `<div class="revenue-mix-card">
-    <h3>${mix.title}</h3>
+    <h3>${e(mix.title)}</h3>
     <div class="revenue-mix-list">${rows}</div>
   </div>`;
 }
 
 export function renderInsightBanner(paceComment) {
-  return `<div class="insight-banner tone-${paceComment.tone}">
+  return `<div class="insight-banner tone-${e(paceComment.tone)}">
     <span class="status-dot"></span>
-    <span class="insight-text">${paceComment.text}</span>
+    <span class="insight-text">${e(paceComment.text)}</span>
   </div>`;
 }
 
 export function renderStatusChips(chips) {
-  return chips.map((c) => `<span class="chip tone-${c.tone}">
-    <span class="chip-label">${c.label}</span><span class="chip-value">${c.value}</span>
+  return chips.map((c) => `<span class="chip tone-${e(c.tone)}">
+    <span class="chip-label">${e(c.label)}</span><span class="chip-value">${e(c.value)}</span>
   </span>`).join("");
 }
 
 export function renderNotes(notes) {
   return `<div class="notes-stack">${notes.map(
-    (n) => `<div class="note-line tone-${n.tone}">${n.text}</div>`).join("")}</div>`;
+    (n) => `<div class="note-line tone-${e(n.tone)}">${e(n.text)}</div>`).join("")}</div>`;
 }
 
 function detailTableHtml(rows) {
   return `<table class="detail-table">${rows.map(([k, v]) =>
-    `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("")}</table>`;
+    `<tr><td class="k">${e(k)}</td><td class="v">${e(v)}</td></tr>`).join("")}</table>`;
 }
 
 export function renderDetailCard(section, extraNoteHtml) {
   const summary = section.summary
-    ? `<span class="summary-value">${section.summary}</span>` : "";
+    ? `<span class="summary-value">${e(section.summary)}</span>` : "";
   return `<details class="detail-card">
     <summary>
-      <span class="summary-title">${section.title}</span>
+      <span class="summary-title">${e(section.title)}</span>
       ${summary}
       <span class="summary-chevron" aria-hidden="true">›</span>
     </summary>
@@ -250,7 +264,7 @@ export function renderDetails(sections, validationSummary, exceptionCount) {
     let summary = section.summary;
     if (section.id === "validation" && validationSummary) {
       summary = `${validationSummary.ok ? "検証OK" : "要確認 " + validationSummary.criticalCount + "件"}`;
-      extra = `<p class="detail-note">warning ${validationSummary.warningCount}件 ｜ exception件数: ${exceptionCount ?? "—"}</p>`;
+      extra = `<p class="detail-note">warning ${e(validationSummary.warningCount)}件 ｜ exception件数: ${e(exceptionCount ?? "—")}</p>`;
     }
     return renderDetailCard({ ...section, summary }, extra);
   }).join("");
@@ -260,7 +274,7 @@ export function renderMonthSelector(header) {
   const options = header.monthOptions || [];
   if (!options.length) return "";
   const optHtml = options.map((o) =>
-    `<option value="${o.value}"${o.value === header.selectedMonth ? " selected" : ""}>${o.label}</option>`
+    `<option value="${e(o.value)}"${o.value === header.selectedMonth ? " selected" : ""}>${e(o.label)}</option>`
   ).join("");
   return `<div class="month-selector">
     <label for="month-select">対象月</label>
@@ -299,9 +313,11 @@ export function renderHeader(header) {
     title: header.title,
     // 「最終更新」の人間可読表示(何分前・更新遅延警告込み)はapp.js側でformatFreshness()を
     // 使って別途組み立てる(このmetaLineは対象月のみを持つ)。
+    // title/metaLineはHTMLではなくプレーンテキスト（app.jsがtextContentへ代入する）なので
+    // ここではエスケープしない。HTMLへ差し込む場合は必ず escapeHtml を通すこと。
     metaLine: `対象月: ${header.targetMonth}`,
-    pillHtml: `<span class="status-pill tone-${header.statusPill.tone}">
-      <span class="dot"></span>${header.statusPill.label}
+    pillHtml: `<span class="status-pill tone-${e(header.statusPill.tone)}">
+      <span class="dot"></span>${e(header.statusPill.label)}
     </span>`,
     monthSelectorHtml: renderMonthSelector(header),
   };
