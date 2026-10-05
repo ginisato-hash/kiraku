@@ -64,7 +64,8 @@ LEASE_TIMEOUT_SECONDS = "1500"
 #   ヘッダ x-kiraku-admin-gate が Worker Secret BI_ADMIN_GATE_SECRET と一致する場合のみ
 #   通し、他は理由を示さない404を返す。有効化条件は次のどちらか:
 #     1) BI_ADMIN_GATE_SECRET が設定されている
-#     2) BI_GATE_REQUIRED = "true"（このとき秘密が無ければ gated route は全て404 = fail-closed）
+#     2) BI_GATE_REQUIRED が必須扱い（未設定/空/"false"/"0" 以外はすべて必須扱い。推奨は "true"。
+#        このとき秘密が無ければ gated route は全て404 = fail-closed）
 #   どちらも無い間は従来どおり開いている（マージ・deployだけで既存の閲覧を止めないため）。
 #   手順: (1) `wrangler secret put BI_ADMIN_GATE_SECRET`（設定した時点でgate有効）
 #            → 管理ページ経由の閲覧と、無ヘッダ直アクセスが404になることを確認

@@ -194,6 +194,32 @@ await check("BI_GATE_REQUIRED=true without a secret: fail-closed, everything gat
   assert.equal(env.calls.assets + env.calls.r2, 0);
 });
 
+await check("BI_GATE_REQUIRED: anything except unset/empty/false/0 (case-insensitive) is required -> fail-closed without a secret", async () => {
+  for (const value of ["true", "TRUE", "True", "1", "yes", "YES", "on", "enabled", "required", " ", "false ", "00", "no"]) {
+    const env = makeEnv({ BI_GATE_REQUIRED: value });
+    await assertGated404(env, "/api/snapshot", {}, `REQUIRED=${JSON.stringify(value)} /api/snapshot`);
+    await assertGated404(env, "/", { headers: withGate(GATE_SECRET) }, `REQUIRED=${JSON.stringify(value)} /`);
+    assert.equal((await call(env, "/health")).status, 200, "/health stays open");
+    assert.equal(env.calls.assets + env.calls.r2, 0);
+  }
+});
+
+await check("BI_GATE_REQUIRED: unset/empty/false/0 (case-insensitive) is NOT required -> still open without a secret", async () => {
+  for (const value of [undefined, null, "", "false", "FALSE", "False", "0"]) {
+    const env = makeEnv({ BI_GATE_REQUIRED: value });
+    assert.equal((await call(env, "/api/snapshot")).status, 200, `REQUIRED=${JSON.stringify(value)}`);
+    assert.equal(await (await call(env, "/")).text(), "ASSET");
+  }
+});
+
+await check("BI_GATE_REQUIRED=false/0 does not disable the gate once a secret is set", async () => {
+  for (const value of ["false", "0", ""]) {
+    const env = makeEnv({ BI_GATE_REQUIRED: value, BI_ADMIN_GATE_SECRET: GATE_SECRET });
+    await assertGated404(env, "/api/snapshot");
+    assert.equal((await call(env, "/api/snapshot", { headers: withGate() })).status, 200);
+  }
+});
+
 await check("BI_GATE_REQUIRED=true with an empty secret is also fail-closed", async () => {
   const env = makeEnv({ BI_GATE_REQUIRED: "true", BI_ADMIN_GATE_SECRET: "" });
   await assertGated404(env, "/api/snapshot", { headers: withGate("") });

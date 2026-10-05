@@ -21,9 +21,11 @@
 // - Admin gate: /health と /internal/*（各自の認可を持つ）以外のすべて
 //   （/api/*、/data/*、/data/months/*、静的UI）は、ヘッダ x-kiraku-admin-gate が
 //   BI_ADMIN_GATE_SECRET と一致する場合のみ通し、それ以外は理由を示さない404。
-//   ゲートは「BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIRED="true"」
+//   ゲートは「BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIREDが必須扱い」
 //   で有効化される（二段階有効化。どちらも無い間は従来どおり開いている）。
-//   BI_GATE_REQUIRED="true" で秘密が無い場合は fail-closed（gated route全て404）。
+//   BI_GATE_REQUIREDは 未設定/空文字/"false"/"0"（大文字小文字無視）以外はすべて
+//   「必須」扱い（"true"/"1"/"yes"等の表記ゆれで意図せず開いたままにならない）。
+//   必須かつ秘密が無い場合は fail-closed（gated route全て404）。
 import { BiRefreshCoordinator, normalizeReasonBucket } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
@@ -125,9 +127,19 @@ function gateNotFound() {
   });
 }
 
-// ゲートが有効か: BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIRED === "true"。
+// BI_GATE_REQUIRED が「必須」か。未設定/空文字/"false"/"0"（大文字小文字無視）だけが
+// 「必須ではない」。それ以外（"true"/"1"/"yes"/"TRUE"等）はすべて必須扱いにして、
+// 表記ゆれでgateが意図せず開いたままになるのを防ぐ。
+function isGateRequired(env) {
+  const raw = env.BI_GATE_REQUIRED;
+  if (raw === undefined || raw === null) return false;
+  const v = String(raw).toLowerCase();
+  return !(v === "" || v === "false" || v === "0");
+}
+
+// ゲートが有効か: BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIREDが必須扱い。
 function isAdminGateActive(env) {
-  return Boolean(env.BI_ADMIN_GATE_SECRET) || env.BI_GATE_REQUIRED === "true";
+  return Boolean(env.BI_ADMIN_GATE_SECRET) || isGateRequired(env);
 }
 
 // ゲート通過可否。秘密が無い場合（BI_GATE_REQUIREDのみ）は常に不通過=fail-closed。
