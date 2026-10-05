@@ -46,9 +46,11 @@ R2にオブジェクトが無ければ 404 JSON、例外時は 500 JSON。Cache-
 `BI_ADMIN_GATE_SECRET` と一致した場合だけ通し、他は **理由を示さない同一の404** を返す
 （HTTPメソッドを問わない。比較は定数時間: `src/timingSafeEqual.js`）。
 
-- **有効化条件**: `BI_ADMIN_GATE_SECRET` が設定されている、または `BI_GATE_REQUIRED` が文字列 `"true"`（完全一致）。
+- **有効化条件**: `BI_ADMIN_GATE_SECRET` が設定されている、または `BI_GATE_REQUIRED` が必須扱い
+  （未設定・空文字・`"false"`・`"0"`（大文字小文字無視）**以外はすべて必須扱い**。推奨値は `"true"`。
+  `"1"` や `"TRUE"` のような表記ゆれでgateが開いたままになることはない）。
   どちらも無い間は **従来どおり開いている**（このコードをmerge/deployしただけでは既存の閲覧は止まらない）。
-- **fail-closed**: `BI_GATE_REQUIRED="true"` で秘密が無い場合、gate対象のルートは全て404。
+- **fail-closed**: `BI_GATE_REQUIRED` が必須扱いで秘密が無い場合、gate対象のルートは全て404。
 - **静的資産の迂回防止**: `wrangler.toml` の `[assets] run_worker_first = true` により、静的ファイルも
   先にWorkerを通り、gate通過後に `env.ASSETS.fetch` で配信される（無いと `/` や `/app.js` がgateを素通りする）。
   `public/.assetsignore` が `public/data/`（ローカル `publish-bi` の出力）を静的アセットから除外する。
@@ -59,6 +61,9 @@ R2にオブジェクトが無ければ 404 JSON、例外時は 500 JSON。Cache-
 1. このバージョンをdeployする（秘密もフラグも無いので挙動は従来どおり）。
 2. 呼び出し側（管理ページ）と同じ値を Worker Secret に設定する。**設定した時点でgateが有効になる**:
    `cd cloudflare/bi-web && npx wrangler secret put BI_ADMIN_GATE_SECRET`（値は対話入力。コマンド履歴・CIログに残さない）。
+   秘密は **32バイト以上の乱数**にする（例: `openssl rand -base64 32`）。値は管理ページ側の
+   `BI_GATE_SECRET` と**同じ値**（名前は異なる: BI側 `BI_ADMIN_GATE_SECRET` / 管理ページ側 `BI_GATE_SECRET`）。
+   推測できる文字列・使い回しは不可。ローテーションは両側を同じ値に更新する（片側だけだと全て404になる）。
 3. 確認: ヘッダ付きで `/`・`/api/snapshot`・`/data/bi_snapshot.json` が200、**ヘッダ無しの直アクセスは
    `/`・`/app.js`・`/api/*`・`/data/*` すべて404**、`/health` は200のまま、`/internal/*`
    （webhook・callback・ops）は従来どおり各自の認可で動く。
@@ -82,8 +87,10 @@ gateを有効にすると、credential無しの公開GETは404になる。その
 `publish-bi-r2 --preserve-bank-fields-from-r2` の銀行項目引き継ぎ、shadow観測のbaseline、
 `refresh-bi-r2.yml` の検証・summary、`scripts/refresh_beds24_bi_and_publish_r2.sh` の確認。
 読めなかった場合は `bank_fields_source=not_available`（銀行項目が引き継げなかった印）とstderr警告で見える。
-`deploy-worker.yml` は、deploy前に BIバケットの r2.dev 公開が無効であることを読み取り検証する
-（有効、または確認不能ならdeployを止める。有効なら `wrangler r2 bucket dev-url disable kiraku-bi-data`）。
+`deploy-worker.yml` は、deploy前に BIバケットの r2.dev 公開が無効であること、およびカスタムドメインが
+接続されていないことを読み取り専用で検証する（有効・接続済み、または確認不能ならdeployを止める。
+r2.devが有効なら `wrangler r2 bucket dev-url disable kiraku-bi-data`、ドメインが接続済みなら
+`wrangler r2 bucket domain list/remove` で解除する）。
 
 ## Phase 1 セットアップ（R2投入は手動）
 ```bash

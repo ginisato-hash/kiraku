@@ -314,6 +314,13 @@ GitHub > Actions > Refresh BI R2 の直近runを見る。
 curl -s https://kiraku-bi.s-sato-dce.workers.dev/api/manifest | python3 -m json.tool | grep generated_at_jst
 ```
 
+> **BIのadmin gate有効化後は、この無認証curlは404になります**（`/api/*`・`/data/*`・UIは
+> ヘッダ `x-kiraku-admin-gate` が無いと理由を示さない404）。有効化後の反映確認は、
+> 認証付きのR2読み出し（`cd cloudflare/bi-web && npx wrangler r2 object get kiraku-bi-data/latest/manifest.json --file /tmp/manifest.json --remote`
+> のあと `python3 -m json.tool /tmp/manifest.json | grep generated_at_jst`）か、管理ページ経由で行う。
+> `refresh-bi-r2.yml` の検証stepとjob summaryも同じくR2を認証付きで読む。
+> 詳細は [cloudflare/bi-web/README.md](cloudflare/bi-web/README.md) の「Admin gate」を参照。
+
 必要なGitHub Secrets（Repository > Settings > Secrets and variables > Actions）：
 
 | Secret名 | 用途 | 備考 |
