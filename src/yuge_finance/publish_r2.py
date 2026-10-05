@@ -11,19 +11,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import requests
-
 from . import config
 from .reports import bank_sticky_fields
-
-# 銀行CF summary sticky field引き継ぎ用の公開API(Worker)。R2 credentialのpublish処理と
-# 同じタイミングで、直近公開済みsnapshotを読むために使う（rawのbank明細ではなく
-# 集計済みsnapshotフィールドのみを対象とする）。
-PUBLIC_API_BASE = "https://kiraku-bi.s-sato-dce.workers.dev"
 
 UPLOAD_FILES = [
     "manifest.json", "bi_snapshot.json", "bi_daily_timeseries.csv",
@@ -160,29 +155,65 @@ def _month_upload_targets(source_dir: Path, manifest: Dict) -> List[str]:
     return targets
 
 
-def _fetch_public_snapshot(month: Optional[str] = None, timeout: int = 20) -> Optional[Dict]:
-    """公開Worker APIから直近snapshotを取得する。失敗時はNoneを返す(publishを止めない)。"""
-    url = f"{PUBLIC_API_BASE}/api/snapshot"
-    if month:
-        url += f"?month={month}"
+def read_r2_text(bucket: str, key: str, cwd: Optional[Path] = None, timeout: int = 60) -> Optional[str]:
+    """R2オブジェクトを `wrangler r2 object get --remote` で認証付きに読み、テキストを返す。
+
+    BIの公開Worker URLは管理用ゲートの内側にあるため、内部コンシューマ（銀行sticky取得・
+    shadow観測baseline・検証）はWorker経由ではなくR2を直接読む。既存の
+    CLOUDFLARE_API_TOKEN / wrangler login をそのまま使い、新しいsecretは不要。
+    オブジェクト未存在・一時障害・認証不可など、読めなかった場合は全てNone（呼び出し側が
+    「前回値なし」として扱い、publishを止めない）。
+    """
+    cwd = cwd or (config.ROOT / "cloudflare" / "bi-web")
     try:
-        resp = requests.get(url, timeout=timeout)
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except (requests.RequestException, ValueError):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "object"
+            cmd = ["npx", "wrangler", "r2", "object", "get", f"{bucket}/{key}",
+                   "--file", str(out_path), "--remote"]
+            result = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
+            if result.returncode != 0 or not out_path.exists():
+                return None
+            return out_path.read_text(encoding="utf-8")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
 
 
-def _apply_bank_sticky_fields(source_dir: Path, manifest: Dict) -> Dict[str, int]:
+def _fetch_previous_snapshot(month: Optional[str] = None, bucket: str = DEFAULT_BUCKET,
+                             prefix: str = DEFAULT_PREFIX, cwd: Optional[Path] = None,
+                             timeout: int = 60) -> Optional[Dict]:
+    """直近公開済みsnapshot（rootまたは月別）をR2から読む。失敗時はNoneを返す(publishを止めない)。
+
+    root(latest/bi_snapshot.json)は表示対象月(default_month)のsnapshotと同一内容。
+    """
+    key = f"{prefix}/months/{month}/bi_snapshot.json" if month else f"{prefix}/bi_snapshot.json"
+    text = read_r2_text(bucket, key, cwd=cwd, timeout=timeout)
+    if text is None:
+        return None
+    try:
+        snapshot = json.loads(text)
+    except ValueError:
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _apply_bank_sticky_fields(source_dir: Path, manifest: Dict, bucket: str = DEFAULT_BUCKET,
+                              prefix: str = DEFAULT_PREFIX, cwd: Optional[Path] = None) -> Dict[str, int]:
     """root/月別snapshotのbank_*フィールドについて、今回値が無効な場合のみ直近公開snapshotから
     引き継ぎ、ローカルファイルを書き換える。bank_fields_sourceの内訳件数を返す。
+
+    直近公開snapshotはR2から認証付きで直接読む（Worker公開URLは使わない）。読めない場合は
+    bank_fields_source="not_available" になり、銀行項目が引き継がれなかったことが
+    スナップショット・結果の件数・stderr警告で見える（黙って消えない）。
     """
     counts = {"current_import": 0, "previous_r2_snapshot": 0, "not_available": 0}
 
     root_path = source_dir / "bi_snapshot.json"
     root_snapshot = json.loads(root_path.read_text(encoding="utf-8"))
-    previous_root = _fetch_public_snapshot()
+    previous_root = _fetch_previous_snapshot(bucket=bucket, prefix=prefix, cwd=cwd)
+    if previous_root is None:
+        print(f"[publish-bi-r2] 警告: 直近公開snapshotをR2から読めませんでした "
+              f"({bucket}/{prefix}/bi_snapshot.json)。今回値に銀行項目が無い場合、"
+              f"bank_fields_source=not_available になります。", file=sys.stderr)
     merged_root = bank_sticky_fields.merge_sticky_bank_fields(root_snapshot, previous_root)
     root_path.write_text(
         json.dumps(merged_root, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -193,7 +224,7 @@ def _apply_bank_sticky_fields(source_dir: Path, manifest: Dict) -> Dict[str, int
         if not month_path.exists():
             continue
         month_snapshot = json.loads(month_path.read_text(encoding="utf-8"))
-        previous_month = _fetch_public_snapshot(month)
+        previous_month = _fetch_previous_snapshot(month, bucket=bucket, prefix=prefix, cwd=cwd)
         if previous_month is None:
             # 月別previousが取得できない場合はdefault previous snapshotから引き継ぐ。
             previous_month = previous_root
@@ -251,7 +282,8 @@ def publish(source_dir: Path = None, bucket: str = DEFAULT_BUCKET,
     # dry-runはローカルファイルを書き換えず、ネットワークアクセスもしない（一覧表示のみ）。
     bank_fields_sources = None
     if preserve_bank_fields_from_r2 and not dry_run:
-        bank_fields_sources = _apply_bank_sticky_fields(source_dir, manifest)
+        bank_fields_sources = _apply_bank_sticky_fields(
+            source_dir, manifest, bucket=bucket, prefix=prefix, cwd=worker_dir)
 
     snapshot = json.loads((source_dir / "bi_snapshot.json").read_text(encoding="utf-8"))
     generated_at = snapshot.get("generated_at_jst") or snapshot.get("current_date_jst")

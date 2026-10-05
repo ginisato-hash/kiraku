@@ -26,15 +26,13 @@ import json
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional
-
-import requests
 
 from . import publish_r2
 from .ops import build as ops_build
 
-PUBLIC_API_BASE = "https://kiraku-bi.s-sato-dce.workers.dev"
 STAFF_OPS_BUCKET = "kiraku-staff-ops-data"
 STAFF_OPS_R2_KEY = "latest/staff_ops_snapshot.json"
 
@@ -128,36 +126,41 @@ def compare_snapshots(old: Optional[dict], new: dict) -> str:
 # just because this module wasn't updated too.
 #
 # publish_r2.OPTIONAL_UPLOAD_FILES (bank_cashflow_summary.json etc.) are
-# excluded on purpose: the public Worker has no read route for them today
+# excluded on purpose: the Worker has no read route for them today
 # (they are model-candidate files, not anything the frontend/dashboards
-# serve), so including them would require a Worker deploy-surface change
-# out of this PR's scope. If they ever get a public route, add them to
-# publish_r2.UPLOAD_FILES and they will automatically join the bundle.
+# serve), so the compared set stays identical to what the Worker serves.
+# If they ever get a route, add them to publish_r2.UPLOAD_FILES and they
+# will automatically join the bundle.
+#
+# The baseline is read straight from the BI R2 bucket with an authenticated
+# `wrangler r2 object get --remote` (publish_r2.read_r2_text) — not from the
+# Worker's HTTP routes, which sit behind an internal gate and would answer a
+# credential-less GET with 404 (silently turning every baseline into
+# no_baseline).
 #
 # Bundle shape: {"root": {filename: raw_text}, "months": {month: {filename:
 # raw_text}}}. Values are kept as raw text (not pre-parsed) so capture_bi_
 # baseline() and load_current_bi_bundle() stay symmetric regardless of
 # file type; canonicalization/parsing happens once, at compare time.
 
-def _fetch_public_text(path: str, timeout: int) -> Optional[str]:
-    """Fetches one file from the public production BI Worker's /data/...
-    routes. Returns raw text, or None on any failure."""
-    try:
-        resp = requests.get(f"{PUBLIC_API_BASE}{path}", timeout=timeout)
-        if resp.status_code != 200:
-            return None
-        return resp.text
-    except requests.RequestException:
-        return None
+# wrangler起動のオーバーヘッドがあるため、baselineの読み出し（約26ファイル）は並列で行う。
+_R2_READ_WORKERS = 6
 
 
-def capture_bi_baseline(timeout: int = 20) -> Optional[dict]:
+def _fetch_r2_text(key: str, timeout: int) -> Optional[str]:
+    """Reads one object under the BI bucket's latest/ prefix (authenticated,
+    via publish_r2.read_r2_text). Returns raw text, or None on any failure."""
+    return publish_r2.read_r2_text(
+        publish_r2.DEFAULT_BUCKET, f"{publish_r2.DEFAULT_PREFIX}/{key}", timeout=timeout)
+
+
+def capture_bi_baseline(timeout: int = 60) -> Optional[dict]:
     """Fetches the full production BI semantic bundle (see module comment
     above) to serve as the "before this refresh" baseline. Returns None on
     ANY failure (including a single missing file) — a missing/partial
     baseline is reported as STATUS_NO_BASELINE, never STATUS_ERROR, and
     never blocks the refresh pipeline."""
-    manifest_text = _fetch_public_text("/data/manifest.json", timeout)
+    manifest_text = _fetch_r2_text("manifest.json", timeout)
     if manifest_text is None:
         return None
     try:
@@ -165,24 +168,24 @@ def capture_bi_baseline(timeout: int = 20) -> Optional[dict]:
     except ValueError:
         return None
 
-    root: Dict[str, str] = {"manifest.json": manifest_text}
-    for filename in publish_r2.UPLOAD_FILES:
-        if filename == "manifest.json":
-            continue
-        text = _fetch_public_text(f"/data/{filename}", timeout)
-        if text is None:
-            return None
-        root[filename] = text
+    months_list = list(manifest.get("available_months") or [])
+    root_files = [fn for fn in publish_r2.UPLOAD_FILES if fn != "manifest.json"]
+    # (month or None, filename) in a fixed order; results are re-assembled below.
+    targets = [(None, fn) for fn in root_files] + [
+        (month, fn) for month in months_list for fn in publish_r2.MONTH_UPLOAD_FILENAMES]
+    keys = [fn if month is None else f"months/{month}/{fn}" for month, fn in targets]
+    with ThreadPoolExecutor(max_workers=_R2_READ_WORKERS) as pool:
+        texts = list(pool.map(lambda key: _fetch_r2_text(key, timeout), keys))
+    if any(text is None for text in texts):
+        return None
 
-    months: Dict[str, Dict[str, str]] = {}
-    for month in manifest.get("available_months") or []:
-        month_files: Dict[str, str] = {}
-        for filename in publish_r2.MONTH_UPLOAD_FILENAMES:
-            text = _fetch_public_text(f"/data/months/{month}/{filename}", timeout)
-            if text is None:
-                return None
-            month_files[filename] = text
-        months[month] = month_files
+    root: Dict[str, str] = {"manifest.json": manifest_text}
+    months: Dict[str, Dict[str, str]] = {month: {} for month in months_list}
+    for (month, fn), text in zip(targets, texts):
+        if month is None:
+            root[fn] = text
+        else:
+            months[month][fn] = text
 
     return {"root": root, "months": months}
 

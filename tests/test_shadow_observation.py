@@ -304,9 +304,9 @@ def test_bi_finalized_payload_unchanged_despite_bank_sticky_restoration(tmp_path
 
     # Apply publish_r2's actual sticky-bank transformation (what "Publish
     # BI to R2" runs, before "Compare BI snapshot semantics" in the
-    # corrected workflow order) — mock the network fetch of the previous
-    # public snapshot instead of hitting the real Worker.
-    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot", lambda month=None, timeout=20: old_snapshot)
+    # corrected workflow order) — mock the authenticated R2 read of the
+    # previous published snapshot instead of hitting real R2.
+    monkeypatch.setattr(publish_r2, "_fetch_previous_snapshot", lambda month=None, **kw: old_snapshot)
     manifest_for_publish = json.loads((new_dir / "manifest.json").read_text(encoding="utf-8"))
     publish_r2._apply_bank_sticky_fields(new_dir, manifest_for_publish)
 
@@ -322,7 +322,7 @@ def test_bank_fields_preserved_at_jst_timestamp_is_volatile_not_semantic(tmp_pat
     previous_public = {
         "revenue": 100, "bank_csv_import_status": "imported", "bank_actual_latest_balance": 100,
     }
-    monkeypatch.setattr(publish_r2, "_fetch_public_snapshot", lambda month=None, timeout=20: previous_public)
+    monkeypatch.setattr(publish_r2, "_fetch_previous_snapshot", lambda month=None, **kw: previous_public)
 
     def build_finalized(tag: str, jst_now: str) -> dict:
         d = tmp_path / tag
@@ -363,25 +363,29 @@ def test_observe_staff_ops_changed_on_meaningful_field(tmp_path):
 
 
 # ---------------------------------------------------------------- capture_bi_baseline (full bundle)
+# The baseline is read straight from R2 (authenticated `wrangler r2 object get
+# --remote` via publish_r2.read_r2_text) — never from the gated public Worker.
 
-def test_capture_bi_baseline_returns_none_on_manifest_http_error(monkeypatch):
-    class FakeResp:
-        status_code = 500
-        text = ""
-    monkeypatch.setattr(so.requests, "get", lambda url, timeout=20: FakeResp())
+def _fake_read_r2(files, seen=None):
+    """publish_r2.read_r2_text stand-in: files maps R2 key -> text; anything else is unreadable (None)."""
+    def fake(bucket, key, cwd=None, timeout=60):
+        if seen is not None:
+            seen.append((bucket, key))
+        return files.get(key)
+    return fake
+
+
+def test_capture_bi_baseline_returns_none_when_manifest_is_unreadable(monkeypatch):
+    monkeypatch.setattr(publish_r2, "read_r2_text", _fake_read_r2({}))
     assert so.capture_bi_baseline() is None
 
 
-def test_capture_bi_baseline_returns_none_on_exception(monkeypatch):
-    import requests as requests_module
-
-    def raise_it(url, timeout=20):
-        raise requests_module.RequestException("network down")
-    monkeypatch.setattr(so.requests, "get", raise_it)
+def test_capture_bi_baseline_returns_none_when_manifest_is_not_json(monkeypatch):
+    monkeypatch.setattr(publish_r2, "read_r2_text", _fake_read_r2({"latest/manifest.json": "{ broken"}))
     assert so.capture_bi_baseline() is None
 
 
-def test_capture_bi_baseline_fetches_every_root_and_month_file(monkeypatch):
+def test_capture_bi_baseline_fetches_every_root_and_month_file_from_r2(monkeypatch):
     manifest = {"default_month": "2026-09", "available_months": ["2026-09", "2026-10"]}
     root_texts = {fn: (json.dumps({"file": fn}) if fn.endswith(".json") else f"col\n{fn}\n")
                   for fn in publish_r2.UPLOAD_FILES if fn != "manifest.json"}
@@ -390,52 +394,73 @@ def test_capture_bi_baseline_fetches_every_root_and_month_file(monkeypatch):
                 for fn in publish_r2.MONTH_UPLOAD_FILENAMES}
         for month in manifest["available_months"]
     }
+    files = {"latest/manifest.json": json.dumps(manifest)}
+    files.update({f"latest/{fn}": text for fn, text in root_texts.items()})
+    for month, month_files in month_texts.items():
+        files.update({f"latest/months/{month}/{fn}": text for fn, text in month_files.items()})
+    seen = []
+    monkeypatch.setattr(publish_r2, "read_r2_text", _fake_read_r2(files, seen))
 
-    class FakeResp:
-        def __init__(self, text, status_code=200):
-            self.text = text
-            self.status_code = status_code
-
-    def fake_get(url, timeout=20):
-        if url == f"{so.PUBLIC_API_BASE}/data/manifest.json":
-            return FakeResp(json.dumps(manifest))
-        for fn, text in root_texts.items():
-            if url == f"{so.PUBLIC_API_BASE}/data/{fn}":
-                return FakeResp(text)
-        for month, files in month_texts.items():
-            for fn, text in files.items():
-                if url == f"{so.PUBLIC_API_BASE}/data/months/{month}/{fn}":
-                    return FakeResp(text)
-        raise AssertionError(f"unexpected URL requested: {url}")
-
-    monkeypatch.setattr(so.requests, "get", fake_get)
     bundle = so.capture_bi_baseline()
+
     assert bundle["root"]["manifest.json"] == json.dumps(manifest)
     for fn, text in root_texts.items():
         assert bundle["root"][fn] == text
     assert set(bundle["months"].keys()) == {"2026-09", "2026-10"}
-    for month, files in month_texts.items():
-        for fn, text in files.items():
+    for month, month_files in month_texts.items():
+        for fn, text in month_files.items():
             assert bundle["months"][month][fn] == text
+    # Every read targets the BI bucket (never the staff-ops bucket) under latest/ ; and every file is read.
+    assert {bucket for bucket, _ in seen} == {publish_r2.DEFAULT_BUCKET}
+    assert {key for _, key in seen} == set(files)
+    # The bundle must have the same shape/order load_current_bi_bundle() produces.
+    assert list(bundle["root"]) == list(publish_r2.UPLOAD_FILES)
+
+
+def test_capture_bi_baseline_returns_none_when_any_root_file_is_missing(monkeypatch):
+    manifest = {"default_month": "2026-09", "available_months": []}
+    files = {"latest/manifest.json": json.dumps(manifest)}
+    files.update({f"latest/{fn}": "{}" for fn in publish_r2.UPLOAD_FILES if fn not in ("manifest.json", "bi_snapshot.json")})
+    monkeypatch.setattr(publish_r2, "read_r2_text", _fake_read_r2(files))
+    assert so.capture_bi_baseline() is None
 
 
 def test_capture_bi_baseline_returns_none_when_any_month_file_is_missing(monkeypatch):
     manifest = {"default_month": "2026-09", "available_months": ["2026-09"]}
-
-    class FakeResp:
-        def __init__(self, text, status_code=200):
-            self.text = text
-            self.status_code = status_code
-
-    def fake_get(url, timeout=20):
-        if url == f"{so.PUBLIC_API_BASE}/data/manifest.json":
-            return FakeResp(json.dumps(manifest))
-        if url.startswith(f"{so.PUBLIC_API_BASE}/data/months/"):
-            return FakeResp("", status_code=404)
-        return FakeResp("{}")
-
-    monkeypatch.setattr(so.requests, "get", fake_get)
+    files = {"latest/manifest.json": json.dumps(manifest)}
+    files.update({f"latest/{fn}": "{}" for fn in publish_r2.UPLOAD_FILES if fn != "manifest.json"})
+    # month files are not present -> unreadable -> partial baseline -> None (reported as no_baseline)
+    monkeypatch.setattr(publish_r2, "read_r2_text", _fake_read_r2(files))
     assert so.capture_bi_baseline() is None
+
+
+def test_capture_bi_baseline_uses_authenticated_remote_wrangler_get(monkeypatch):
+    """End-to-end through publish_r2.read_r2_text: the subprocess is `wrangler r2 object get --remote`."""
+    manifest = {"default_month": "2026-09", "available_months": []}
+    commands = []
+
+    def fake_run(cmd, cwd, capture_output, text, timeout):
+        commands.append(list(cmd))
+        object_path = cmd[cmd.index("get") + 1]
+        bucket, key = object_path.split("/", 1)
+        assert bucket == publish_r2.DEFAULT_BUCKET
+        body = json.dumps(manifest) if key == "latest/manifest.json" else "{}"
+        with open(cmd[cmd.index("--file") + 1], "w", encoding="utf-8") as f:
+            f.write(body)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(publish_r2.subprocess, "run", fake_run)
+    bundle = so.capture_bi_baseline()
+    assert bundle is not None and set(bundle["root"]) == set(publish_r2.UPLOAD_FILES)
+    assert commands, "wrangler must have been invoked"
+    for cmd in commands:
+        assert cmd[:5] == ["npx", "wrangler", "r2", "object", "get"]
+        assert "--remote" in cmd
 
 
 # ---------------------------------------------------------------- capture_staff_ops_baseline
