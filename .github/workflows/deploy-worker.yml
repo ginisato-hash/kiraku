@@ -67,6 +67,29 @@ jobs:
           fi
           echo "Confirmed: no public r2.dev URL for kiraku-bi-data."
 
+      # r2.devと同様に、BIバケットへ接続されたカスタムドメイン経由の公開も、Workerのadmin gateを
+      # 迂回する。`wrangler r2 bucket domain list` は接続ドメインが無い場合に固定文
+      # "There are no custom domains connected to this bucket." だけを出力する（導入済みwranglerの
+      # ソースで確認）。この文が確認できない場合（ドメインが接続済み・取得失敗・出力形式の変化）は
+      # すべてdeployを止める（fail-closed）。ドメイン名を公開ログへ出さないため出力は表示しない。
+      - name: Verify BI R2 bucket has NO custom domain (read-only)
+        working-directory: cloudflare/bi-web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          domains_log="$(mktemp)"
+          if ! npx wrangler r2 bucket domain list kiraku-bi-data > "$domains_log" 2>&1; then
+            echo "::error::Could not read the custom domains of kiraku-bi-data (wrangler r2 bucket domain list failed) - treating as unverified/unsafe. Not deploying."
+            exit 1
+          fi
+          if ! grep -qF "There are no custom domains connected to this bucket." "$domains_log"; then
+            echo "::error::Could not confirm that kiraku-bi-data has no custom domain (a domain may be connected, or the output format changed) - treating as unsafe. Not deploying. Check with: wrangler r2 bucket domain list kiraku-bi-data"
+            exit 1
+          fi
+          echo "Confirmed: no custom domain connected to kiraku-bi-data."
+
       - name: Deploy Worker
         working-directory: cloudflare/bi-web
         run: npx wrangler deploy

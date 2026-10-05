@@ -55,3 +55,45 @@ def test_guard_does_not_echo_raw_wrangler_output_into_the_public_log():
     run = _guard()["run"]
     assert "| tee" not in run
     assert "<url-redacted>" in run
+
+
+# ---------------- カスタムドメイン経由の公開（r2.devと同様にadmin gateを迂回する経路） ----------------
+DOMAIN_GUARD_NAME = "Verify BI R2 bucket has NO custom domain (read-only)"
+
+
+def _domain_guard():
+    return next(s for s in _steps() if s.get("name") == DOMAIN_GUARD_NAME)
+
+
+def test_domain_guard_runs_before_the_worker_deploy():
+    names = [s.get("name") for s in _steps()]
+    assert DOMAIN_GUARD_NAME in names
+    assert names.index(DOMAIN_GUARD_NAME) < names.index("Deploy Worker")
+
+
+def test_domain_guard_checks_the_bi_bucket_read_only_with_credentials():
+    guard = _domain_guard()
+    run = guard["run"]
+    assert "r2 bucket domain list kiraku-bi-data" in run
+    assert guard["working-directory"] == "cloudflare/bi-web"
+    assert set(guard["env"]) >= {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
+    commands = "\n".join(line for line in run.splitlines() if not line.strip().startswith("echo"))
+    for forbidden in ("domain add", "domain remove", "domain update", "dev-url"):
+        assert forbidden not in commands
+
+
+def test_domain_guard_requires_wranglers_exact_no_domains_sentence_and_fails_closed():
+    """wranglerは接続ドメインが無い場合、固定文だけを出力する（導入済みwranglerのソースで確認）。
+    その文が確認できなければ（ドメインあり・取得失敗・形式変化）すべてdeployを止める。"""
+    guard = _domain_guard()
+    run = guard["run"]
+    assert run.startswith("set -euo pipefail")
+    assert 'grep -qF "There are no custom domains connected to this bucket."' in run
+    assert run.count("exit 1") >= 2
+    assert guard.get("continue-on-error") is not True
+
+
+def test_domain_guard_does_not_print_wrangler_output_into_the_public_log():
+    run = _domain_guard()["run"]
+    assert "| tee" not in run
+    assert "cat " not in run
