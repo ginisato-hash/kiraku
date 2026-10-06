@@ -19,7 +19,7 @@ await check("getJSON fetches with cache: no-store", async () => {
 
 await check("fetchManifest and fetchSnapshot both route through getJSON (no-store)", async () => {
   assert.ok(text.includes("async function fetchManifest(bust)"));
-  assert.ok(text.includes("return getJSON(\"/api/manifest\", { bust })"));
+  assert.ok(text.includes("return getJSON(\"api/manifest\", { bust })"));
   assert.ok(text.includes("async function fetchSnapshot(month, bust)"));
   const fnBody = text.slice(text.indexOf("async function fetchSnapshot"),
     text.indexOf("async function fetchSnapshot") + 300);

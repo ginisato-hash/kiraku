@@ -218,6 +218,8 @@ def test_auto_months_with_bookings_discovers_and_builds_snapshots(isolated, monk
         return len(recs)
 
     monkeypatch.setattr(bi_refresh, "_fetch_beds24", fake_fetch_only_july)
+    # The discovery window is relative to the current month; pin it so the 2026-07 data stays inside it.
+    monkeypatch.setattr(bi_refresh, "current_month", lambda: "2026-08")
     tmp, conn = isolated
     status = bi_refresh.refresh([], conn=conn, auto_months_with_bookings=True)
 

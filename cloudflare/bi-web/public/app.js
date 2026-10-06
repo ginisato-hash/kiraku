@@ -33,26 +33,29 @@ async function getJSON(url, { bust } = {}) {
   }
 }
 
+// 取得先はすべてページURLからの相対パス（先頭に "/" を付けない）。ページが
+// 前置パス配下（例: /admin/bi/）で配信されても、ルート直下（/）でも同じ
+// コードで動く。ページURLは末尾スラッシュ付きで開かれることが前提。
 async function fetchManifest(bust) {
-  return getJSON("/api/manifest", { bust });
+  return getJSON("api/manifest", { bust });
 }
 
 async function fetchSnapshot(month, bust) {
-  const url = month ? `/api/snapshot?month=${encodeURIComponent(month)}` : "/api/snapshot";
+  const url = month ? `api/snapshot?month=${encodeURIComponent(month)}` : "api/snapshot";
   return getJSON(url, { bust });
 }
 
 async function fetchValidation(month, bust) {
   const url = month
-    ? `/data/months/${encodeURIComponent(month)}/bi_validation_status.json`
-    : "/data/bi_validation_status.json";
+    ? `data/months/${encodeURIComponent(month)}/bi_validation_status.json`
+    : "data/bi_validation_status.json";
   return getJSON(url, { bust });
 }
 
 async function fetchException(month, bust) {
   const url = month
-    ? `/data/months/${encodeURIComponent(month)}/bi_exception_summary.json`
-    : "/data/bi_exception_summary.json";
+    ? `data/months/${encodeURIComponent(month)}/bi_exception_summary.json`
+    : "data/bi_exception_summary.json";
   return getJSON(url, { bust });
 }
 

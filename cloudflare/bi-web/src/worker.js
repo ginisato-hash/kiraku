@@ -18,6 +18,14 @@
 //   （refresh-beds24-bi → publish-bi-r2）がそのまま担う。ここでは何も
 //   fetch/生成/publishしない。dispatch token/webhook secret/callback secretの
 //   値は絶対にログしない。
+// - Admin gate: /health と /internal/*（各自の認可を持つ）以外のすべて
+//   （/api/*、/data/*、/data/months/*、静的UI）は、ヘッダ x-kiraku-admin-gate が
+//   BI_ADMIN_GATE_SECRET と一致する場合のみ通し、それ以外は理由を示さない404。
+//   ゲートは「BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIREDが必須扱い」
+//   で有効化される（二段階有効化。どちらも無い間は従来どおり開いている）。
+//   BI_GATE_REQUIREDは 未設定/空文字/"false"/"0"（大文字小文字無視）以外はすべて
+//   「必須」扱い（"true"/"1"/"yes"等の表記ゆれで意図せず開いたままにならない）。
+//   必須かつ秘密が無い場合は fail-closed（gated route全て404）。
 import { BiRefreshCoordinator, normalizeReasonBucket } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
@@ -28,6 +36,9 @@ import {
 
 const R2_PREFIX = "latest/";
 const CALLBACK_MAX_BODY_BYTES = 8192;
+
+// 内部ヘッダ名（値は env.BI_ADMIN_GATE_SECRET。コード・設定・テストに値は書かない）。
+const ADMIN_GATE_HEADER = "x-kiraku-admin-gate";
 
 // GitHub Actions workflow_dispatch target — matches refresh-bi-r2.yml exactly.
 // This Worker never touches Beds24/R2 publish logic itself; it only asks
@@ -107,6 +118,36 @@ const NO_STORE_HEADERS = {
   "pragma": "no-cache",
   "expires": "0",
 };
+
+// ゲート拒否は常にこの同一の404を返す（理由・パス・存在有無を一切示さない）。
+function gateNotFound() {
+  return new Response("Not Found", {
+    status: 404,
+    headers: { "content-type": "text/plain; charset=utf-8", ...NO_STORE_HEADERS },
+  });
+}
+
+// BI_GATE_REQUIRED が「必須」か。未設定/空文字/"false"/"0"（大文字小文字無視）だけが
+// 「必須ではない」。それ以外（"true"/"1"/"yes"/"TRUE"等）はすべて必須扱いにして、
+// 表記ゆれでgateが意図せず開いたままになるのを防ぐ。
+function isGateRequired(env) {
+  const raw = env.BI_GATE_REQUIRED;
+  if (raw === undefined || raw === null) return false;
+  const v = String(raw).toLowerCase();
+  return !(v === "" || v === "false" || v === "0");
+}
+
+// ゲートが有効か: BI_ADMIN_GATE_SECRETが設定済み、またはBI_GATE_REQUIREDが必須扱い。
+function isAdminGateActive(env) {
+  return Boolean(env.BI_ADMIN_GATE_SECRET) || isGateRequired(env);
+}
+
+// ゲート通過可否。秘密が無い場合（BI_GATE_REQUIREDのみ）は常に不通過=fail-closed。
+function passesAdminGate(request, env) {
+  const secret = env.BI_ADMIN_GATE_SECRET;
+  if (!secret) return false;
+  return timingSafeEqual(request.headers.get(ADMIN_GATE_HEADER) || "", secret);
+}
 
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -531,14 +572,6 @@ export default {
       });
     }
 
-    if (path === "/api/months") {
-      return handleApiMonths(env);
-    }
-
-    if (path === "/api/snapshot") {
-      return handleApiSnapshot(env, url);
-    }
-
     if (path === "/internal/beds24/booking-webhook") {
       return handleBeds24BookingWebhook(request, env);
     }
@@ -556,6 +589,20 @@ export default {
     }
     if (path === "/internal/bi-refresh/force") {
       return handleBiRefreshForce(request, env);
+    }
+
+    // ここから下はすべて admin gate の対象（/api/*、/data/*、静的UI、未知の
+    // /internal/* を含む）。HTTPメソッドに関わらず無ヘッダは404。
+    if (isAdminGateActive(env) && !passesAdminGate(request, env)) {
+      return gateNotFound();
+    }
+
+    if (path === "/api/months") {
+      return handleApiMonths(env);
+    }
+
+    if (path === "/api/snapshot") {
+      return handleApiSnapshot(env, url);
     }
 
     const monthFileMatch = path.match(/^\/data\/months\/([^/]+)\/([^/]+)$/);

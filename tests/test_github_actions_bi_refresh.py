@@ -134,46 +134,78 @@ def test_workflow_job_summary_reports_job_status_and_runs_always():
     assert "job.status" in summary_step["run"]
 
 
-def test_workflow_has_verify_public_manifest_step():
+def _step(name):
+    wf = _load_workflow()
+    return next(s for s in wf["jobs"]["refresh-bi-r2"]["steps"] if s.get("name") == name)
+
+
+def test_workflow_has_verify_published_manifest_step():
     wf = _load_workflow()
     job = wf["jobs"]["refresh-bi-r2"]
     step_names = [s.get("name") for s in job["steps"]]
-    assert "Verify public manifest" in step_names
+    assert "Verify published manifest (R2)" in step_names
 
 
-def test_public_manifest_verification_is_non_fatal():
-    """R2 publishが成功していれば、public API側の403等だけでworkflow全体をfailedにしない。"""
-    wf = _load_workflow()
-    job = wf["jobs"]["refresh-bi-r2"]
-    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
-    assert verify_step.get("continue-on-error") is True
+def test_published_manifest_verification_is_non_fatal():
+    """R2 publishが成功していれば、この補助確認だけでworkflow全体をfailedにしない。"""
+    assert _step("Verify published manifest (R2)").get("continue-on-error") is True
 
 
-def test_public_manifest_verification_sends_custom_user_agent():
-    """CloudflareがPython urllibの既定UAを弾く事例があるため、User-Agentを明示する。"""
-    wf = _load_workflow()
-    job = wf["jobs"]["refresh-bi-r2"]
-    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
-    assert "User-Agent" in verify_step["run"]
-    assert "kiraku-bi-refresh-github-actions" in verify_step["run"]
+def test_published_manifest_verification_reads_r2_with_credentials_not_the_public_url():
+    """BIのWorker公開URLはゲートの内側。publish先と同じバケットをwranglerで認証付きに読む。"""
+    step = _step("Verify published manifest (R2)")
+    run = step["run"]
+    assert "wrangler r2 object get" in run
+    assert "--remote" in run
+    assert "${CLOUDFLARE_R2_BUCKET}/latest/manifest.json" in run
+    assert "workers.dev" not in run
+    assert "urllib" not in run
+    assert set(step["env"]) >= {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_R2_BUCKET"}
 
 
-def test_public_manifest_verification_catches_http_error_as_warning():
-    wf = _load_workflow()
-    job = wf["jobs"]["refresh-bi-r2"]
-    verify_step = next(s for s in job["steps"] if s.get("name") == "Verify public manifest")
-    assert "urllib.error.HTTPError" in verify_step["run"]
-    assert "::warning::" in verify_step["run"]
+def test_published_manifest_verification_warns_when_the_manifest_is_unreadable():
+    assert "::warning::" in _step("Verify published manifest (R2)")["run"]
 
 
-def test_write_job_summary_does_not_fail_on_public_api_error():
-    """Write job summaryはpublic API失敗(403等)でstep自体が落ちない(|| フォールバックがある)。"""
-    wf = _load_workflow()
-    job = wf["jobs"]["refresh-bi-r2"]
-    summary_step = next(s for s in job["steps"] if s.get("name") == "Write job summary")
-    run_text = summary_step["run"]
-    assert "User-Agent" in run_text
-    assert run_text.count("|| echo") >= 2  # manifest確認・snapshot確認それぞれにフォールバックがある
+def test_write_job_summary_reads_r2_and_does_not_fail_when_unreadable():
+    """Write job summaryはR2が読めなくてもstep自体が落ちない（フォールバック表示）。"""
+    step = _step("Write job summary")
+    run_text = step["run"]
+    assert run_text.count("wrangler r2 object get") == 2  # manifest・snapshot
+    assert run_text.count("--remote") == 2
+    assert "${CLOUDFLARE_R2_BUCKET}/latest/manifest.json" in run_text
+    assert "${CLOUDFLARE_R2_BUCKET}/latest/bi_snapshot.json" in run_text
+    assert "unavailable from R2" in run_text
+    assert run_text.count("|| echo") >= 2  # grep不一致のフォールバック
+    assert "curl" not in run_text and "workers.dev" not in run_text
+    assert set(step["env"]) >= {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_R2_BUCKET"}
+
+
+def test_write_job_summary_never_prints_bank_balances_into_the_public_summary():
+    """公開リポジトリのActions画面から読めるため、口座残高などの実額はsummaryに出さない。
+    銀行項目の有無は状態語(bank_fields_source / bank_csv_import_status)で確認する。"""
+    run_text = _step("Write job summary")["run"]
+    assert "bank_fields_source" in run_text
+    assert "bank_csv_import_status" in run_text
+    assert "bank_actual_latest_balance" not in run_text
+    assert "balance" not in run_text.lower()
+
+
+def test_shadow_bi_baseline_step_has_cloudflare_credentials_for_the_r2_read():
+    """baselineはR2から認証付きで読む（公開URLはゲートの内側）。credentialが渡っていること。"""
+    step = _step("Capture previous BI snapshot (shadow observation baseline)")
+    assert step.get("continue-on-error") is True
+    assert set(step["env"]) >= {"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"}
+
+
+def test_workflow_only_calls_the_public_worker_url_for_internal_routes():
+    """公開Worker URLへの無認証GET(/api/*, /data/*)は残さない。残るのは各自の認可を持つ
+    /internal/* のcallbackだけ。"""
+    import re
+    urls = re.findall(r"https://[A-Za-z0-9.-]*workers\.dev[^\s\"')]*", _raw_text())
+    assert urls, "completion / shadow-observation callbackのURLは残っているはず"
+    for url in urls:
+        assert "/internal/" in url, f"internal route以外の公開Worker URL参照が残っています: {url}"
 
 
 def test_publish_step_is_the_strict_success_gate():
