@@ -14,8 +14,8 @@ revenueは beds24_revenue_logic.calculate_recognized_booking_revenue() で算出
 _nights_in_month を beds24_revenue_logic と共有)。
 
 注意: 既存の月次 `adr`/`occupancy`(revenue_recon.py)は checkin月バケット・非按分・
-config.kiraku.yml の property.rooms(19室)基準。本モジュールの adr_gross/occupancy_rate_month は
-月跨ぎ按分・部屋タイプ設定の実室数合計(18室)基準のため、月跨ぎ予約がある月はわずかに
+config/kiraku.yml の property.rooms(19室)基準。本モジュールの adr_gross/occupancy_rate_month は
+月跨ぎ按分・部屋タイプ設定の宿泊日別有効capacity(旧18室/休館0室/K27 14室)基準のため、月跨ぎ予約がある月はわずかに
 異なりうる(意図的な差。どちらも「速報値」であり会計確定売上ではない)。
 """
 from __future__ import annotations
@@ -47,6 +47,26 @@ def classify_room_type(booking: BookingRecord, room_type_config: Dict) -> str:
     """booking.room_id を設定のroom_idsと照合し、部屋タイプキーを返す(未一致はunknown)。"""
     lookup = _room_id_lookup(room_type_config)
     return lookup.get(str(booking.room_id or ""), "unknown")
+
+
+def _in_period(spec: Dict, d: str) -> bool:
+    """宿泊日dが spec の effective_from(含む)〜effective_to(含まない) に入るか。省略は無制限。"""
+    start, end = spec.get("effective_from"), spec.get("effective_to")
+    return (not start or d >= str(start)) and (not end or d < str(end))
+
+
+def capacity_on(spec: Dict, d: str) -> int:
+    """宿泊日d(YYYY-MM-DD)にその部屋タイプが持つ客室数。期間外は0(休館・未開業を含む)。"""
+    return int(spec.get("capacity_rooms", 0) or 0) if _in_period(spec, d) else 0
+
+
+def expected_total_rooms_on(d: str) -> int:
+    """config/kiraku.yml の room_inventory_profiles(無ければ property.rooms)による宿泊日dの総室数。"""
+    prop = config.kiraku().get("property", {})
+    for p in prop.get("room_inventory_profiles") or []:
+        if _in_period(p, d):
+            return int(p.get("rooms", 0) or 0)
+    return int(prop.get("rooms") or 0)
 
 
 def _days_in_month(month: str) -> int:
@@ -88,28 +108,38 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
         revenue_by_type[rt] = revenue_by_type.get(rt, 0.0) + prorated
         nights_by_type[rt] = nights_by_type.get(rt, 0) + tm_nights * qty
 
+    # 表示対象: 月内に1日でもcapacity>0、または実予約(泊数/売上)がある部屋タイプ。unknownは実予約時のみ。
+    active_types = {k for k, v in room_type_config.items()
+                    if k != "unknown" and any(capacity_on(v, d) for d in month_dates)}
+    active_types |= {k for k in room_type_config
+                     if nights_by_type.get(k, 0) > 0 or revenue_by_type.get(k, 0.0) != 0}
+
     total_room_revenue = sum(revenue_by_type.values())
     sold_room_nights = sum(nights_by_type.values())
     adr_gross = round(total_room_revenue / sold_room_nights) if sold_room_nights else 0
 
-    capacity_by_type = {k: int(v.get("capacity_rooms", 0) or 0) for k, v in room_type_config.items()}
-    room_type_total_rooms = sum(v for k, v in capacity_by_type.items() if k != "unknown")
-    available_room_nights = room_type_total_rooms * days
+    # capacityは宿泊日×部屋タイプごとの有効期間で解決する(旧4/休館/K27新5を混算しない)。
+    capacity_on_date = {d: {k: capacity_on(v, d) for k, v in room_type_config.items()
+                            if k != "unknown"} for d in month_dates}
+    total_rooms_on_date = {d: sum(c.values()) for d, c in capacity_on_date.items()}
+    available_room_nights = sum(total_rooms_on_date.values())
     occupancy_rate_month = (round(sold_room_nights / available_room_nights * 100, 1)
                             if available_room_nights else 0.0)
 
-    configured_total_rooms = config.kiraku().get("property", {}).get("rooms")
-    if configured_total_rooms and room_type_total_rooms != configured_total_rooms:
+    mismatches = [(d, total_rooms_on_date[d], expected_total_rooms_on(d)) for d in month_dates
+                  if expected_total_rooms_on(d) and total_rooms_on_date[d] != expected_total_rooms_on(d)]
+    if mismatches:
+        d, got, want = mismatches[0]
         warnings.append(
-            f"config/kiraku_room_types.ymlの部屋タイプ合計({room_type_total_rooms}室)が"
-            f"config/kiraku.ymlのproperty.rooms({configured_total_rooms}室)と一致しません。"
+            f"config/kiraku_room_types.ymlの部屋タイプ合計({got}室)が"
+            f"config/kiraku.ymlの客室数({want}室、{d}時点)と一致しません。"
             "設定を確認してください。")
 
     room_type_revenue_mix = []
     for key, spec in room_type_config.items():
         rev_raw = revenue_by_type.get(key, 0.0)
         rn = nights_by_type.get(key, 0)
-        if key == "unknown" and rev_raw == 0 and rn == 0:
+        if key not in active_types and rev_raw == 0 and rn == 0:
             continue
         rev = round(rev_raw)
         share = round(rev_raw / total_room_revenue * 100, 1) if total_room_revenue else 0.0
@@ -127,13 +157,12 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
     # ---- daily occupancy by room type (checkin <= date < checkout) ----
     daily_rows = []
     chart_series = []
-    display_types = [(k, v) for k, v in room_type_config.items()
-                     if k != "unknown" or nights_by_type.get("unknown", 0) > 0]
+    display_types = [(k, v) for k, v in room_type_config.items() if k in active_types]
     for d_str in month_dates:
         d = date.fromisoformat(d_str)
         chart_row = {"date": d_str}
         for key, spec in display_types:
-            capacity = capacity_by_type.get(key, 0)
+            capacity = capacity_on_date[d_str].get(key, 0)
             sold = 0
             for b in active:
                 if room_type_of[b.booking_id] != key:

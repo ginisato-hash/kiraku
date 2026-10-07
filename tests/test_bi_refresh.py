@@ -218,6 +218,8 @@ def test_auto_months_with_bookings_discovers_and_builds_snapshots(isolated, monk
         return len(recs)
 
     monkeypatch.setattr(bi_refresh, "_fetch_beds24", fake_fetch_only_july)
+    # 探索窓は「現在月」基準のため、実時計に依存しないよう固定する(2026-07の予約が窓内に入る)。
+    monkeypatch.setattr(bi_refresh, "current_month", lambda: "2026-07")
     tmp, conn = isolated
     status = bi_refresh.refresh([], conn=conn, auto_months_with_bookings=True)
 

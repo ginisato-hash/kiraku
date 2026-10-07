@@ -33,10 +33,14 @@ def test_real_room_unit_mapping_config_resolves_only_to_canonical_18_rooms():
     from yuge_finance.ops.extract import load_room_unit_mapping
 
     mapping = load_room_unit_mapping()
-    assert set(mapping.keys()) == {"single_toilet", "twin_toilet", "twin_bath", "family_washitsu"}
+    legacy_keys = {"single_toilet", "twin_toilet", "twin_bath", "family_washitsu"}
+    # K27冬季5室(k27_t01〜t05)は別途 test_k27_room_classification.py で検証する。
+    assert set(mapping.keys()) == legacy_keys | {f"k27_t0{i}" for i in range(1, 6)}
 
     all_room_numbers = []
     for room_type_key, unit_map in mapping.items():
+        if room_type_key not in legacy_keys:
+            continue
         for unit_id, room_number in unit_map.items():
             assert room_number in KIRAKU_ROOM_ORDER_SET, (
                 f"{room_type_key} unit {unit_id} resolves to {room_number!r}, "

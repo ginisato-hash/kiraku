@@ -4,6 +4,9 @@
 # (invoiceItems含む/bookings一覧)には出現せず、roomIdのみが入るため、分類はroom_idで行う。
 # capacity_rooms は同APIのqtyをそのまま使用（推測値ではない）。
 #
+# effective_from/effective_to(任意・YYYY-MM-DD・半開区間[from,to)): その宿泊日にcapacity_roomsを持つ期間。
+# 省略時は常時有効。分類(room_id->key)は期間に関係なく常に有効。
+#
 # 【2026-08-30訂正】上記のroomId分類は今も正しいが、「物理客室番号がBeds24に存在しない」
 # という過去の理解は誤りだった。同じ `includeAllRooms=true` レスポンスの
 # roomTypes[].units[].name に実物理客室番号(401〜607)が入っている
@@ -13,27 +16,60 @@ room_types:
   single_toilet:
     label: "シングル｜客室トイレ付"
     capacity_rooms: 2
+    effective_to: "2026-11-01"
     match:
       room_ids: ["685761"]
       room_names: ["シングル｜客室トイレ付"]
   twin_toilet:
     label: "ツイン｜客室トイレ付"
     capacity_rooms: 10
+    effective_to: "2026-11-01"
     match:
       room_ids: ["686762"]
       room_names: ["ツイン｜客室トイレ付"]
   twin_bath:
     label: "ツイン｜客室バストイレ付"
     capacity_rooms: 4
+    effective_to: "2026-11-01"
     match:
       room_ids: ["686763"]
       room_names: ["ツイン｜客室バストイレ付"]
   family_washitsu:
     label: "広め和洋室｜最大4名利用可"
     capacity_rooms: 2
+    effective_to: "2026-11-01"
     match:
       room_ids: ["686764"]
       room_names: ["広め和洋室｜最大4名利用可"]
+  # ---- K27冬季 新5室(2027-01-01泊〜)。正本: zao-kiraku-website Issue #31 / catalog.ts ----
+  # 旧4室は effective_to(排他的)まで、新5室は effective_from(含む)からcapacityを持つ。
+  # 2026-11-01〜2026-12-31は両方の期間外=全館休館(0室)。旧+新の同時加算はしない。
+  # T06(ドミトリー)は対象外のため未登録(推測しない)。
+  k27_t01:
+    label: "1ベッドルーム アパートメント"
+    capacity_rooms: 4
+    effective_from: "2027-01-01"
+    match: {room_ids: ["737046"], room_names: []}
+  k27_t02:
+    label: "2ベッドルーム アパートメント"
+    capacity_rooms: 3
+    effective_from: "2027-01-01"
+    match: {room_ids: ["737050"], room_names: []}
+  k27_t03:
+    label: "ツインルーム（ソファベッド付）"
+    capacity_rooms: 3
+    effective_from: "2027-01-01"
+    match: {room_ids: ["737051"], room_names: []}
+  k27_t04:
+    label: "シングルルーム（ソファベッド付）"
+    capacity_rooms: 2
+    effective_from: "2027-01-01"
+    match: {room_ids: ["737052"], room_names: []}
+  k27_t05:
+    label: "広め和洋室"
+    capacity_rooms: 2
+    effective_from: "2027-01-01"
+    match: {room_ids: ["737053"], room_names: []}
   unknown:
     label: "未分類"
     capacity_rooms: 0
