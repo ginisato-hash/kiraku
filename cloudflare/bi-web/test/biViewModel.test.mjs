@@ -621,6 +621,17 @@ await check("details expose room_type", async () => {
   assert.equal(d.roomType, "シングル｜客室トイレ付");
 });
 
+await check("K27 room_type label is shown, not the 未分類 fallback", async () => {
+  const k27 = { ...sampleDetailWithRoomInfo, room_id: "737046",
+    room_type: "1ベッドルーム アパートメント", room_type_key: "k27_t01" };
+  const vm = buildBiViewModel({
+    ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [k27] } }),
+  }, {});
+  const d = vm.dailySummaryCards[0].details[0];
+  assert.equal(d.roomType, "1ベッドルーム アパートメント");
+  assert.notEqual(d.roomType, "未分類");
+});
+
 await check("details omit the room-change summary entirely when status is not_available", async () => {
   const vm = buildBiViewModel({
     ...baseSnapshot, ...dgs({ todayNew: { count: 1, revenue: 36000, details: [sampleDetailWithRoomInfo] } }),

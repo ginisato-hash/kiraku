@@ -6,6 +6,13 @@ property:
   # 客室数。Beds24 `/properties?includeAllRooms=true` のroomTypes実データで確認済み
   # (シングル2 + ツイン10 + バストイレ付きツイン4 + 広め和洋室2 = 18室。2026-07-10確認)。
   rooms: 18
+  # 宿泊日ごとの総客室数(room-type metricsの整合性チェック用)。半開区間[from,to)。
+  # 旧構成18室 → 2026-11-01〜2026-12-31全館休館0室 → 2027-01-01〜K27新構成14室。
+  # 上の `rooms` は旧構成値のまま(他の会計モデルが参照するため変更しない)。
+  room_inventory_profiles:
+    - {effective_to: "2026-11-01", rooms: 18}
+    - {effective_from: "2026-11-01", effective_to: "2027-01-01", rooms: 0}
+    - {effective_from: "2027-01-01", rooms: 14}
 
 # --- 売上の役割分担（重要）---
 # Beds24 = 速報・管理会計（KPI/ADR/RevPAR/稼働率/予約済売上/損益分岐速報/BI先行指標）。
