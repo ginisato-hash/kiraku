@@ -29,8 +29,8 @@ Yuge全社 / 三浦屋 / ナリサワ / ZMI 等は対象外です。
 
 ```bash
 cd /Users/ginisato/YugeFinance/kiraku-finance-automation
-python3 -m venv .venv
-./.venv/bin/pip install -e .          # 開発時: pip install -e ".[dev]"
+python3.11 -m venv .venv               # Python 3.10以上が必要（macOS標準の python3 = 3.9 は不可）
+./.venv/bin/pip install -c constraints/py311.txt -e .   # 開発時: -e ".[dev]"
 ./.venv/bin/yuge-finance init
 ```
 

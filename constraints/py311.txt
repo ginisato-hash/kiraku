@@ -1,0 +1,16 @@
+# Exact versions for the GitHub Actions runtime (Python 3.11).
+# Matches what refresh-bi-r2 and ci installed on 2026-10-23; pip-audit: no known vulnerabilities.
+# Used with `pip install -c constraints/py311.txt ...` so a new upstream release cannot change a run.
+certifi==2026.10.19
+charset-normalizer==3.5.2
+et-xmlfile==2.0.0
+idna==3.20
+iniconfig==2.3.1
+openpyxl==3.1.5
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0
+pytest==9.1.1
+pyyaml==6.0.3
+requests==2.34.2
+urllib3==2.8.0
