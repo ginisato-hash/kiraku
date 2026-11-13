@@ -94,6 +94,35 @@ def cmd_test_beds24_auth(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- Money Forward (private, read-only)
+def cmd_discover_mf_banks(args) -> int:
+    from .api.moneyforward_client import MoneyForwardError
+    from .ingest.moneyforward_bank import BankSyncError, discover
+    try:
+        result = discover(out=Path(args.out) if args.out else None)
+    except (MoneyForwardError, BankSyncError) as exc:
+        _print(f"MF口座確認失敗: {exc}")
+        return 1
+    _print(f"MF口座一覧を非公開のローカルファイルに保存しました: {result['output']}")
+    _print("事業者ときらやか・山銀の配下口座を確認し、MF_BANK_ACCOUNTS_JSONへIDを設定してください。")
+    return 0
+
+
+def cmd_sync_mf_banks(args) -> int:
+    from .api.moneyforward_client import MoneyForwardError
+    from .ingest.moneyforward_bank import BankSyncError, DEFAULT_STATE_DIR, sync
+    try:
+        result = sync(state_dir=Path(args.state_dir) if args.state_dir else DEFAULT_STATE_DIR,
+                      start_date=args.start_date, end_date=args.end_date, full=args.full)
+    except (MoneyForwardError, BankSyncError) as exc:
+        _print(f"MF銀行明細の同期失敗: {exc}")
+        return 1
+    # No amounts, descriptions, account selectors, or credentials in CI logs.
+    _print(f"MF銀行明細: {result['account_count']}口座 / {result['fetched_count']}件取得 / {result['last_success_at']}")
+    _print("保存先は非公開のMF専用データです。銀行残高はAPI非提供です。")
+    return 0
+
+
 # ---------------------------------------------------------------- debug-beds24-revenue
 def cmd_debug_beds24_revenue(args) -> int:
     month = _validate_month(args.month)
@@ -727,6 +756,13 @@ def build_parser() -> argparse.ArgumentParser:
     io_p.add_argument("--date", default=None, help="開始残高基準日 YYYY-MM-DD（任意）")
     sub.add_parser("test-beds24-auth",
                    help="Beds24 Long Life Token 認証テスト（properties取得）")
+    mf_discover = sub.add_parser("discover-mf-banks", help="MF事業者・口座IDを非公開ファイルへ保存（読取専用）")
+    mf_discover.add_argument("--out", default=None, help="既定: data/private/moneyforward/discovery.json（公開場所へ保存しない）")
+    mf_sync = sub.add_parser("sync-mf-banks", help="きらやか・山銀のMF明細を非公開の専用DBへ同期")
+    mf_sync.add_argument("--state-dir", default=None, help="既定: data/private/moneyforward")
+    mf_sync.add_argument("--start-date", default=None, help="YYYY-MM-DD。初回/--fullはMF会計期間の開始日、通常は直近90日")
+    mf_sync.add_argument("--end-date", default=None, help="YYYY-MM-DD。既定はJST本日")
+    mf_sync.add_argument("--full", action="store_true", help="現在会計期間を再照合（--start-date指定時は指定期間）")
     sub.add_parser("publish-bi", help="latest BIをCloudflare公開ディレクトリへ反映")
 
     pr = sub.add_parser("publish-bi-r2",
@@ -818,6 +854,10 @@ def main(argv=None) -> int:
         return cmd_init(args)
     if cmd == "test-beds24-auth":
         return cmd_test_beds24_auth(args)
+    if cmd == "discover-mf-banks":
+        return cmd_discover_mf_banks(args)
+    if cmd == "sync-mf-banks":
+        return cmd_sync_mf_banks(args)
     if cmd == "refresh-beds24-bi":
         return cmd_refresh_beds24_bi(args)
     if cmd == "publish-bi":

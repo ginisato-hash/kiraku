@@ -53,7 +53,7 @@ Beds24 tokenは**ローカルのみ**で使用し、Cloudflare側（Worker/GitHu
 | `BEDS24_REFRESH_TOKEN` / `BEDS24_ACCESS_TOKEN` | フォールバック（Long Life Tokenがあれば不要） |
 | `BEDS24_PROPERTY_IDS` | 喜らく=`330695`（カンマ区切り、空=全件） |
 | `BEDS24_API_BASE` | 既定 `https://beds24.com/api/v2` |
-| `MF_*` | Money Forward（将来対応・現在未使用） |
+| `MF_API_KEY` / `MF_OFFICE_CODE` / `MF_BANK_ACCOUNTS_JSON` | MF接続済みのきらやか・山銀を読取同期。詳細は [MF銀行連携](docs/MONEYFORWARD_BANKS.md) |
 
 ### Beds24 API 認証（Long Life Token 方式）
 1. Beds24 管理画面で **Long Life Token** を発行し、`.env` の `BEDS24_LONG_LIFE_TOKEN` に設定
@@ -427,8 +427,8 @@ Beds24 API v2の公式仕様（`https://api.beds24.com/v2/apiV2.yaml`、`webhook
 ## 14. 未対応・将来対応
 
 - Beds24 の **泊日按分** 計上（現状はチェックイン月一括。`config/kiraku.yml` で切替準備済み）
-- **Money Forward API**：`src/yuge_finance/api/moneyforward_client.py` は stub。
-  次ステップ＝ OAuth2.0 → token保存 → 事業者/会計期間選択 → 仕訳/明細取得 → CSVドロップから差替。
+- **Money Forward**：2口座の読取同期・非公開履歴・管理者向け集計は [MF銀行連携](docs/MONEYFORWARD_BANKS.md)。
+  会計仕訳への反映、CSVとの移行照合、実残高の別経路取得は未対応。
 - **銀行API直連携**：`bank_api_client.py` は stub（現状はCSVドロップ）。
 - 数式の実値化：`recalculation.py` が LibreOffice 検出時に対応。通常は Excel で開けば自動再計算。
 - launchdへの `--publish-r2` 組み込み（手動検証後）。
