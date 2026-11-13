@@ -1,0 +1,201 @@
+name: Sync MF banks (private, read only)
+
+# Polls records already available in Money Forward.  This schedule is not the
+# banks' own refresh schedule or a promise that the latest balance is current.
+# All payloads stay in the dedicated private bucket, never BI/staff artifacts.
+on:
+  schedule:
+    # Every hour, with the 18:17 UTC run (03:17 JST) using full reconciliation.
+    # Separate expressions avoid running twice at that hour and retain the
+    # intended full run even when GitHub starts a scheduled job late.
+    - cron: "17 0-17,19-23 * * *"
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run full reconciliation instead of the normal overlap window"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-mf-banks-private
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-mf-banks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      # This gate runs before checkout, installation, and every data operation.
+      # Missing configuration is a harmless skip; only secret names are logged.
+      - name: Check required secrets
+        id: gate
+        env:
+          MF_API_KEY: ${{ secrets.MF_API_KEY }}
+          MF_OFFICE_CODE: ${{ secrets.MF_OFFICE_CODE }}
+          MF_BANK_ACCOUNTS_JSON: ${{ secrets.MF_BANK_ACCOUNTS_JSON }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          names = (
+              "MF_API_KEY", "MF_OFFICE_CODE", "MF_BANK_ACCOUNTS_JSON",
+              "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN",
+          )
+          missing = [name for name in names if not os.environ.get(name, "").strip()]
+          for name in missing:
+              print("MF_SYNC_SKIPPED_MISSING_SECRET:" + name)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("enabled=" + ("false" if missing else "true") + "\n")
+          PY
+
+      - name: Checkout
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        if: steps.gate.outputs.enabled == 'true'
+        run: python -m pip install -c constraints/py311.txt -e .
+
+      - name: Choose reconciliation mode
+        if: steps.gate.outputs.enabled == 'true'
+        id: mode
+        env:
+          MF_MANUAL_FULL: ${{ inputs.full }}
+          MF_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          python - <<'PY'
+          import os
+          full = (
+              os.environ.get("MF_MANUAL_FULL") == "true"
+              or os.environ.get("MF_EVENT_SCHEDULE") == "17 18 * * *"
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("full=" + ("true" if full else "false") + "\n")
+          PY
+
+      - name: Ensure dedicated private bucket
+        if: steps.gate.outputs.enabled == 'true'
+        id: bucket
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        # Only a metadata 404 permits creation.  No deletion, public access or
+        # domain settings are changed; privacy is verified again before restore.
+        run: python -m yuge_finance.moneyforward_storage ensure-bucket
+
+      - name: Restore private ledger
+        if: steps.gate.outputs.enabled == 'true'
+        id: restore
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          umask 077
+          python -m yuge_finance.moneyforward_storage restore --state-dir data/private/moneyforward
+
+      - name: Record summary fingerprint
+        if: steps.gate.outputs.enabled == 'true' && steps.restore.outcome == 'success'
+        run: |
+          umask 077
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          source = Path("data/private/moneyforward/summary.json")
+          digest = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else "missing"
+          (Path(os.environ["RUNNER_TEMP"]) / "mf-summary-before.sha256").write_text(digest)
+          PY
+
+      - name: Fetch bank records from MF
+        if: steps.gate.outputs.enabled == 'true' && steps.restore.outcome == 'success'
+        id: sync
+        continue-on-error: true
+        env:
+          MF_API_KEY: ${{ secrets.MF_API_KEY }}
+          MF_OFFICE_CODE: ${{ secrets.MF_OFFICE_CODE }}
+          MF_BANK_ACCOUNTS_JSON: ${{ secrets.MF_BANK_ACCOUNTS_JSON }}
+          MF_FULL_RECONCILIATION: ${{ steps.mode.outputs.full }}
+        run: |
+          umask 077
+          flags=()
+          if [ "$MF_FULL_RECONCILIATION" = "true" ]; then flags+=(--full); fi
+          # Even a future CLI regression must not print account IDs, amounts,
+          # payloads, or API keys.  There is no raw log file or artifact.
+          if yuge-finance sync-mf-banks --state-dir data/private/moneyforward "${flags[@]}" > /dev/null 2>&1; then
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "MF_SYNC_COMPLETED"
+          else
+            sync_exit_code=$?
+            echo "exit_code=$sync_exit_code" >> "$GITHUB_OUTPUT"
+            echo "::error::MF_SYNC_FAILED"
+            exit "$sync_exit_code"
+          fi
+
+      - name: Require a new summary before publishing
+        if: >-
+          ${{ !cancelled() && steps.gate.outputs.enabled == 'true'
+              && steps.restore.outcome == 'success'
+              && (steps.sync.outcome == 'success' || steps.sync.outcome == 'failure') }}
+        id: changed
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          source = Path("data/private/moneyforward/summary.json")
+          baseline = Path(os.environ["RUNNER_TEMP"]) / "mf-summary-before.sha256"
+          digest = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else "missing"
+          changed = source.is_file() and baseline.is_file() and digest != baseline.read_text()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("changed=" + ("true" if changed else "false") + "\n")
+          if not changed:
+              print("::error::MF_SYNC_SUMMARY_UNCHANGED")
+              raise SystemExit(1)
+          PY
+
+      # Normal API failures still produce a new failed-status summary, retaining
+      # previous last_success and ledger rows.  Commit that status as well.
+      # Configuration/scope failures do not change the summary and cannot publish.
+      - name: Commit private ledger generation
+        if: >-
+          ${{ !cancelled() && steps.gate.outputs.enabled == 'true'
+              && steps.restore.outcome == 'success'
+              && steps.changed.outputs.changed == 'true' }}
+        id: publish
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: python -m yuge_finance.moneyforward_storage publish --state-dir data/private/moneyforward
+
+      - name: Preserve sync failure status
+        if: ${{ !cancelled() && steps.sync.outcome == 'failure' }}
+        env:
+          MF_SYNC_EXIT_CODE: ${{ steps.sync.outputs.exit_code }}
+        run: |
+          echo "::error::MF_SYNC_FAILED"
+          exit "${MF_SYNC_EXIT_CODE:-1}"
+
+      - name: Remove runner financial files
+        if: ${{ always() && steps.gate.outputs.enabled == 'true' }}
+        run: |
+          rm -rf -- data/private/moneyforward
+          rm -f -- "$RUNNER_TEMP/mf-summary-before.sha256"

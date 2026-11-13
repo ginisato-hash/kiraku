@@ -16,6 +16,7 @@ __pycache__/
 
 # Local databases / generated outputs
 data/ledger.sqlite
+data/private/
 data/raw/
 data/staging/
 data/processed/
