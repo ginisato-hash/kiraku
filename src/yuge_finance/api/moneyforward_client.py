@@ -289,7 +289,8 @@ class MoneyForwardClient:
         if "connected_sub_account_id" not in row or (row["connected_sub_account_id"] is not None
                                                       and not self._nonempty_string(row["connected_sub_account_id"])):
             raise MoneyForwardError("Money Forward 明細の口座識別子が不正です。")
-        if (type(row.get("value")) is not int or row["value"] <= 0
+        # MF also returns zero-yen records; retain them for count reconciliation.
+        if (type(row.get("value")) is not int or row["value"] < 0
                 or not isinstance(row.get("side"), str) or row["side"] not in {"INCOME", "EXPENSE"}):
             raise MoneyForwardError("Money Forward 明細の金額または収支区分が不正です。")
         if not isinstance(row.get("journalizing_status"), str) or row["journalizing_status"] not in _STATUSES:
