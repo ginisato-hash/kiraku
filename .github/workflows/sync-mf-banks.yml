@@ -1,4 +1,5 @@
 name: Sync MF banks (private, read only)
+run-name: MF banks | ${{ inputs.dispatch_id || github.event_name }} | ${{ inputs.scheduled_at || 'manual-or-legacy' }}
 
 # Polls records already available in Money Forward.  This schedule is not the
 # banks' own refresh schedule or a promise that the latest balance is current.
@@ -17,6 +18,16 @@ on:
         required: false
         type: boolean
         default: false
+      scheduled_at:
+        description: "Cloudflare intended UTC slot (scheduling metadata only)"
+        required: false
+        type: string
+        default: ""
+      dispatch_id:
+        description: "MF-only dispatch correlation ID (no account data)"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: sync-mf-banks-private

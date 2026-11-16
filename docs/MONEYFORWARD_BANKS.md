@@ -79,8 +79,12 @@ yuge-finance sync-mf-banks --start-date 2026-06-01 --end-date 2026-10-31
 
 専用bucketは `kiraku-finance-private`。既存の公開BI用bucketへは書かない。
 
-- `.github/workflows/sync-mf-banks.yml` が毎時起動。必要Secret未設定時は同期しない。
-- JST03時台は現在会計期間を全件再照合。それ以外は直近90日。
+- Cloudflare `kiraku-bi` のMF専用cron `17 * * * *` が、固定した `.github/workflows/sync-mf-banks.yml` のmainへ毎時 `workflow_dispatch` する。必要Secret未設定時は同期しない。Mac常時起動は不要。
+- `ScheduledController.scheduledTime` がUTC18:17（JST03:17）なら `full=true`、それ以外は直近90日。実行開始時刻やActionsのqueue遅延でfull判定を変えない。
+- 既存BIの15分cronとCoordinatorのevent-driven判定は変更しない。MF tickはそのCoordinatorに触れず、MF専用workflowだけを起動する。公開HTTPからのdispatch機能は追加しない。
+- 起動側は既存のGitHub dispatch secretと予定時刻・相関IDだけを使う。MFキー・実明細・金額・銀行口座IDや金融R2 bindingを置かない。
+- Actions run名の `mf-YYYYMMDDHH` とUTC予定時刻で対応を追う。HTTP204は起動受理だけであり、対象runの `MF_SYNC_COMPLETED` / `MF_STORAGE_PUBLISHED` と非公開summaryの成功日時を確認する。
+- 切替中は旧GitHub scheduleを残す。外部cronの連続する自然起動で実取得・publishを確認してから旧scheduleのみ撤去し、`workflow_dispatch` と既存concurrencyを維持する。
 - 毎回、非公開R2から専用DBを復元する。新規checkoutでも過去履歴を失わない。
 - stateを世代別に保存した後、`bank-sync/latest/summary.json` を最後に置き換える。summary内の `storage.state_key` / `storage.state_sha256` が復元対象を確定する。
 - 復元元404だけを初回扱いにする。権限エラー、通信失敗、ハッシュ不一致を空データ扱いにしない。
