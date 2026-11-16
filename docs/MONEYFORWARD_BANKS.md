@@ -86,7 +86,8 @@ yuge-finance sync-mf-banks --start-date 2026-06-01 --end-date 2026-10-31
 - 既存BIの15分cronとCoordinatorのevent-driven判定は変更しない。MF tickはそのCoordinatorに触れず、MF専用workflowだけを起動する。公開HTTPからのdispatch機能は追加しない。
 - 起動側は既存のGitHub dispatch secretと予定時刻・相関IDだけを使う。MFキー・実明細・金額・銀行口座IDや金融R2 bindingを置かない。
 - Actions run名の `mf-YYYYMMDDHH` とUTC予定時刻で対応を追う。HTTP204は起動受理だけであり、対象runの `MF_SYNC_COMPLETED` / `MF_STORAGE_PUBLISHED` と非公開summaryの成功日時を確認する。
-- 切替中は旧GitHub scheduleを残す。外部cronの連続する自然起動で実取得・publishを確認してから旧scheduleのみ撤去し、`workflow_dispatch` と既存concurrencyを維持する。
+- 外部cronの連続する自然起動で実取得・publishを確認してから旧GitHub scheduleを撤去する切替手順を使う。切替の実行証跡はGuest OS Issue #64に記録。切替後も `workflow_dispatch` と既存concurrencyを維持し、二重の定期起動元を作らない。
+- 起動経路を戻す場合は、先に旧GitHub scheduleを復元し、MF workflowの実取得・publishを確認する。その後、CloudflareのMF専用cronだけを外す（BIの15分cronは残す）。Workerの旧versionへ戻す場合もcron設定を別に確認し、旧BI handlerへMF用tickを流さない。金融DBやsummaryをローカルからpublishして戻す操作は行わない。
 - 毎回、非公開R2から専用DBを復元する。新規checkoutでも過去履歴を失わない。
 - stateを世代別に保存した後、`bank-sync/latest/summary.json` を最後に置き換える。summary内の `storage.state_key` / `storage.state_sha256` が復元対象を確定する。
 - 復元元404だけを初回扱いにする。権限エラー、通信失敗、ハッシュ不一致を空データ扱いにしない。
