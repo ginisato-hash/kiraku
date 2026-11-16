@@ -126,6 +126,16 @@ def test_same_day_same_amount_legitimate_rows_retained_and_all_statuses_count_as
     assert read_summary(tmp_path)["accounts"][0]["months"][-1]["income_jpy"] == 500
 
 
+def test_zero_yen_row_counts_once_without_changing_cash_totals(tmp_path):
+    rows = [transaction(), transaction("zero", "yamagata", value=0)]
+    run(tmp_path, client=FakeClient(rows))
+    run(tmp_path, client=FakeClient(rows), now=LATER)
+    month = read_summary(tmp_path)["accounts"][1]["months"][-1]
+    assert month["transaction_count"] == 1
+    assert month["income_jpy"] == month["expense_jpy"] == month["net_jpy"] == 0
+    assert len(db_rows(tmp_path, "transactions")) == 2
+
+
 def test_missing_row_retains_audit_and_is_flagged_then_recovers(tmp_path):
     run(tmp_path, client=FakeClient())
     run(tmp_path, client=FakeClient([]), now=LATER)

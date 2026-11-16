@@ -157,6 +157,16 @@ def test_parent_filter_allows_null_subaccount_and_optional_text():
     assert fetch(instance, connected_account_id=ACCOUNT) == [row]
 
 
+@pytest.mark.parametrize("side", ["INCOME", "EXPENSE"])
+def test_zero_yen_record_is_retained_with_complete_page_count(side):
+    rows = [transaction("zero", value=0, side=side), transaction("paid")]
+    instance, _, _ = client([token(), page(rows, total=2)])
+    fetched = fetch(instance, connected_sub_account_id=SUB_ACCOUNT)
+    assert fetched == rows
+    assert len(fetched) == 2
+    assert sum(row["value"] for row in fetched) == 1200
+
+
 @pytest.mark.parametrize("pages", [0, 1])
 def test_empty_window_is_complete_without_requesting_nonexistent_page(pages):
     instance, session, _ = client([token(), page([], pages=pages)])
@@ -252,7 +262,8 @@ def test_wrong_office_or_filtered_account_is_rejected():
 
 
 @pytest.mark.parametrize("overrides", [
-    {"value": -1}, {"value": True}, {"side": "OTHER"}, {"date": "2026-10-31"},
+    {"value": -1}, {"value": True}, {"value": 0.0}, {"value": "0"},
+    {"side": "OTHER"}, {"date": "2026-10-31"},
     {"date": "2026-11-31"}, {"connected_sub_account_id": 1},
 ])
 def test_invalid_transaction_fails_closed_without_echoing_bank_details(overrides):
