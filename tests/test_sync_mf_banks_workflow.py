@@ -39,6 +39,11 @@ def test_separate_single_writer_manual_and_hourly_schedule():
     triggers = definition.get("on", definition.get(True))
     assert {item["cron"] for item in triggers["schedule"]} == {"17 0-17,19-23 * * *", "17 18 * * *"}
     assert triggers["workflow_dispatch"]["inputs"]["full"]["type"] == "boolean"
+    for name in ("scheduled_at", "dispatch_id"):
+        assert triggers["workflow_dispatch"]["inputs"][name]["required"] is False
+        assert triggers["workflow_dispatch"]["inputs"][name]["default"] == ""
+    assert "inputs.dispatch_id" in definition["run-name"]
+    assert "inputs.scheduled_at" in definition["run-name"]
     assert definition["concurrency"] == {"group": "sync-mf-banks-private", "cancel-in-progress": False}
     assert definition["permissions"] == {"contents": "read"}
 

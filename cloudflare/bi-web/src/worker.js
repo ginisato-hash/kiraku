@@ -21,6 +21,7 @@
 import { BiRefreshCoordinator, normalizeReasonBucket } from "./biRefreshCoordinator.js";
 import { todayJst } from "./jstDate.js";
 import { timingSafeEqual } from "./timingSafeEqual.js";
+import { MF_BANK_CRON, dispatchMfBankSync } from "./mfBankCron.js";
 import {
   COORDINATOR_INSTANCE_NAME, MAX_WEBHOOK_BODY_BYTES, MODE_ACTIVE, MODE_SHADOW,
   envKiirakuPropertyId,
@@ -594,6 +595,10 @@ export default {
   // (Cloudflare Workers may otherwise cancel in-flight fetches once
   // scheduled() returns).
   async scheduled(event, env, ctx) {
+    if (event.cron === MF_BANK_CRON) {
+      ctx.waitUntil(dispatchMfBankSync(event, env));
+      return;
+    }
     ctx.waitUntil(runScheduledEvaluation(event, env));
   },
 };

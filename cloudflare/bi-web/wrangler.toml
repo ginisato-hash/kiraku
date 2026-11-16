@@ -20,7 +20,10 @@ bucket_name = "kiraku-bi-data"
 # GITHUB_ACTIONS_DISPATCH_TOKEN secretが必要
 # （wrangler secret put GITHUB_ACTIONS_DISPATCH_TOKEN、リポジトリには置かない）。
 [triggers]
-crons = ["3,18,33,48 * * * *"]
+# MF is independent of BI's event-driven planner and never touches its DO.
+# Keep the existing BI trigger byte-for-byte; the extra hourly tick targets
+# only sync-mf-banks.yml. Its intended UTC18:17 slot is the daily full run.
+crons = ["3,18,33,48 * * * *", "17 * * * *"]
 
 # BI更新のevent-driven化（Beds24 Booking Webhook -> event_seq++ ->
 # Cron問い合わせ -> 必要時のみworkflow_dispatch）用の単一シングルトンDO。
