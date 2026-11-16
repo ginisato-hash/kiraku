@@ -81,6 +81,8 @@ yuge-finance sync-mf-banks --start-date 2026-06-01 --end-date 2026-10-31
 
 - Cloudflare `kiraku-bi` のMF専用cron `17 * * * *` が、固定した `.github/workflows/sync-mf-banks.yml` のmainへ毎時 `workflow_dispatch` する。必要Secret未設定時は同期しない。Mac常時起動は不要。
 - `ScheduledController.scheduledTime` がUTC18:17（JST03:17）なら `full=true`、それ以外は直近90日。実行開始時刻やActionsのqueue遅延でfull判定を変えない。
+- **一時的な夜間メンテナンス対応（2026-11-17確認）**：MF公式[2026-11-06告知](https://biz.moneyforward.com/support/news/20261106.html)では当面毎日JST01:00〜06:00が停止時間。実APIでもJST01時台にHTTP503を確認した。`MF_NIGHTLY_MAINTENANCE=true` の間、MF専用tickのJST01〜05時台は起動延期をログに残してActionsを起動せず、JST06:17に同日03:17予定分のfullを実行する。`scheduled_at` / `dispatch_id` は実際の起動slot、`full_planned_at` は元の03:17予定slotを表す。GitHubの固定MF workflow履歴とjob stepの成功で当日のfull実取得・publishを確認するまで、06時以降も同じfullを再試行する。成功確認後は通常90日へ戻る。HTTP受理やSecret不足のgreen/skipをfull成功として扱わず、履歴確認不能時もfullを落とさない。保存先・金融writerは既存Actions/R2のみで、起動側が読む履歴は実行メタデータだけ。
+- 夜間メンテナンスの終了告知を確認したら設定をfalseへ戻す。11月末は「見直し予定」であり、終了日と推測して自動解除しない。BIの15分起動・event-driven判定はこの設定の対象外。外部サービスが停止中でも既存データと前回成功日時を保持し、鮮度や失敗状態を偽装しない。
 - 既存BIの15分cronとCoordinatorのevent-driven判定は変更しない。MF tickはそのCoordinatorに触れず、MF専用workflowだけを起動する。公開HTTPからのdispatch機能は追加しない。
 - 起動側は既存のGitHub dispatch secretと予定時刻・相関IDだけを使う。MFキー・実明細・金額・銀行口座IDや金融R2 bindingを置かない。
 - Actions run名の `mf-YYYYMMDDHH` とUTC予定時刻で対応を追う。HTTP204は起動受理だけであり、対象runの `MF_SYNC_COMPLETED` / `MF_STORAGE_PUBLISHED` と非公開summaryの成功日時を確認する。

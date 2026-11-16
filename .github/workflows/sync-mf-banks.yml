@@ -1,5 +1,5 @@
 name: Sync MF banks (private, read only)
-run-name: MF banks | ${{ inputs.dispatch_id || github.event_name }} | ${{ inputs.scheduled_at || 'manual-or-legacy' }}
+run-name: MF banks | ${{ inputs.dispatch_id || github.event_name }} | ${{ inputs.scheduled_at || 'manual-or-legacy' }} | ${{ inputs.full && 'full@' || 'normal' }}${{ inputs.full && inputs.full_planned_at || '' }}
 
 # Polls records already available in Money Forward.  This schedule is not the
 # banks' own refresh schedule or a promise that the latest balance is current.
@@ -25,6 +25,11 @@ on:
         default: ""
       dispatch_id:
         description: "MF-only dispatch correlation ID (no account data)"
+        required: false
+        type: string
+        default: ""
+      full_planned_at:
+        description: "Original daily-full UTC slot when maintenance defers execution"
         required: false
         type: string
         default: ""

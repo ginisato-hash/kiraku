@@ -44,6 +44,10 @@ new_sqlite_classes = ["BiRefreshCoordinator"]
 # （POST /internal/bi-refresh/mode）。ここは初回起動時のフォールバック既定値
 # と、閾値のみ。
 [vars]
+# Temporary provider maintenance (official 2026-11-06 notice): defer MF-only
+# reads at JST01-05; catch up the planned JST03:17 full at JST06:17. Turn off
+# only after the provider announces the end. BI cron/planner are unaffected.
+MF_NIGHTLY_MAINTENANCE = "true"
 # 喜らく単体のBeds24 property id。Webhook payloadのbooking.propertyIdが
 # これと一致しない場合はrejectする（他物件のWebhookを誤って受理しない）。
 KIRAKU_PROPERTY_ID = "330695"
