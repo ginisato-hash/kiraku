@@ -1,12 +1,17 @@
 name = "kiraku-bi"
 main = "src/worker.js"
 compatibility_date = "2026-07-08"
+# Version preview URLs would serve older versions with the closed public routes.
+preview_urls = false
 
 # HTML/JS/CSS は Static Assets から配信（BIデータは同梱しない）
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# The Worker answers first so no static file (or a stray public/data/*.json)
+# is served without it; public BI data is closed (kiraku-guest-os #72).
+run_worker_first = true
 
 # BIデータ（JSON/CSV）は R2 から読む。binding名・bucket名は固定。
 [[r2_buckets]]
