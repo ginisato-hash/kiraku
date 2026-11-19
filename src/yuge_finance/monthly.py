@@ -9,12 +9,13 @@ DBの既存データを読むだけの純計算（仕訳生成・PL/BS/CF確定�
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import fields
 from pathlib import Path
 from typing import Dict, List
 
 from . import config, db
-from .accounting import (beds24_revenue_logic, breakeven_model, debt_journal, journal_engine,
+from .accounting import (beds24_revenue_logic, breakeven_model, breakeven_v2, debt_journal, journal_engine,
                          kpi, labor_model, pace_model, pl_bs_cf, reconciliation,
                          revenue_recon, room_type_metrics, trial_balance)
 from .ingest import opening_balance
@@ -157,6 +158,17 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
     mc_fixed_in_cash = float(mc_item.get("monthly_amount", 0)) if mc_item.get("include_in_cash_bep") else 0.0
     room_type_kpi["stay_date_kpi"] = room_type_metrics.stay_date_kpi(
         room_type_kpi, stay_model, stay_pace, mc_fixed_in_cash)
+
+    # --- 損益分岐 v2（MC契約込み・泊日在庫・段階人件費。全整数客室泊を評価）---
+    bm_cfg = breakeven_model._cfg()
+    days = range(1, calendar.monthrange(*(int(x) for x in month.split("-")))[1] + 1)
+    capacities = [sum(room_type_metrics.capacity_on(spec, f"{month}-{d:02d}") for key, spec in room_type_config.items() if key != "unknown")
+                  for d in days]
+    fixed_non_mc = breakeven_model.fixed_cost_totals(bm_cfg, 0.0)["cash_fixed_cost_before_labor"] - mc_fixed_in_cash
+    sold = room_type_kpi["sold_room_nights"]
+    room_type_kpi["stay_date_kpi"]["breakeven_v2"] = breakeven_v2.build(
+        capacities, (stay_rev / sold) if sold else None, breakeven_model.variable_cost_rates(bm_cfg)["variable_cost_rate_total"],
+        fixed_non_mc, labor_model._cfg(), {"revenue": stay_rev, "sold_room_nights": sold})
 
     # --- 本日のグローバルサマリーdetailsに部屋タイプを付与（既存のroom_type_metrics分類
     #     ロジックを再利用。daily_global_summary側のdetailsは同じlistオブジェクトを
