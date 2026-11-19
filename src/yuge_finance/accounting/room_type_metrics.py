@@ -89,11 +89,15 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
     raw_index = _load_raw_index_multi(relevant)
 
     warnings: List[str] = []
+    # 種類別件数。warnings本文はbooking_id等を含むため、外部projectionは件数だけを使う。
+    warning_counts = {"unknown_room_type": 0, "capacity_config_mismatch": 0,
+                      "over_capacity": 0, "sold_without_capacity": 0}
     room_type_of: Dict[str, str] = {}
     for b in active:
         rt = classify_room_type(b, room_type_config)
         room_type_of[b.booking_id] = rt
         if rt == "unknown":
+            warning_counts["unknown_room_type"] += 1
             warnings.append(f"未分類のroomId({b.room_id!r})の予約があります: booking_id={b.booking_id}")
 
     # ---- revenue mix + sold_room_nights (月跨ぎ按分) ----
@@ -129,6 +133,7 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
     mismatches = [(d, total_rooms_on_date[d], expected_total_rooms_on(d)) for d in month_dates
                   if expected_total_rooms_on(d) and total_rooms_on_date[d] != expected_total_rooms_on(d)]
     if mismatches:
+        warning_counts["capacity_config_mismatch"] = len(mismatches)
         d, got, want = mismatches[0]
         warnings.append(
             f"config/kiraku_room_types.ymlの部屋タイプ合計({got}室)が"
@@ -172,7 +177,13 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
                 if ci <= d < co:
                     sold += max(b.rooms, 1)
             occ = round(sold / capacity * 100, 1) if capacity else 0.0
-            if capacity and sold > capacity:
+            if not capacity and sold:
+                # 休館・期間外(0室)に販売泊がある。capacityのtruthinessで見逃さない。
+                warning_counts["sold_without_capacity"] += 1
+                warnings.append(
+                    f"{d_str} {spec.get('label', key)}は販売対象0室ですが販売泊があります: sold={sold}")
+            elif sold > capacity:
+                warning_counts["over_capacity"] += 1
                 warnings.append(
                     f"{d_str} {spec.get('label', key)}の稼働率が100%を超えています: "
                     f"sold={sold} available={capacity}")
@@ -195,4 +206,52 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
         "room_type_occupancy_chart_series": chart_series,
         "room_type_revenue_mix": room_type_revenue_mix,
         "room_type_metrics_warnings": warnings,
+        "room_type_metrics_warning_counts": warning_counts,
+        # 宿泊日系列の未丸め売上。stay_date_kpi()がRevPAR等を一度だけ丸めるために使う。
+        "stay_date_room_revenue_raw": total_room_revenue,
+    }
+
+
+STAY_DATE_KPI_VERSION = "stay_date_kpi.v1"
+
+
+def stay_date_kpi(metrics: Dict, model: Dict, pace: Dict, mc_fixed_in_cash_fixed: float) -> Dict:
+    """宿泊日(泊日按分)系列だけで揃えたKPI。売上カード・部屋別・ADR・RevPAR・BEP達成・ペースが
+    同じ売上と同じ泊母数を使う。旧revenue_recon(チェックイン月全額)の互換キーは変更しない。
+
+    - 売上: 対象月に属する泊数で予約総額を均等按分(日別料金内訳は未使用)。
+    - RevPAR: 未丸め売上÷販売可能客室泊で一度だけ丸める。分母0はNone(休館/販売対象なし)。
+    - operating_cost_excluding_mc: 変動費+現金固定費からMC固定費を除いた額。MC契約計算の基礎
+      (売上−MC以外費用)を消費側が契約関数で計算するために出す。モデル仮定値であり会計確定値ではない。
+    - share_unit: room_type_revenue_mix[].shareは0〜100の百分率。
+    """
+    rev_raw = float(metrics.get("stay_date_room_revenue_raw") or 0.0)
+    sold = int(metrics.get("sold_room_nights") or 0)
+    available = int(metrics.get("available_room_nights") or 0)
+    variable = model.get("revenue_variable_cost")
+    cash_fixed = model.get("cash_fixed_cost_total")
+    cost_ex_mc = (round(variable + cash_fixed - mc_fixed_in_cash_fixed)
+                  if variable is not None and cash_fixed is not None else None)
+    return {
+        "version": STAY_DATE_KPI_VERSION,
+        "allocation": "equal_per_night",
+        "revenue_basis": metrics.get("adr_basis"),
+        "share_unit": "percent_0_100",
+        "room_revenue": round(rev_raw),
+        "sold_room_nights": sold,
+        "available_room_nights": available,
+        "occupancy_pct": round(sold / available * 100, 1) if available else None,
+        "adr": round(rev_raw / sold) if sold else None,
+        "revpar": round(rev_raw / available) if available else None,
+        "cost_model_version": model.get("breakeven_model_version"),
+        "revenue_variable_cost": variable,
+        "operating_cost_excluding_mc": cost_ex_mc,
+        "breakeven_revenue": model.get("cash_operating_breakeven_revenue"),
+        "breakeven_achievement_rate": model.get("cash_operating_breakeven_achievement_rate"),
+        "projected_month_end_revenue": pace.get("projected_month_end_revenue"),
+        "booking_pace_status": pace.get("booking_pace_status"),
+        "booking_pace_label": pace.get("booking_pace_label"),
+        "booking_pace_achievement_rate": pace.get("booking_pace_achievement_rate"),
+        "month_elapsed_rate": pace.get("month_elapsed_rate"),
+        "warning_counts": dict(metrics.get("room_type_metrics_warning_counts") or {}),
     }
