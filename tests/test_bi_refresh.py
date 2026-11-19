@@ -283,3 +283,26 @@ def test_publish_aborts_on_broken_json(tmp_path):
     with pytest.raises(publish.PublishError):
         publish.publish(latest_dir=latest, dst=dst)
     assert (dst / "bi_snapshot.json").read_bytes() == good  # 既存公開を壊さない
+
+
+def test_manifest_marks_partial_refresh_by_month_without_error_text(isolated, monkeypatch):
+    """一部の月だけ取得失敗した場合、manifestにrefresh_ok=Falseと失敗月だけを出す（本文は出さない）。"""
+    from yuge_finance.normalize.schema import BookingRecord
+
+    def fetch(month, conn):
+        if month == "2026-07":
+            raise RuntimeError("secret-ish upstream detail")
+        recs = [BookingRecord(booking_id=f"{month}-A", checkin_date=f"{month}-10",
+                              checkout_date=f"{month}-11", status="confirmed",
+                              gross_revenue=10000).finalize()]
+        db.upsert(conn, "beds24_bookings", recs)
+        return len(recs)
+
+    monkeypatch.setattr(bi_refresh, "_fetch_beds24", fetch)
+    tmp, conn = isolated
+    bi_refresh.refresh(["2026-06", "2026-07"], conn=conn)
+    raw = (tmp / "data" / "output" / "latest" / "bi" / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(raw)
+    assert manifest["refresh_ok"] is False
+    assert manifest["failed_months"] == ["2026-07"]
+    assert "secret-ish" not in raw

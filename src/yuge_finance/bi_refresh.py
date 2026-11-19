@@ -294,6 +294,9 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
                 "generated_at_jst": jst_str(),
                 "source_months": months,
                 "beds24_last_fetch_at_jst": status["beds24_last_fetch_at_jst"],
+                # 部分取得の明示（エラー本文は出さず月だけ）。Guest OS経営画面が未取得月を0と見せないため。
+                "refresh_ok": status["ok"],
+                "failed_months": sorted({e["month"] for e in errors}),
                 "revenue_data_status": rr_cur.get("revenue_data_status"),
                 "same_month_revenue_comparison_applicable":
                     rr_cur.get("same_month_revenue_comparison_applicable", False),
