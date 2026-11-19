@@ -213,3 +213,52 @@ def test_room_type_metrics_present_across_multiple_months(tmp_path):
         assert snap["sold_room_nights"] == 1
         assert len(snap["room_type_occupancy_chart_series"]) > 0
     conn.close()
+
+
+# ---------------- 宿泊日KPI系列（Guest OS 経営画面の正規入力。Issue #72 / PR77）----------------
+def _kpi(bookings, month):
+    m = rtm.calculate_room_type_metrics(bookings, month, TEST_CONFIG, EXCLUDE)
+    model = {"breakeven_model_version": "TEST", "revenue_variable_cost": 1000,
+             "cash_fixed_cost_total": 200000, "cash_operating_breakeven_revenue": 300000,
+             "cash_operating_breakeven_achievement_rate": 0.1}
+    return m, rtm.stay_date_kpi(m, model, {"booking_pace_status": "green"}, 150000)
+
+
+def test_stay_date_kpi_month_spanning_booking_sums_to_booking_total():
+    """2026-08-30〜09-02の3泊100,000円。8月+9月の宿泊日売上=予約総額、部屋別合計=カード売上。"""
+    bookings = [_booking("1", "2026-08-30", "2026-09-02", gross=100000)]
+    aug, aug_k = _kpi(bookings, "2026-08")
+    sep, sep_k = _kpi(bookings, "2026-09")
+    assert aug["stay_date_room_revenue_raw"] + sep["stay_date_room_revenue_raw"] == 100000
+    assert aug_k["room_revenue"] == 66667 and sep_k["room_revenue"] == 33333
+    assert sum(r["revenue"] for r in aug["room_type_revenue_mix"]) == aug_k["room_revenue"]
+    # 同じ泊母数: 8月2泊 / 販売可能 5室×31日
+    assert (aug_k["sold_room_nights"], aug_k["available_room_nights"]) == (2, 155)
+    assert aug_k["adr"] == 33333
+    # RevPARは丸め済ADR(33,333)×2/155=430ではなく、未丸め売上66,666.67/155=430.1→430で一度だけ丸める
+    assert aug_k["revpar"] == round(100000 * 2 / 3 / 155)
+    assert aug_k["occupancy_pct"] == round(2 / 155 * 100, 1)
+    assert aug_k["share_unit"] == "percent_0_100"
+    assert aug["room_type_revenue_mix"][0]["share"] == 100.0
+    assert aug_k["operating_cost_excluding_mc"] == 1000 + 200000 - 150000
+
+
+def test_stay_date_kpi_zero_inventory_is_none_and_sold_on_closed_day_warns():
+    closed = {"single": {"label": "シングル", "capacity_rooms": 2, "match": {"room_ids": ["100"]},
+                         "effective_to": "2026-11-01"}}
+    bookings = [_booking("1", "2026-11-10", "2026-11-11", gross=10000)]
+    m = rtm.calculate_room_type_metrics(bookings, "2026-11", closed, EXCLUDE)
+    k = rtm.stay_date_kpi(m, {}, {}, 0)
+    assert k["available_room_nights"] == 0
+    assert k["occupancy_pct"] is None and k["revpar"] is None
+    assert k["adr"] == 10000
+    assert m["room_type_metrics_warning_counts"]["sold_without_capacity"] == 1
+    assert k["operating_cost_excluding_mc"] is None
+
+
+def test_stay_date_kpi_present_in_bi_snapshot(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    ctx = monthly.assemble("2026-08", conn)
+    k = ctx["room_type_metrics"]["stay_date_kpi"]
+    assert k["version"] == rtm.STAY_DATE_KPI_VERSION
+    assert k["room_revenue"] == round(ctx["room_type_metrics"]["stay_date_room_revenue_raw"])

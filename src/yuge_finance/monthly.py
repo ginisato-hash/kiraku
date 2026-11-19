@@ -141,6 +141,23 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
     room_type_kpi = room_type_metrics.calculate_room_type_metrics(
         all_bookings, month, room_type_config, revenue_exclude)
 
+    # --- 宿泊日KPI（泊日按分の同一系列でBEP達成・ペースも再計算。旧チェックイン月系列は変更しない）---
+    stay_rev = room_type_kpi["stay_date_room_revenue_raw"]
+    stay_model = breakeven_model.build(
+        month, beds24_revenue=stay_rev, adr=room_type_kpi["adr_gross"],
+        labor_total_base_case=labor["labor_total_base_case"],
+        room_nights=room_type_kpi["sold_room_nights"],
+        monthly_debt_principal_payment=debt["monthly_debt_principal_payment"],
+        monthly_debt_interest_payment=debt["monthly_debt_interest_payment"],
+        debt_service_status=debt["debt_service_status"])
+    stay_pace = pace_model.build(
+        month, cash_operating_breakeven_revenue=stay_model["cash_operating_breakeven_revenue"],
+        beds24_month_on_the_books_revenue=stay_rev, adr=room_type_kpi["adr_gross"])
+    mc_item = breakeven_model._cfg().get("fixed_cost_items", {}).get("mc_fixed_fee", {})
+    mc_fixed_in_cash = float(mc_item.get("monthly_amount", 0)) if mc_item.get("include_in_cash_bep") else 0.0
+    room_type_kpi["stay_date_kpi"] = room_type_metrics.stay_date_kpi(
+        room_type_kpi, stay_model, stay_pace, mc_fixed_in_cash)
+
     # --- 本日のグローバルサマリーdetailsに部屋タイプを付与（既存のroom_type_metrics分類
     #     ロジックを再利用。daily_global_summary側のdetailsは同じlistオブジェクトを
     #     参照しているため、ここで1回書き換えれば両方に反映される）---
