@@ -21,7 +21,7 @@ config/kiraku.yml の property.rooms(19室)基準。本モジュールの adr_gr
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List
 
 from .. import config
@@ -103,6 +103,19 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
     # ---- revenue mix + sold_room_nights (月跨ぎ按分) ----
     revenue_by_type: Dict[str, float] = {}
     nights_by_type: Dict[str, int] = {}
+    # 泊日ごとの売上（月次と同じ均等按分: 予約総額 ÷ 全泊数 を各泊へ）と販売室数。
+    daily_revenue: Dict[str, float] = {d: 0.0 for d in month_dates}
+    daily_sold: Dict[str, int] = {d: 0 for d in month_dates}
+    for b in active:
+        ci = date.fromisoformat(b.checkin_date[:10])
+        co = date.fromisoformat(b.checkout_date[:10]) if b.checkout_date else ci
+        total_nights = max((co - ci).days, 1)
+        per_night = calculate_recognized_booking_revenue(b, raw_index) / total_nights
+        for i in range(total_nights):
+            night = (ci + timedelta(days=i)).isoformat()
+            if night in daily_revenue:
+                daily_revenue[night] += per_night
+                daily_sold[night] += max(b.rooms, 1)
     for b in active:
         rt = room_type_of[b.booking_id]
         qty = max(b.rooms, 1)
@@ -207,9 +220,20 @@ def calculate_room_type_metrics(bookings: List[BookingRecord], target_month: str
         "room_type_revenue_mix": room_type_revenue_mix,
         "room_type_metrics_warnings": warnings,
         "room_type_metrics_warning_counts": warning_counts,
+        # 泊日ごとの売上・販売室数・販売可能室数。円の丸めは最大剰余法で、日別合計が月の泊日売上（丸め後）と一致する。
+        "stay_date_daily": _daily_series(month_dates, daily_revenue, daily_sold, total_rooms_on_date, total_room_revenue),
         # 宿泊日系列の未丸め売上。stay_date_kpi()がRevPAR等を一度だけ丸めるために使う。
         "stay_date_room_revenue_raw": total_room_revenue,
     }
+
+
+def _daily_series(dates: List[str], revenue: Dict[str, float], sold: Dict[str, int], available: Dict[str, int], total: float) -> List[Dict]:
+    floors = {d: int(revenue[d] // 1) for d in dates}
+    remainder = round(total) - sum(floors.values())
+    # 最大剰余法: 端数の大きい日から1円ずつ配る（合計を月の泊日売上の丸め値に合わせる）。
+    for d in sorted(dates, key=lambda x: (revenue[x] - floors[x], x), reverse=True)[:max(remainder, 0)]:
+        floors[d] += 1
+    return [{"date": d, "revenue": floors[d], "sold_room_nights": sold[d], "available_room_nights": available[d]} for d in dates]
 
 
 STAY_DATE_KPI_VERSION = "stay_date_kpi.v1"
