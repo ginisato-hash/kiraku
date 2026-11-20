@@ -262,3 +262,23 @@ def test_stay_date_kpi_present_in_bi_snapshot(tmp_path):
     k = ctx["room_type_metrics"]["stay_date_kpi"]
     assert k["version"] == rtm.STAY_DATE_KPI_VERSION
     assert k["room_revenue"] == round(ctx["room_type_metrics"]["stay_date_room_revenue_raw"])
+
+
+# ---------------- 泊日ごとの日別売上（Guest OS 経営タブの日別グラフ用）----------------
+def test_stay_date_daily_allocates_each_night_and_sums_to_the_month():
+    """3泊100,000円（8/30〜9/2）: 8/30・8/31 に各33,333.33…、合計は月の泊日売上の丸め値と一致。"""
+    bookings = [_booking("1", "2026-08-30", "2026-09-02", gross=100000), _booking("2", "2026-08-10", "2026-08-11", gross=7001)]
+    m = rtm.calculate_room_type_metrics(bookings, "2026-08", TEST_CONFIG, EXCLUDE)
+    days = {d["date"]: d for d in m["stay_date_daily"]}
+    assert len(days) == 31
+    assert days["2026-08-10"]["revenue"] == 7001 and days["2026-08-10"]["sold_room_nights"] == 1
+    assert {days["2026-08-30"]["revenue"], days["2026-08-31"]["revenue"]} <= {33333, 33334}
+    assert sum(d["revenue"] for d in m["stay_date_daily"]) == round(m["stay_date_room_revenue_raw"])
+    assert days["2026-08-01"] == {"date": "2026-08-01", "revenue": 0, "sold_room_nights": 0, "available_room_nights": 5}
+
+
+def test_stay_date_daily_closed_days_have_no_inventory():
+    closed = {"single": {"label": "シングル", "capacity_rooms": 2, "match": {"room_ids": ["100"]}, "effective_to": "2026-11-15"}}
+    m = rtm.calculate_room_type_metrics([], "2026-11", closed, EXCLUDE)
+    days = {d["date"]: d for d in m["stay_date_daily"]}
+    assert days["2026-11-14"]["available_room_nights"] == 2 and days["2026-11-15"]["available_room_nights"] == 0
