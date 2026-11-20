@@ -37,6 +37,16 @@ MONTH_SNAPSHOT_FILES = {
 }
 
 
+def _iso_date_or_none(value):
+    """A YYYY-MM-DD string that is a real date, else None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value).isoformat() if len(value) == 10 else None
+    except ValueError:
+        return None
+
+
 def jst_now() -> datetime:
     return datetime.now(JST)
 
@@ -276,9 +286,14 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
         # 本日のグローバルサマリーは月選択に依らず全月で同値のため、月別内訳は持たず
         # 表示対象月(cur)のctxから1件だけ拾う。
         today_global = cur_ctx.get("today_global_summary", {})
+        # Guest OS review 7042247322: the summary belongs to the JST date it was aggregated for, not to the moment
+        # this manifest is written. A refresh that starts at 23:59 and writes at 00:01 is still the earlier day.
+        # Without a valid aggregation date the figures are withheld (None), never relabelled as today.
+        aggregated_for = _iso_date_or_none(today_global.get("today_jst"))
         today_global_summary_manifest = {
-            "calculated_at_jst": jst_str(),
-            "date_jst": jst_now().date().isoformat(),
+            # When the figures were computed: the start of this refresh, so freshness is never overstated.
+            "calculated_at_jst": started,
+            "date_jst": aggregated_for,
             "new_booking_count": today_global.get("today_new_booking_count_global"),
             "new_booking_revenue": today_global.get("today_new_booking_revenue_global"),
             "yesterday_new_booking_count": today_global.get("yesterday_new_booking_count_global"),
@@ -286,6 +301,8 @@ def refresh(months: List[str], dry_run: bool = False, conn=None,
             "checkin_count": today_global.get("today_checkin_count_global"),
             "checkin_revenue": today_global.get("today_checkin_revenue_global"),
         }
+        if aggregated_for is None:
+            today_global_summary_manifest = {k: (v if k == "calculated_at_jst" else None) for k, v in today_global_summary_manifest.items()}
         for name in ("current", "latest"):
             _atomic_write_json(_bi_dir(name) / "bi_refresh_status.json", status)
             # publish-bi-r2 が data/output/latest/bi/manifest.json をそのまま読めるように、
