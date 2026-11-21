@@ -341,6 +341,8 @@ def write_all(month: str, ctx: Dict, checks: List[Dict], wb_checks: List[Dict],
         **ctx.get("today_global_summary", {}),
         # === 部屋タイプ別KPI（ADR/日別稼働率/売上構成。BI専用。仕訳・PL/BS/CFには反映しない）===
         **ctx.get("room_type_metrics", {}),
+        # === D2 費用の実績（重複排除）と基準予測。行ごとに kind=actual|forecast と根拠を持つ ===
+        "cost_view": ctx.get("cost_view"),
     }
     (bi_dir / "bi_snapshot.json").write_text(
         json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
