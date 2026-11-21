@@ -20,6 +20,8 @@ MC_FIXED_JPY = 150_000
 MC_RATE_PCT = 15
 LABOR_SOURCE_ASSUMPTION = "assumption"
 LABOR_SOURCE_MF_ACTUAL = "mf_attendance_actual"
+# L-2: the cost comes from the MF給与 支給控除一覧表 (pay records), not from attendance punches.
+LABOR_SOURCE_MF_PAYROLL = "mf_payroll_actual"
 
 
 def mc_fee_ex_tax(gop: float) -> float:
@@ -88,27 +90,36 @@ def labor_actual(attendance: Dict, payroll_cost_jpy: Optional[float] = None) -> 
 def labor_actual_from_payroll(payroll: Dict, attendance: Optional[Dict] = None) -> Dict:
     """MF給与 支給控除一覧表（mf_payroll_csv.PayrollMonth.summary()）→ 実績人件費の入力。
 
-    人件費 = 支給合計 + 会社負担（MF給与の計算額。請求確定額ではないことを basis に残す）。
-    締め日が月末でない月は暦月に按分せず cost を出さない。打刻（第1段）が渡されれば時間はそちらを並記する。
+    cost は verification_status = "verified"（合計行・事業者・確定済み・対象人数・会社負担・月末締め）の時だけ。
+    出所を分けて持つ：人件費は給与帳票、時間は給与計算に取り込まれた勤怠項目、打刻は attendance（別に渡された時だけ）。
+    片方の完備で他方を保証しない。会社負担は MF の計算額（employer_burden_basis）。
     """
-    aligned = payroll.get("period_alignment") == "calendar_month" and payroll.get("work_month")
-    return {"labor_source": LABOR_SOURCE_MF_ACTUAL, "month": payroll.get("work_month"),
-            "cost_status": "computed" if aligned else "period_not_aligned", "cost": float(payroll["labor_cost_jpy"]) if aligned else None,
+    verified = payroll.get("verification_status") == "verified" and payroll.get("period_alignment") == "calendar_month" and bool(payroll.get("work_month"))
+    att = None if attendance is None else {"complete": bool(attendance.get("complete")), "worked_hours": attendance.get("worked_hours"),
+                                            "worked_days": attendance.get("worked_days"), "exception_count": len(attendance.get("exceptions") or [])}
+    payroll_hours = payroll.get("worked_hours")
+    return {"labor_source": LABOR_SOURCE_MF_PAYROLL, "month": payroll.get("work_month"),
+            "cost_status": "computed" if verified else "unverified", "cost": float(payroll["labor_cost_jpy"]) if verified else None,
+            "cost_source": "MF給与 支給控除一覧表（確定済み支給月）",
+            "verification_problems": list(payroll.get("verification_problems") or []),
             "gross_pay": payroll.get("gross_pay_jpy"), "employer_burden": payroll.get("employer_burden_jpy"),
             "employer_burden_basis": payroll.get("employer_burden_basis"), "employee_count": payroll.get("employee_count", 0),
-            "worked_days": payroll.get("worked_days"), "worked_hours": payroll.get("worked_hours"),
-            "pay_date": payroll.get("pay_date"), "closing_date": payroll.get("closing_date"), "source_sha256": payroll.get("source_sha256"),
-            "attendance_complete": None if attendance is None else bool(attendance.get("complete"))}
+            "payroll_hours": {"source": "MF給与 勤怠項目（給与計算へ取り込まれた時間）", "status": payroll.get("hours_status"),
+                              "worked_hours": payroll_hours, "worked_days": payroll.get("worked_days"),
+                              "unverified_columns": list(payroll.get("hours_unverified_columns") or []), "unit_basis": payroll.get("hours_unit_basis")},
+            "attendance": att if att is not None else {"status": "not_provided"},
+            "hours_difference": (None if att is None or payroll_hours is None or att["worked_hours"] is None else round(payroll_hours - att["worked_hours"], 2)),
+            "pay_date": payroll.get("pay_date"), "closing_date": payroll.get("closing_date"), "source_sha256": payroll.get("source_sha256")}
 
 
 def profit(q: int, adr: float, variable_rate: float, fixed_non_mc: float, labor_cfg: Dict, capacities: List[int],
-           labor_override: Optional[float] = None) -> Dict:
+           labor_override: Optional[float] = None, override_source: str = LABOR_SOURCE_MF_ACTUAL) -> Dict:
     revenue = q * adr
     labor = labor_for_days(labor_cfg, even_distribution(q, capacities), capacities) if labor_override is None else labor_override
     gop = revenue - revenue * variable_rate - fixed_non_mc - labor
     mc = mc_fee_ex_tax(gop)
     return {"room_nights": q, "revenue": revenue, "labor": labor, "gop_before_mc": gop, "mc_ex_tax": mc, "profit_after_mc": gop - mc,
-            "labor_source": LABOR_SOURCE_ASSUMPTION if labor_override is None else LABOR_SOURCE_MF_ACTUAL}
+            "labor_source": LABOR_SOURCE_ASSUMPTION if labor_override is None else override_source}
 
 
 def build(capacities: List[int], adr: Optional[float], variable_rate: float, fixed_non_mc: float, labor_cfg: Dict,
@@ -136,7 +147,7 @@ def build(capacities: List[int], adr: Optional[float], variable_rate: float, fix
             break
     sold = int(actual.get("sold_room_nights") or 0)
     act = profit(sold, actual.get("revenue", 0.0) / sold if sold else adr, variable_rate, fixed_non_mc, labor_cfg, capacities,
-                 labor_override=actual_cost) if sold <= available else None
+                 labor_override=actual_cost, override_source=(labor_actual_input or {}).get("labor_source", LABOR_SOURCE_MF_ACTUAL)) if sold <= available else None
     out = {**base, "status": "reachable" if bep else "not_reachable",
            "actual": None if act is None else {k: round(v) if isinstance(v, float) else v for k, v in act.items()}}
     if bep:
