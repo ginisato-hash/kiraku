@@ -44,6 +44,22 @@ def _payroll_labor_actual(month: str):
         return None
     return breakeven_v2.labor_actual_from_payroll(summary)
 
+def _cost_view(conn, month: str) -> Dict:
+    """D2: 銀行出金（費目候補）とMF給与実績から月別の費用実績、完了月平均の基準予測（当月〜3か月先）。"""
+    from .accounting import bank_classifier, cost_view
+    from .ingest import bank_actuals
+    txns = bank_actuals.load_all(conn)
+    rules = bank_classifier.load_rules()
+    months = sorted({t.transaction_date[:7] for t in txns if t.transaction_date} | {month})
+    payroll = {m: _payroll_labor_actual(m) for m in months}
+    actuals = cost_view.actual_costs(txns, lambda t: bank_classifier.classify_bank_transaction(t, rules), payroll)
+    y, mo = int(month[:4]), int(month[5:7])
+    ahead = [f"{y + (mo - 1 + i) // 12:04d}-{(mo - 1 + i) % 12 + 1:02d}" for i in range(4)]
+    return {"actuals": actuals, "forecast": cost_view.baseline_forecast(actuals, ahead),
+            "rules": "実績=銀行出金の費目候補（借入返済・回収を除く、未分類は別）＋MF給与確定実績（給与系の銀行出金は重複として除外）。"
+                     "予測=完了月の直近最大3か月平均。請求書の未払いは支払時の銀行出金で計上されるため加えない。"}
+
+
 def _prior_period_entries(conn, month: str) -> List[JournalEntry]:
     """ロールフォワード開始月〜対象月の前月 までの確定仕訳をDBから取得。"""
     start = str(config.kiraku().get("period", {}).get("rollforward_start", "2026-06"))
@@ -144,6 +160,7 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
 
     # --- 銀行口座実績レイヤー（BI/分析専用。仕訳・PL/BS/CFには一切反映しない）---
     bank_actual_bi = bank_cashflow_report.compute_bi_fields(conn)
+    cost_view = _cost_view(conn, month)
 
     # --- 本日のグローバルサマリー（BI専用。月選択に依らず全予約対象。月またぎ予約を
     #     按分するため月フィルタ無しで全件読む）---
@@ -235,6 +252,7 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
         "debit_total": jd, "credit_total": jc,
         "image_issues": 0, "workbook_path": workbook_path,
         "bank_actual_bi": bank_actual_bi,
+        "cost_view": cost_view,
         "today_global_summary": today_global_summary,
         "room_type_metrics": room_type_kpi,
     }
