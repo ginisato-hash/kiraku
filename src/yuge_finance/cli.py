@@ -40,6 +40,20 @@ def _print(msg: str) -> None:
 
 
 # ---------------------------------------------------------------- init
+def cmd_mf_journal_csv(args) -> int:
+    """確定仕訳CSV（build-ledgerの出力）→ MF仕訳帳インポートCSV。--mf-export で登録済みを除外する。送信・登録はしない。"""
+    from .accounting.mf_journal_import import build_csv, registered_ids
+    src = config.DATA_DIR / "processed" / "journals" / f"{args.month}.csv"
+    entries = [JournalEntry(**{k: v for k, v in r.items() if k in JournalEntry.__dataclass_fields__}).finalize() for r in csvio.read_dicts(src)]
+    done = registered_ids(Path(args.mf_export).read_bytes()) if args.mf_export else set()
+    r = build_csv(entries, registered=done, encoding=args.encoding)
+    out = Path(args.out)
+    out.write_bytes(r["bytes"])
+    _print(f"[mf-journal-csv] {args.month}: written={len(r['written'])} already_in_mf={len(r['skipped_registered'])} "
+           f"unconfirmed={len(r['skipped_unconfirmed'])} header_verified={r['header_verified']} -> {out}")
+    return 0
+
+
 def cmd_init(args) -> int:
     config.ensure_dirs()
     # サブディレクトリ作成
@@ -758,6 +772,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Beds24 Long Life Token 認証テスト（properties取得）")
     mf_discover = sub.add_parser("discover-mf-banks", help="MF事業者・口座IDを非公開ファイルへ保存（読取専用）")
     mf_discover.add_argument("--out", default=None, help="既定: data/private/moneyforward/discovery.json（公開場所へ保存しない）")
+    mfj = sub.add_parser("mf-journal-csv", help="確定仕訳→MF仕訳帳インポートCSV（登録はしない）")
+    mfj.add_argument("--month", required=True); mfj.add_argument("--out", required=True)
+    mfj.add_argument("--mf-export", default=None, help="MFの仕訳帳エクスポートCSV。仕訳メモのGOS:IDで登録済みを除外")
+    mfj.add_argument("--encoding", default="cp932", choices=["cp932", "utf-8-sig"])
     mf_sync = sub.add_parser("sync-mf-banks", help="きらやか・山銀のMF明細を非公開の専用DBへ同期")
     mf_sync.add_argument("--state-dir", default=None, help="既定: data/private/moneyforward")
     mf_sync.add_argument("--start-date", default=None, help="YYYY-MM-DD。初回/--fullはMF会計期間の開始日、通常は直近90日")
@@ -872,6 +890,7 @@ def main(argv=None) -> int:
         return cmd_shadow_observe_compare(args)
     handlers = {
         "ingest-opening": lambda: (cmd_ingest_opening(args), 0)[1],
+        "mf-journal-csv": lambda: cmd_mf_journal_csv(args),
         "debug-beds24-revenue": lambda: cmd_debug_beds24_revenue(args),
         "inspect-beds24-fields": lambda: cmd_inspect_beds24_fields(args),
         "fetch-beds24": lambda: (cmd_fetch_beds24(args), 0)[1],
