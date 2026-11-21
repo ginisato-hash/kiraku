@@ -140,6 +140,18 @@ jobs:
           yuge-finance shadow-observe-capture-baseline --component staff_ops \
             --out "$RUNNER_TEMP/shadow_obs_staffops_old.json"
 
+      # Issue #72 L 第2段: MF給与の月合計（mf_payroll_csv の summary、氏名・従業員別金額なし）を
+      # Actions Secret YUGE_LABOR_ACTUALS_JSON（{"YYYY-MM": summary, ...}）から一時ディレクトリへ置き、
+      # monthly.py が YUGE_LABOR_ACTUAL_DIR から読む。Secret が空なら何もしない（段階モデルの仮定のまま、0にしない）。
+      - name: Stage labour actuals (MF payroll month totals)
+        env:
+          YUGE_LABOR_ACTUALS_JSON: ${{ secrets.YUGE_LABOR_ACTUALS_JSON }}
+        run: |
+          if [ -z "$YUGE_LABOR_ACTUALS_JSON" ]; then echo "No labour actuals configured; BEP labour stays on the staged assumption."; exit 0; fi
+          dir="$RUNNER_TEMP/labor_actuals"
+          python -m yuge_finance.labor_actuals_stage "$dir"
+          echo "YUGE_LABOR_ACTUAL_DIR=$dir" >> "$GITHUB_ENV"
+
       - name: Refresh BI from Beds24
         id: refresh_bi
         env:

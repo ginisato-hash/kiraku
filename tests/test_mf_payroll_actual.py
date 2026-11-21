@@ -106,3 +106,14 @@ def test_monthly_reads_the_month_summary_only_when_present(tmp_path, monkeypatch
     assert monthly._payroll_labor_actual("2026-11") is None, "a month without payroll stays on the assumption, never 0"
     monkeypatch.delenv("YUGE_LABOR_ACTUAL_DIR")
     assert monthly._payroll_labor_actual("2026-10") is None
+
+
+def test_stage_from_secret_accepts_month_totals_only(tmp_path):
+    from yuge_finance import labor_actuals_stage as st
+    s = mp.read_payment_deductions(csv_bytes(ROWS), "2026-11-13", "2026-10-31").summary()
+    assert st.stage(json.dumps({"2026-10": s}), tmp_path) == ["2026-10"]
+    assert json.loads((tmp_path / "labor_actual_2026-10.json").read_text(encoding="utf-8"))["labor_cost_jpy"] == 408022
+    with pytest.raises(ValueError, match="unexpected keys"):
+        st.stage(json.dumps({"2026-10": {**s, "employees": [{"name": "テスト 太郎"}]}}), tmp_path)
+    with pytest.raises(ValueError, match="do not match"):
+        st.stage(json.dumps({"2026-11": s}), tmp_path)
