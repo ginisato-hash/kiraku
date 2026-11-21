@@ -24,6 +24,26 @@ from .normalize.schema import JournalEntry
 from .reports import bank_cashflow_report
 
 
+
+def _payroll_labor_actual(month: str):
+    """L 第2段: YUGE_LABOR_ACTUAL_DIR/labor_actual_YYYY-MM.json（mf_payroll_csv の月合計、氏名なし）があれば実績人件費。
+
+    無い月は None（段階モデルの仮定のまま）。未取得を 0 にしない。
+    """
+    import json
+    import os
+    from pathlib import Path
+    d = os.environ.get("YUGE_LABOR_ACTUAL_DIR")
+    if not d:
+        return None
+    f = Path(d) / f"labor_actual_{month}.json"
+    if not f.is_file():
+        return None
+    summary = json.loads(f.read_text(encoding="utf-8"))
+    if summary.get("work_month") != month:
+        return None
+    return breakeven_v2.labor_actual_from_payroll(summary)
+
 def _prior_period_entries(conn, month: str) -> List[JournalEntry]:
     """ロールフォワード開始月〜対象月の前月 までの確定仕訳をDBから取得。"""
     start = str(config.kiraku().get("period", {}).get("rollforward_start", "2026-06"))
@@ -168,7 +188,8 @@ def assemble(month: str, conn, workbook_path: Path = None, today_jst=None) -> Di
     sold = room_type_kpi["sold_room_nights"]
     room_type_kpi["stay_date_kpi"]["breakeven_v2"] = breakeven_v2.build(
         capacities, (stay_rev / sold) if sold else None, breakeven_model.variable_cost_rates(bm_cfg)["variable_cost_rate_total"],
-        fixed_non_mc, labor_model._cfg(), {"revenue": stay_rev, "sold_room_nights": sold})
+        fixed_non_mc, labor_model._cfg(), {"revenue": stay_rev, "sold_room_nights": sold},
+        labor_actual_input=_payroll_labor_actual(month))
 
     # --- 本日のグローバルサマリーdetailsに部屋タイプを付与（既存のroom_type_metrics分類
     #     ロジックを再利用。daily_global_summary側のdetailsは同じlistオブジェクトを
