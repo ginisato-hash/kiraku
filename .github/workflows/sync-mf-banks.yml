@@ -5,12 +5,9 @@ run-name: MF banks | ${{ inputs.dispatch_id || github.event_name }} | ${{ inputs
 # banks' own refresh schedule or a promise that the latest balance is current.
 # All payloads stay in the dedicated private bucket, never BI/staff artifacts.
 on:
-  schedule:
-    # Every hour, with the 18:17 UTC run (03:17 JST) using full reconciliation.
-    # Separate expressions avoid running twice at that hour and retain the
-    # intended full run even when GitHub starts a scheduled job late.
-    - cron: "17 0-17,19-23 * * *"
-    - cron: "17 18 * * *"
+  # Cloudflare kiraku-bi's MF-only hourly cron is the scheduler. Its intended
+  # UTC18:17 slot passes full=true even if GitHub starts the job late.
+  # Keep manual dispatch; do not reintroduce a second periodic writer trigger.
   workflow_dispatch:
     inputs:
       full:

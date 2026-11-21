@@ -34,10 +34,10 @@ def run_step(item, tmp_path, overrides=None):
     )
 
 
-def test_separate_single_writer_manual_and_hourly_schedule():
+def test_separate_single_writer_manual_and_external_schedule():
     definition = workflow()
     triggers = definition.get("on", definition.get(True))
-    assert {item["cron"] for item in triggers["schedule"]} == {"17 0-17,19-23 * * *", "17 18 * * *"}
+    assert "schedule" not in triggers
     assert triggers["workflow_dispatch"]["inputs"]["full"]["type"] == "boolean"
     for name in ("scheduled_at", "dispatch_id", "full_planned_at"):
         assert triggers["workflow_dispatch"]["inputs"][name]["required"] is False
