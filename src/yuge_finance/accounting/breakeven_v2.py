@@ -18,6 +18,8 @@ MC_CONTRACT_VERSION = "MC-150000+15PCT-POSITIVE-GOP@2026-11-19"
 MODEL_VERSION = "bep-v2-contract-mc"
 MC_FIXED_JPY = 150_000
 MC_RATE_PCT = 15
+LABOR_SOURCE_ASSUMPTION = "assumption"
+LABOR_SOURCE_MF_ACTUAL = "mf_attendance_actual"
 
 
 def mc_fee_ex_tax(gop: float) -> float:
@@ -63,22 +65,51 @@ def labor_for_days(cfg: Dict, rooms_per_day: List[int], capacities: List[int]) -
             + occupied * float(night.get("cost_per_occupied_day", 7500)))
 
 
-def profit(q: int, adr: float, variable_rate: float, fixed_non_mc: float, labor_cfg: Dict, capacities: List[int]) -> Dict:
+def labor_actual(attendance: Dict, payroll_cost_jpy: Optional[float] = None) -> Dict:
+    """MF勤怠実績（mf_attendance_csv.AttendanceMonth.summary()）→ 実績人件費の入力。
+
+    勤怠CSVは時間だけで円を持たない。円は給与・事業主負担の実績（オーナー提供の給与出力）が
+    渡された時だけ cost に入る。時間×仮定時給で円を作らない。勤怠に例外日が残る月も cost を
+    出さない（部分集計を実績と呼ばない）。
+    """
+    complete = bool(attendance.get("complete"))
+    if not complete:
+        status, cost = "attendance_incomplete", None
+    elif payroll_cost_jpy is None:
+        status, cost = "needs_payroll_export", None
+    else:
+        status, cost = "computed", float(payroll_cost_jpy)
+    return {"labor_source": LABOR_SOURCE_MF_ACTUAL, "month": attendance.get("month"), "attendance_complete": complete,
+            "employee_count": attendance.get("employee_count", 0), "worked_days": attendance.get("worked_days", 0),
+            "worked_hours": attendance.get("worked_hours", 0.0),
+            "exception_count": len(attendance.get("exceptions") or []), "cost_status": status, "cost": cost}
+
+
+def profit(q: int, adr: float, variable_rate: float, fixed_non_mc: float, labor_cfg: Dict, capacities: List[int],
+           labor_override: Optional[float] = None) -> Dict:
     revenue = q * adr
-    labor = labor_for_days(labor_cfg, even_distribution(q, capacities), capacities)
+    labor = labor_for_days(labor_cfg, even_distribution(q, capacities), capacities) if labor_override is None else labor_override
     gop = revenue - revenue * variable_rate - fixed_non_mc - labor
     mc = mc_fee_ex_tax(gop)
-    return {"room_nights": q, "revenue": revenue, "labor": labor, "gop_before_mc": gop, "mc_ex_tax": mc, "profit_after_mc": gop - mc}
+    return {"room_nights": q, "revenue": revenue, "labor": labor, "gop_before_mc": gop, "mc_ex_tax": mc, "profit_after_mc": gop - mc,
+            "labor_source": LABOR_SOURCE_ASSUMPTION if labor_override is None else LABOR_SOURCE_MF_ACTUAL}
 
 
 def build(capacities: List[int], adr: Optional[float], variable_rate: float, fixed_non_mc: float, labor_cfg: Dict,
-          actual: Dict) -> Dict:
-    """capacities: 対象月の日別販売可能室数（休館0）。adr: 泊日ADR（無ければNone）。actual: 実績（泊日売上・販売泊）。"""
+          actual: Dict, labor_actual_input: Optional[Dict] = None) -> Dict:
+    """capacities: 対象月の日別販売可能室数（休館0）。adr: 泊日ADR（無ければNone）。actual: 実績（泊日売上・販売泊）。
+
+    labor_actual_input: labor_actual() の結果。cost が入っている時だけ実績点の人件費を差し替える。
+    BEP曲線（仮想の q）は常に段階モデル仮定のまま — 実績人件費は実際の販売泊にしか対応しない。
+    """
     available = sum(capacities)
+    actual_cost = (labor_actual_input or {}).get("cost")
     base = {"version": MODEL_VERSION, "mc_contract_version": MC_CONTRACT_VERSION,
             "scenario": {"adr": adr, "distribution": "even_over_open_days", "labor": "labor_model.yml staged assumption (not payroll actuals)",
-                         "variable_rate": variable_rate, "fixed_non_mc": round(fixed_non_mc)},
+                         "labor_source": LABOR_SOURCE_ASSUMPTION, "variable_rate": variable_rate, "fixed_non_mc": round(fixed_non_mc)},
             "available_room_nights": available}
+    if labor_actual_input is not None:
+        base["labor_actual"] = labor_actual_input
     if adr is None or adr <= 0 or available == 0:
         return {**base, "status": "not_computable", "reason": "no_rooms_on_sale" if available == 0 else "no_adr"}
     bep = None
@@ -88,7 +119,8 @@ def build(capacities: List[int], adr: Optional[float], variable_rate: float, fix
             bep = p
             break
     sold = int(actual.get("sold_room_nights") or 0)
-    act = profit(sold, actual.get("revenue", 0.0) / sold if sold else adr, variable_rate, fixed_non_mc, labor_cfg, capacities) if sold <= available else None
+    act = profit(sold, actual.get("revenue", 0.0) / sold if sold else adr, variable_rate, fixed_non_mc, labor_cfg, capacities,
+                 labor_override=actual_cost) if sold <= available else None
     out = {**base, "status": "reachable" if bep else "not_reachable",
            "actual": None if act is None else {k: round(v) if isinstance(v, float) else v for k, v in act.items()}}
     if bep:
