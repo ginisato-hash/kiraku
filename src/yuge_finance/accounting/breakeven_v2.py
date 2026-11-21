@@ -85,6 +85,22 @@ def labor_actual(attendance: Dict, payroll_cost_jpy: Optional[float] = None) -> 
             "exception_count": len(attendance.get("exceptions") or []), "cost_status": status, "cost": cost}
 
 
+def labor_actual_from_payroll(payroll: Dict, attendance: Optional[Dict] = None) -> Dict:
+    """MF給与 支給控除一覧表（mf_payroll_csv.PayrollMonth.summary()）→ 実績人件費の入力。
+
+    人件費 = 支給合計 + 会社負担（MF給与の計算額。請求確定額ではないことを basis に残す）。
+    締め日が月末でない月は暦月に按分せず cost を出さない。打刻（第1段）が渡されれば時間はそちらを並記する。
+    """
+    aligned = payroll.get("period_alignment") == "calendar_month" and payroll.get("work_month")
+    return {"labor_source": LABOR_SOURCE_MF_ACTUAL, "month": payroll.get("work_month"),
+            "cost_status": "computed" if aligned else "period_not_aligned", "cost": float(payroll["labor_cost_jpy"]) if aligned else None,
+            "gross_pay": payroll.get("gross_pay_jpy"), "employer_burden": payroll.get("employer_burden_jpy"),
+            "employer_burden_basis": payroll.get("employer_burden_basis"), "employee_count": payroll.get("employee_count", 0),
+            "worked_days": payroll.get("worked_days"), "worked_hours": payroll.get("worked_hours"),
+            "pay_date": payroll.get("pay_date"), "closing_date": payroll.get("closing_date"), "source_sha256": payroll.get("source_sha256"),
+            "attendance_complete": None if attendance is None else bool(attendance.get("complete"))}
+
+
 def profit(q: int, adr: float, variable_rate: float, fixed_non_mc: float, labor_cfg: Dict, capacities: List[int],
            labor_override: Optional[float] = None) -> Dict:
     revenue = q * adr
