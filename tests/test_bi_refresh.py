@@ -306,3 +306,32 @@ def test_manifest_marks_partial_refresh_by_month_without_error_text(isolated, mo
     assert manifest["refresh_ok"] is False
     assert manifest["failed_months"] == ["2026-07"]
     assert "secret-ish" not in raw
+
+
+def test_today_summary_keeps_the_aggregation_date_across_midnight(isolated, monkeypatch):
+    """Guest OS review 7042247322: aggregated for 11-20 at 23:59, written at 00:01 on 11-21 → still dated 11-20."""
+    from datetime import datetime, timedelta, timezone
+    tmp, conn = isolated
+    jst = timezone(timedelta(hours=9))
+    monkeypatch.setattr(bi_refresh, "jst_now", lambda: datetime(2026, 11, 21, 0, 1, tzinfo=jst))
+    bi_refresh.refresh(["2026-11"], conn=conn, today_jst_override="2026-11-20")
+    manifest = json.loads((tmp / "data" / "output" / "latest" / "bi" / "manifest.json").read_text(encoding="utf-8"))
+    summary = manifest["today_global_summary"]
+    assert summary["date_jst"] == "2026-11-20", "the date the figures were aggregated for, not the write date"
+    assert summary["calculated_at_jst"].startswith("2026-11-21T00:01"), "the refresh start time"
+
+
+def test_today_summary_without_an_aggregation_date_is_withheld(isolated, monkeypatch):
+    tmp, conn = isolated
+    from yuge_finance import monthly
+    real = monthly.assemble
+
+    def no_date(*a, **kw):
+        ctx = real(*a, **kw)
+        ctx.get("today_global_summary", {}).pop("today_jst", None)
+        return ctx
+    monkeypatch.setattr(monthly, "assemble", no_date)
+    bi_refresh.refresh(["2026-11"], conn=conn, today_jst_override="2026-11-20")
+    summary = json.loads((tmp / "data" / "output" / "latest" / "bi" / "manifest.json").read_text(encoding="utf-8"))["today_global_summary"]
+    assert summary["date_jst"] is None
+    assert all(v is None for k, v in summary.items() if k != "calculated_at_jst"), "no date, no figures — never relabelled as today"
