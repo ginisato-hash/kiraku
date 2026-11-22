@@ -25,11 +25,11 @@ def test_27_columns_dates_amounts_tax_and_memo_token():
     out = rows(r)
     assert out[0] == HEADER and len(HEADER) == 27
     assert out[1][:2] == ["1", "2026/10/05"] and out[2][0] == "2", "取引No is never blank: same-day rows would merge"
-    assert (out[1][6], out[1][14]) == ("課仕 10%", ""), "tax on the P/L side only"
-    assert (out[2][6], out[2][14]) == ("", "課売 10%")
-    assert (out[1][8], out[1][9], out[1][16], out[1][17]) == ("11000", "", "11000", "")
+    assert (out[1][6], out[1][14]) == ("課税仕入 10%", "対象外"), "MF sample: full tax name on the P/L side, 対象外 on the balance side"
+    assert (out[2][6], out[2][14]) == ("対象外", "課税売上 10%")
+    assert (out[1][8], out[1][9], out[1][16], out[1][17]) == ("11000", "0", "11000", "0"), "MF sample puts 0 in the tax-amount columns"
     assert out[1][19] == f"GOS:{a.journal_id}"
-    assert r["header_verified"] is False
+    assert r["header_verified"] is True
     assert r["bytes"].endswith(b"\r\n")
 
 
